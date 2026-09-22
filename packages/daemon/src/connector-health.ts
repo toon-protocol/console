@@ -1,0 +1,123 @@
+import {
+  ConnectorEdgeClient,
+  connectorEdgeBaseUrl,
+  type NodeSelfDescription,
+} from '@toon-protocol/client';
+
+import { isConfigured, type NetworkProfile } from './profiles.js';
+
+/**
+ * What the active profile's connector says about itself.
+ *
+ * Every chain fact the console shows comes from here — `GET /ilp`, the free,
+ * unauthenticated self-description — and none of it from a constant. The
+ * console does not know that devnet settles USDC on Base Sepolia and Solana
+ * devnet; it knows how to ask, and the answer is whatever the operator has
+ * running right now. That is the difference between a health view and a
+ * decoration: if the connector is repriced, re-keyed or moved to another
+ * chain, this view changes with it and a hard-coded one would quietly lie.
+ *
+ * The three outcomes are kept apart on purpose. `unconfigured` is a profile
+ * with no connector (mainnet today) and is not a fault. `unreachable` is a
+ * connector that did not answer, which is. `ok` carries the document.
+ */
+
+export type ConnectorHealth =
+  | { readonly state: 'unconfigured'; readonly reason: string }
+  | { readonly state: 'unreachable'; readonly endpoint: string; readonly reason: string }
+  | {
+      readonly state: 'ok';
+      readonly endpoint: string;
+      readonly ilpAddresses: readonly string[];
+      readonly settlements: readonly SettlementView[];
+      readonly routes: readonly RouteView[];
+      readonly peerCarriages: readonly string[];
+      readonly edgeKeyId?: string | undefined;
+      readonly supportedVersions: readonly number[];
+    };
+
+/** One settlement chain, flattened to what a health view shows. */
+export interface SettlementView {
+  /** `evm:<chainId>` or `solana`, verbatim from the connector. */
+  readonly chain: string;
+  readonly kind: 'evm' | 'solana';
+  /** The on-chain counterparty a channel is opened WITH. */
+  readonly settlementAddress: string;
+  /** The token every channel on this chain settles in. */
+  readonly tokenAddress: string;
+  readonly decimals: number;
+}
+
+export interface RouteView {
+  readonly prefix: string;
+  /** Base units per packet, as a string — these are already `bigint`-sized. */
+  readonly price: string;
+  readonly pricePerKib?: string;
+}
+
+export interface ConnectorReader {
+  describe(
+    endpoint: string,
+    options?: { forceRefresh?: boolean }
+  ): Promise<NodeSelfDescription>;
+}
+
+/** The default reader: the client's own edge client, caching per endpoint. */
+export function defaultConnectorReader(timeout = 10_000): ConnectorReader {
+  return new ConnectorEdgeClient({ timeout });
+}
+
+export async function readConnectorHealth(
+  profile: NetworkProfile,
+  reader: ConnectorReader,
+  options: { forceRefresh?: boolean } = {}
+): Promise<ConnectorHealth> {
+  if (!isConfigured(profile)) {
+    return {
+      state: 'unconfigured',
+      reason: `${profile.label} names no connector yet, so there is nothing to ask.`,
+    };
+  }
+
+  const endpoint = connectorEdgeBaseUrl(profile.connectorUrl);
+  try {
+    const described = await reader.describe(profile.connectorUrl, options);
+    return {
+      state: 'ok',
+      endpoint,
+      ilpAddresses: described.ilpAddresses,
+      settlements: described.settlements.map(toSettlementView),
+      routes: described.routes.map(toRouteView),
+      peerCarriages: described.peerCarriages,
+      edgeKeyId: described.edgeIdentity?.keyId,
+      supportedVersions: described.supportedVersions,
+    };
+  } catch (error) {
+    return { state: 'unreachable', endpoint, reason: describeError(error) };
+  }
+}
+
+function toSettlementView(
+  entry: NodeSelfDescription['settlements'][number]
+): SettlementView {
+  return {
+    chain: entry.chain,
+    kind: entry.kind,
+    settlementAddress: entry.settlementAddress,
+    tokenAddress: entry.tokenAddress,
+    decimals: entry.decimals,
+  };
+}
+
+function toRouteView(entry: NodeSelfDescription['routes'][number]): RouteView {
+  return {
+    prefix: entry.prefix,
+    price: String(entry.price),
+    ...(entry.pricePerKib === undefined ? {} : { pricePerKib: String(entry.pricePerKib) }),
+  };
+}
+
+function describeError(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return String(error);
+}

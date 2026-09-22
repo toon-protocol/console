@@ -1,0 +1,89 @@
+# The console's lint, type check and tests.
+#
+# One `build` job rather than a matrix: the daemon and the UI are one npm
+# workspace, they install from one lockfile, and splitting them would buy
+# parallelism at the cost of two installs of the same tree.
+#
+# `npm run test:packaging` is its own step and not another glob on `npm test`
+# because it is `node --test` over bash and INI files rather than vitest over
+# TypeScript — the same reason gateway keeps its deploy-bundle guard apart.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # `npm ci` and not `npm install`: the lockfile is under test too.
+      - run: npm ci
+
+      - run: npm run lint
+
+      - run: npm run typecheck
+
+      - run: npm test
+
+      - run: npm run test:packaging
+
+      # The UI has to actually build — a type error is not the only way a
+      # Tailwind 4 or shadcn wiring mistake shows up.
+      - run: npm run build
+
+  # Fleet no-op merge guard (toon-meta#405), wired INTO this repo's aggregate
+  # required check so it blocks a human merge and not only the auto-merge pass
+  # (toon-meta#408). No `if:` — this workflow also runs on push, where the
+  # guard passes with "no merge result to evaluate", and a job-level `if:`
+  # would make it `skipped` there; a skipped gating job must never read as a
+  # pass (toon-meta#279). No `secrets: inherit` — the guard writes nothing.
+  no-op-merge:
+    uses: toon-protocol/toon-meta/.github/workflows/empty-pr-guard.yml@main
+
+  ci-ok:
+    name: CI OK
+    runs-on: ubuntu-latest
+    needs: [build, no-op-merge]
+    if: always()
+    steps:
+      # Fleet-wide aggregate required check per toon-meta#279: this single job
+      # is the repo's one required status. A skipped or cancelled gating job
+      # must never read as a pass, so each needed result is checked explicitly.
+      - name: Verify all gating jobs succeeded
+        run: |
+          echo "event: ${{ github.event_name }}"
+          echo "build: ${{ needs.build.result }}"
+          echo "no-op: ${{ needs.no-op-merge.result }}"
+
+          ok=true
+
+          if [ "${{ needs.build.result }}" != "success" ]; then
+            echo "::error::build did not succeed (result: ${{ needs.build.result }})"
+            ok=false
+          fi
+
+          if [ "${{ needs.no-op-merge.result }}" != "success" ]; then
+            echo "::error::no-op merge guard did not succeed (result: ${{ needs.no-op-merge.result }}) — merging this PR would change nothing"
+            ok=false
+          fi
+
+          [ "$ok" = "true" ] || exit 1
+          echo "All gating jobs green."
