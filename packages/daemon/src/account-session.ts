@@ -17,7 +17,9 @@ import { connectToBunker, inviteSigner, RemoteSignerError } from './remote-signe
 import type { NostrConnectInvitation } from './remote-signer.js';
 import {
   LocalKeySigner,
+  SealingError,
   SignerClosedError,
+  type AccountSigning,
   type ConsoleSigner,
   type SignerRecord,
 } from './signer.js';
@@ -367,14 +369,52 @@ export class AccountSession {
    * a person may have to approve on a phone, and it can be refused.
    */
   async sign(template: EventTemplate): Promise<VerifiedEvent> {
+    return this.#throughSigner((signer) => signer.signEvent(template));
+  }
+
+  /**
+   * Seal something to the account itself, and open it again (NIP-44).
+   *
+   * Used by the Chain Seed (ADR 0020) and, later, the Lease Vault (ADR 0021).
+   * Routed through the session rather than the raw signer for the same reason
+   * `sign` is: a remote signer's refusal, a closed session and a ciphertext
+   * that is not this account's are three different answers, and the API turns
+   * each into a different thing for a person to do.
+   */
+  async sealToSelf(plaintext: string): Promise<string> {
+    return this.#throughSigner((signer) => signer.sealToSelf(plaintext));
+  }
+
+  async unsealFromSelf(ciphertext: string): Promise<string> {
+    return this.#throughSigner((signer) => signer.unsealFromSelf(ciphertext));
+  }
+
+  /**
+   * The signed-in account's key, as the three operations its own records need.
+   *
+   * `undefined` when nobody is signed in, so a caller decides what that means
+   * — for the Chain Seed it is a view state, not an error.
+   */
+  signingPort(): AccountSigning | undefined {
+    const live = this.#live;
+    if (!live) return undefined;
+    return {
+      pubkey: live.signer.pubkey,
+      sign: (template) => this.sign(template),
+      sealToSelf: (plaintext) => this.sealToSelf(plaintext),
+      unsealFromSelf: (ciphertext) => this.unsealFromSelf(ciphertext),
+    };
+  }
+
+  async #throughSigner<T>(work: (signer: ConsoleSigner) => Promise<T>): Promise<T> {
     const live = this.#live;
     if (!live) {
       throw new SessionError('not_signed_in', 'No account is signed in.', 409);
     }
     try {
-      const signed = await live.signer.signEvent(template);
+      const done = await work(live.signer);
       this.#deps.signers.touch(live.record.id, this.#at());
-      return signed;
+      return done;
     } catch (error) {
       if (error instanceof SignerClosedError) {
         throw new SessionError('not_signed_in', error.message, 409);
@@ -382,6 +422,9 @@ export class AccountSession {
       if (error instanceof RemoteSignerError) {
         throw new SessionError(error.code, error.message, 502);
       }
+      // A `SealingError` is about the ciphertext, not the session; the Chain
+      // Seed distinguishes "this record is not mine" from every other fault.
+      if (error instanceof SealingError) throw error;
       throw error;
     }
   }
@@ -436,7 +479,9 @@ export class AccountSession {
   ): Promise<SignerRecord> {
     const existing = this.#deps.signers
       .list()
-      .find((candidate) => candidate.pubkey === record.pubkey && candidate.kind === record.kind);
+      .find(
+        (candidate) => candidate.pubkey === record.pubkey && candidate.kind === record.kind
+      );
     const stored: SignerRecord = existing ? { ...record, id: existing.id } : record;
     await this.#deps.keystore.put(stored.id, JSON.stringify(sealed), unlock);
     return this.#deps.signers.put(stored);

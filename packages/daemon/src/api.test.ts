@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { AccountSession } from './account-session.js';
+import { ChainSeedStore } from './chain-seed.js';
+import { InMemoryChainSeedCache } from './chain-seed-cache.js';
 import { handleApi, type ApiDeps } from './api.js';
 import type { ConnectorHealth } from './connector-health.js';
 import type { DirectoryFilters, DirectoryResult } from './directory.js';
@@ -32,12 +34,18 @@ describe('GET /api/directory', () => {
     home = mkdtempSync(join(tmpdir(), 'toon-console-api-'));
     asked = [];
     const paths = consolePaths({ HOME: home } as NodeJS.ProcessEnv);
+    const session = new AccountSession({
+      keystore: new PassphraseFileKeystore(keystoreFilePath(paths)),
+      signers: new SignerIndex(signerIndexPath(paths)),
+      relays: () => [],
+    });
     deps = {
       profiles: new ProfileStore(activeProfileFilePath(paths)),
-      session: new AccountSession({
-        keystore: new PassphraseFileKeystore(keystoreFilePath(paths)),
-        signers: new SignerIndex(signerIndexPath(paths)),
-        relays: () => [],
+      session,
+      chainSeed: new ChainSeedStore({
+        signer: () => session.signingPort(),
+        seedRelays: () => [],
+        cache: new InMemoryChainSeedCache(),
       }),
       version: { name: '@toon-protocol/console-daemon', version: '0.1.0' },
       paths,

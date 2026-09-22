@@ -1,5 +1,6 @@
 import { KeyMaterialError } from './account-key.js';
 import { SessionError, type AccountSession } from './account-session.js';
+import { ChainSeedError, type ChainSeedStore } from './chain-seed.js';
 import { channelStoreFor } from './channel-store.js';
 import type { ConnectorHealth } from './connector-health.js';
 import {
@@ -17,7 +18,9 @@ import {
 import type { ConsolePaths } from './paths.js';
 import { isConfigured, type NetworkProfile } from './profiles.js';
 import { UnknownProfileError, type ProfileStore } from './profile-store.js';
+import { RelayListError, type RelayMode } from './relay-list.js';
 import { RemoteSignerError } from './remote-signer.js';
+import { SealingError } from './signer.js';
 import type { DaemonVersion } from './version.js';
 
 /**
@@ -31,8 +34,8 @@ import type { DaemonVersion } from './version.js';
  *
  * Health, the profile list and the switch came with the skeleton (#87); the
  * Provider Directory joins them here (#91); `/api/account/*` is sign-in (#88):
- * the Account, its Signer and the local keystore. Funds (#89) and workloads
- * (#90 onward) add their own.
+ * the Account, its Signer and the local keystore. `/api/chain-seed/*` is the
+ * Chain Seed (#89). Channels and balances (#90 onward) add their own.
  *
  * Every route here is already behind the per-launch token — `server.ts` checks
  * it before anything in this file runs — and that matters more now than it did
@@ -41,12 +44,13 @@ import type { DaemonVersion } from './version.js';
  * The rule the account routes are written to: **no request body is ever echoed
  * back**. An nsec, a mnemonic, a passphrase and a bunker secret all arrive here
  * and none of them appears in an answer, not even inside an error message.
- * `api-account.test.ts` is the test that says so.
+ * `api-account.test.ts` and `api-chain-seed.test.ts` are the tests that say so.
  */
 
 export interface ApiDeps {
   readonly profiles: ProfileStore;
   readonly session: AccountSession;
+  readonly chainSeed: ChainSeedStore;
   readonly readHealth: (
     profile: NetworkProfile,
     options?: { forceRefresh?: boolean }
@@ -120,9 +124,27 @@ export async function handleApi(deps: ApiDeps, request: ApiRequest): Promise<Api
     return { status: 200, body: deps.session.status() };
   }
 
+  if (path === '/api/account/relays' && method === 'POST') {
+    const relays = readRelayEntries(request.body);
+    if ('error' in relays) return problem(400, 'invalid_request', relays.error);
+    try {
+      return ok(await deps.chainSeed.publishRelayList(relays.value));
+    } catch (error) {
+      return accountProblem(error);
+    }
+  }
+
   if (path.startsWith('/api/account/')) {
     try {
       return await handleAccount(deps.session, method, path, request.body);
+    } catch (error) {
+      return accountProblem(error);
+    }
+  }
+
+  if (path === '/api/chain-seed' || path.startsWith('/api/chain-seed/')) {
+    try {
+      return await handleChainSeed(deps.chainSeed, method, path, request.body);
     } catch (error) {
       return accountProblem(error);
     }
@@ -242,6 +264,63 @@ async function handleAccount(
   return problem(404, 'unknown_route', `No route ${method} ${path}.`);
 }
 
+/**
+ * The Chain Seed routes (TOON_Network#89, ADR 0020).
+ *
+ * `GET` is the state a person looks at; each `POST` is one thing an account
+ * can decide to do about it. Every one of them answers with the same status
+ * shape, which is built from addresses and event metadata — so there is no
+ * route here, and no error path out of here, that a mnemonic could travel
+ * along. `chain-seed.test.ts` and `api-chain-seed.test.ts` are the tests that
+ * say so, and the rule matters more here than anywhere else in the console:
+ * this is the one request body that carries a seed INTO the daemon.
+ */
+async function handleChainSeed(
+  seed: ChainSeedStore,
+  method: string,
+  path: string,
+  body: unknown
+): Promise<ApiResponse> {
+  const at = (route: string, verb: string) => path === route && method === verb;
+
+  if (at('/api/chain-seed', 'GET')) return ok(seed.status());
+  if (at('/api/chain-seed/refresh', 'POST')) return ok(await seed.refresh());
+  if (at('/api/chain-seed/acknowledge', 'POST')) return ok(seed.acknowledgeWarning());
+  if (at('/api/chain-seed/mint', 'POST')) return ok(await seed.mint());
+
+  if (at('/api/chain-seed/import', 'POST')) {
+    const mnemonic = string(asRecord(body), 'mnemonic');
+    if (!mnemonic) {
+      return problem(400, 'invalid_request', 'Body must carry the `mnemonic` to import.');
+    }
+    return ok(await seed.importMnemonic(mnemonic));
+  }
+
+  return problem(404, 'unknown_route', `No route ${method} ${path}.`);
+}
+
+/** `{ "relays": [{ "url": "wss://…", "mode": "read" | "write" | "both" }] }`. */
+function readRelayEntries(
+  body: unknown
+): { value: { url: string; mode?: RelayMode }[] } | { error: string } {
+  const raw = asRecord(body).relays;
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return { error: 'Body must carry a non-empty `relays` array.' };
+  }
+  const value: { url: string; mode?: RelayMode }[] = [];
+  for (const entry of raw) {
+    const fields = typeof entry === 'string' ? { url: entry } : asRecord(entry);
+    const url = string(fields, 'url');
+    if (!url) return { error: 'Every relay needs a `url`.' };
+    const mode = string(fields, 'mode');
+    if (mode !== undefined && mode !== 'read' && mode !== 'write' && mode !== 'both') {
+      return { error: '`mode` is "read", "write" or "both".' };
+    }
+    value.push({ url, ...(mode === undefined ? {} : { mode }) });
+  }
+  return { value };
+}
+
 function ok(status: unknown): ApiResponse {
   return { status: 200, body: status };
 }
@@ -258,6 +337,21 @@ function accountProblem(error: unknown): ApiResponse {
   if (error instanceof KeyMaterialError) return problem(400, error.code, error.message);
   if (error instanceof RemoteSignerError) return problem(502, error.code, error.message);
   if (error instanceof SessionError) return problem(error.status, error.code, error.message);
+  if (error instanceof RelayListError) return problem(400, error.code, error.message);
+  if (error instanceof SealingError) return problem(409, error.code, error.message);
+  if (error instanceof ChainSeedError) {
+    // The per-relay detail travels with the problem, because "it was not
+    // published" is only useful alongside which relay said what. None of it
+    // comes from the request body.
+    return {
+      status: error.status,
+      body: {
+        error: error.code,
+        message: error.message,
+        ...(error.relays ? { relays: error.relays } : {}),
+      },
+    };
+  }
   throw error;
 }
 

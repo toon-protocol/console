@@ -184,6 +184,39 @@ class BunkerConsoleSigner implements ConsoleSigner {
     }
   }
 
+  /**
+   * `nip44_encrypt` with the account's own pubkey as the third party.
+   *
+   * NIP-46 has no "to myself" request, so the account's key is named as the
+   * counterparty — which is what NIP-44 self-sealing is: a conversation key
+   * with oneself. The pubkey passed is the one the bunker told this console it
+   * signs as, never one a caller supplies, so nothing here can be steered into
+   * sealing an account's Chain Seed to somebody else.
+   */
+  async sealToSelf(plaintext: string): Promise<string> {
+    try {
+      return await this.#bunker.nip44Encrypt(this.pubkey, plaintext);
+    } catch (error) {
+      throw new RemoteSignerError(
+        'signer_refused',
+        `The remote signer did not seal it: ${errorText(error)}. A signer that allows ` +
+          '`sign_event` may still have to be asked separately for `nip44_encrypt`.'
+      );
+    }
+  }
+
+  async unsealFromSelf(ciphertext: string): Promise<string> {
+    try {
+      return await this.#bunker.nip44Decrypt(this.pubkey, ciphertext);
+    } catch (error) {
+      throw new RemoteSignerError(
+        'signer_refused',
+        `The remote signer did not open it: ${errorText(error)}. A signer that allows ` +
+          '`sign_event` may still have to be asked separately for `nip44_decrypt`.'
+      );
+    }
+  }
+
   async close(): Promise<void> {
     // Closing the subscription, not logging out: a logout would revoke the
     // console's authorization at the signer, and signing out of the console is

@@ -3,6 +3,8 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { AccountSession } from './account-session.js';
+import { ChainSeedStore } from './chain-seed.js';
+import { FileChainSeedCache } from './chain-seed-cache.js';
 import { defaultConnectorReader, readConnectorHealth } from './connector-health.js';
 import { readDirectory } from './directory.js';
 import { openKeystore } from './keystore-open.js';
@@ -55,6 +57,17 @@ export async function main(): Promise<void> {
     relays: () => [profiles.active().relayUrl].filter((url) => url.length > 0),
   });
 
+  // The Chain Seed follows whoever is signed in: the store holds no key of its
+  // own, asks the session for one each time, and drops everything when the
+  // account changes (TOON_Network#89, ADR 0020).
+  const chainSeed = new ChainSeedStore({
+    signer: () => session.signingPort(),
+    // The profile's relay is a SEED for discovery, not where a seed is kept:
+    // the account's own NIP-65 write relays are, when it has named any.
+    seedRelays: () => [profiles.active().relayUrl].filter((url) => url.length > 0),
+    cache: new FileChainSeedCache(paths),
+  });
+
   const port = Number(process.env.TOON_CONSOLE_PORT ?? DEFAULT_PORT);
   const recordPath = launchFilePath(paths);
 
@@ -70,6 +83,7 @@ export async function main(): Promise<void> {
     deps: {
       profiles,
       session,
+      chainSeed,
       version,
       paths,
       startedAt: new Date(),

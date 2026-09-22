@@ -251,15 +251,83 @@ export interface LocalSignerRequest {
   passphrase?: string;
 }
 
+/**
+ * The Chain Seed (TOON_Network#89, ADR 0020).
+ *
+ * Note what a `ChainSeedStatus` carries: addresses, paths, relay outcomes and
+ * one warning. There is no mnemonic field, and there is no route that would
+ * return one — the console shows an account where its money goes, never the
+ * words that unlock it. Recovery is through the account's Nostr key, which is
+ * the whole point of sealing the seed to it, so a "reveal" would be a second
+ * and weaker custody story sitting next to the real one.
+ */
+
+export interface ChainAddress {
+  address: string;
+  path: string;
+}
+
+export interface ChainAddresses {
+  evm: ChainAddress;
+  solana: ChainAddress;
+}
+
+export interface SeedRecordView {
+  eventId: string;
+  publishedAt: string;
+  source: 'cache' | 'relays';
+  relays: string[];
+}
+
+export interface RelayListView {
+  state: 'unknown' | 'none' | 'present';
+  read: string[];
+  write: string[];
+  publishedAt?: string;
+  writeTargets: string[];
+  writeTargetSource: 'nip65' | 'profile' | 'none';
+}
+
+export interface PublishOutcome {
+  url: string;
+  state: 'accepted' | 'rejected' | 'timeout' | 'failed';
+  reason?: string;
+  code?: string;
+}
+
+export interface PublishReport {
+  at: string;
+  what: 'chain-seed' | 'relay-list';
+  relays: PublishOutcome[];
+  accepted: string[];
+}
+
+export interface ChainSeedStatus {
+  state: 'signed_out' | 'unknown' | 'absent' | 'ready' | 'unreadable';
+  pubkey?: string;
+  addresses?: ChainAddresses;
+  origin?: 'minted' | 'imported';
+  record?: SeedRecordView;
+  relayList: RelayListView;
+  warning: { text: string; acknowledgedAt?: string };
+  supersededSeeds: number;
+  lastPublish?: PublishReport;
+  reason?: string;
+  checkedAt: string;
+}
+
 export class DaemonError extends Error {
   readonly status: number;
   /** The daemon's machine-readable code, e.g. `passphrase_required`. */
   readonly code: string;
-  constructor(status: number, message: string, code = 'error') {
+  /** Per-relay detail on a publish that persisted nothing, when there is any. */
+  readonly relays?: PublishOutcome[];
+  constructor(status: number, message: string, code = 'error', relays?: PublishOutcome[]) {
     super(message);
     this.name = 'DaemonError';
     this.status = status;
     this.code = code;
+    if (relays) this.relays = relays;
   }
 }
 
@@ -283,11 +351,13 @@ async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
     const problem = (await response.json().catch(() => null)) as {
       message?: string;
       error?: string;
+      relays?: PublishOutcome[];
     } | null;
     throw new DaemonError(
       response.status,
       problem?.message ?? `The daemon answered ${response.status}.`,
-      problem?.error ?? 'error'
+      problem?.error ?? 'error',
+      problem?.relays
     );
   }
   return (await response.json()) as T;
@@ -327,6 +397,16 @@ export const daemon = {
   refreshAccountProfile: () => post<SessionStatus>('/api/account/profile/refresh'),
   sign: (template: { kind: number; content?: string; tags?: string[][] }) =>
     post<{ event: SignedEvent }>('/api/account/sign', template),
+  publishRelayList: (relays: { url: string; mode?: 'read' | 'write' | 'both' }[]) =>
+    post<ChainSeedStatus>('/api/account/relays', { relays }),
+
+  chainSeed: () => call<ChainSeedStatus>('/api/chain-seed'),
+  refreshChainSeed: () => post<ChainSeedStatus>('/api/chain-seed/refresh'),
+  acknowledgeCustody: () => post<ChainSeedStatus>('/api/chain-seed/acknowledge'),
+  mintChainSeed: () => post<ChainSeedStatus>('/api/chain-seed/mint'),
+  // One way only: the words go to the daemon, and the answer is addresses.
+  importChainSeed: (mnemonic: string) =>
+    post<ChainSeedStatus>('/api/chain-seed/import', { mnemonic }),
 };
 
 /** The filters, as the daemon's query string spells them. */

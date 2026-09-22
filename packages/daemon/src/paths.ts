@@ -45,6 +45,37 @@ export function profileDataDir(paths: ConsolePaths, profileId: string): string {
   return join(paths.data, 'profiles', profileId);
 }
 
+/**
+ * Everything ONE ACCOUNT's state lives under.
+ *
+ * Keyed by pubkey and not by profile, because an account's Chain Seed is the
+ * same seed on every network it settles on (ADR 0020). Channel state is the
+ * other way round and lives under `profileDataDir`; the two directories being
+ * separate is what keeps the distinction from being forgotten.
+ */
+export function accountDataDir(paths: ConsolePaths, pubkey: string): string {
+  return join(paths.data, 'accounts', safeKey(pubkey));
+}
+
+/** The sealed Chain Seed record's local cache (TOON_Network#89). */
+export function accountChainSeedPath(paths: ConsolePaths, pubkey: string): string {
+  return join(accountDataDir(paths, pubkey), 'chain-seed.json');
+}
+
+/**
+ * A pubkey is 64 hex characters, but it arrives from a signer rather than
+ * from this process, and a value that reaches `join` decides which file is
+ * written. Anything that is not the shape of a pubkey never becomes a path.
+ */
+function safeKey(pubkey: string): string {
+  if (!/^[0-9a-f]{64}$/iu.test(pubkey)) {
+    throw new Error(
+      'A pubkey is 64 hex characters; this one is not, so it names no directory.'
+    );
+  }
+  return pubkey.toLowerCase();
+}
+
 /** The file the daemon writes so a launcher can find it. */
 export function launchFilePath(paths: ConsolePaths): string {
   return join(paths.runtime, 'launch.json');

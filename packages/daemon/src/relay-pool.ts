@@ -226,3 +226,169 @@ function readOne(read: OneRead): Promise<RelayOutcome> {
 function closeMessage(read: OneRead): string {
   return JSON.stringify(['CLOSE', read.subscriptionId]);
 }
+
+/**
+ * Writing: the other half, added for the Chain Seed (TOON_Network#89).
+ *
+ * Reading the Provider Directory needed none of this — a tenant signs no event
+ * of the protocol (ADR 0016) — but an account's OWN records do get published:
+ * its Chain Seed (ADR 0020), its Lease Vault (ADR 0021) and, when it has none,
+ * its NIP-65 list. All three go to the account's own relays, which is why this
+ * lives beside the read rather than in the module that owns any one of them.
+ *
+ * What a caller needs back is not "did it work" but WHICH relay said WHAT, and
+ * the reason is money. The TOON relay refuses a plain websocket write with
+ * `restricted: writes require ILP payment` — its writes are 1 µUSDC, paid
+ * through a channel the console may not have opened yet. "Published to one of
+ * two relays" and "refused by the only relay there was" have to be different
+ * answers, and the second has to carry the relay's own words, because the way
+ * out of it depends on which refusal it was.
+ */
+
+export type PublishState =
+  /** The relay answered `OK … true`. It holds the event. */
+  | 'accepted'
+  /** The relay answered `OK … false`. It said why, and it meant it. */
+  | 'rejected'
+  /** No answer inside the deadline. It may or may not hold the event. */
+  | 'timeout'
+  /** It could not be reached, or hung up before answering. */
+  | 'failed';
+
+export interface PublishOutcome {
+  readonly url: string;
+  readonly state: PublishState;
+  /** The relay's own message, verbatim, when it sent one. */
+  readonly reason?: string;
+  /**
+   * NIP-01's machine-readable prefix on a refusal — `restricted`, `blocked`,
+   * `rate-limited`, `invalid`, `pow`, `duplicate`, `error` — when there is one.
+   */
+  readonly code?: string;
+}
+
+export interface PublishResult {
+  readonly relays: readonly PublishOutcome[];
+  /** The relays that now hold the event. Empty means nothing was persisted. */
+  readonly accepted: readonly string[];
+}
+
+export interface PublishRequest {
+  /** A signed event, as NIP-01 puts one on the wire. */
+  readonly event: unknown;
+  readonly relays: readonly string[];
+  readonly dial?: RelayDialer;
+  readonly timeoutMs?: number;
+}
+
+/** A `duplicate:` refusal is the relay saying it already has it. */
+export function isPersisted(outcome: PublishOutcome): boolean {
+  return outcome.state === 'accepted' || outcome.code === 'duplicate';
+}
+
+export async function publishToRelays(request: PublishRequest): Promise<PublishResult> {
+  const urls = [...new Set(request.relays)].filter((url) => url.length > 0);
+  if (urls.length === 0) return { relays: [], accepted: [] };
+
+  const dial = request.dial ?? dialWebSocket;
+  const timeoutMs = request.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const eventId = (request.event as { id?: unknown }).id;
+  const message = JSON.stringify(['EVENT', request.event]);
+
+  const outcomes = await Promise.all(
+    urls.map((url) => publishOne({ url, dial, timeoutMs, message, eventId }))
+  );
+  return {
+    relays: outcomes,
+    accepted: outcomes.filter(isPersisted).map((outcome) => outcome.url),
+  };
+}
+
+interface OneWrite {
+  readonly url: string;
+  readonly dial: RelayDialer;
+  readonly timeoutMs: number;
+  readonly message: string;
+  readonly eventId: unknown;
+}
+
+function publishOne(write: OneWrite): Promise<PublishOutcome> {
+  return new Promise<PublishOutcome>((resolve) => {
+    let settled = false;
+    let connection: RelayConnection | undefined;
+    let openedEarly = false;
+
+    const timer = setTimeout(
+      () => finish({ state: 'timeout', reason: `no OK within ${write.timeoutMs} ms` }),
+      write.timeoutMs
+    );
+    timer.unref?.();
+
+    const finish = (outcome: Omit<PublishOutcome, 'url'>) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try {
+        connection?.close();
+      } catch {
+        // The socket went away underneath us; nothing left to tidy.
+      }
+      resolve({ url: write.url, ...outcome });
+    };
+
+    const send = () => {
+      if (connection === undefined) {
+        openedEarly = true;
+        return;
+      }
+      try {
+        connection.send(write.message);
+      } catch (error) {
+        finish({ state: 'failed', reason: errorText(error) });
+      }
+    };
+
+    const handlers: RelayHandlers = {
+      onOpen: send,
+      onMessage: (data) => {
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(data);
+        } catch {
+          return;
+        }
+        if (!Array.isArray(parsed)) return;
+        const [verb, id, accepted, reason] = parsed as [unknown, unknown, unknown, unknown];
+        if (verb !== 'OK' || id !== write.eventId) return;
+        const text = typeof reason === 'string' ? reason : undefined;
+        finish({
+          state: accepted === true ? 'accepted' : 'rejected',
+          ...(text === undefined ? {} : { reason: text }),
+          ...(text === undefined ? {} : optionalCode(text)),
+        });
+      },
+      // A relay that hangs up without an OK has told us nothing, and a caller
+      // that treated silence as success would report a seed as persisted that
+      // is not.
+      onClose: () => finish({ state: 'failed', reason: 'the relay closed the connection' }),
+      onError: (reason) => finish({ state: 'failed', reason }),
+    };
+
+    try {
+      connection = write.dial(write.url, handlers);
+      if (openedEarly) send();
+    } catch (error) {
+      finish({ state: 'failed', reason: errorText(error) });
+    }
+  });
+}
+
+/** NIP-01's `<machine-readable-prefix>: <human-readable>`, when it is one. */
+function optionalCode(reason: string): { code?: string } {
+  const prefix = /^([a-z-]+):/u.exec(reason)?.[1];
+  return prefix === undefined ? {} : { code: prefix };
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
