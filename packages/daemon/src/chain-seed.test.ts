@@ -489,3 +489,54 @@ function seededCache(
   cache.writeEvent(pubkey, event);
   return cache;
 }
+
+describe('looking on a relay nobody named', () => {
+  it('finds the seed when the profile’s relay carries no NIP-65 list', async () => {
+    // The sandbox and devnet shape: the profile's relay is a TOON relay, it
+    // charges for writes, so no account's relay list is on it — and a fresh
+    // machine has nowhere to start. One relay URL is the way back in.
+    const account = fakeAccount();
+    const own = fakeRelayServer(OWN);
+    const toon = fakeRelayServer(PROFILE_RELAY, { refuse: PAID });
+    const first = new ChainSeedStore({
+      signer: () => account,
+      seedRelays: () => [PROFILE_RELAY],
+      cache: new InMemoryChainSeedCache(),
+      dial: fakeRelayNetwork([own, toon]),
+      timeoutMs: 200,
+    });
+    first.acknowledgeWarning();
+    await first.publishRelayList([{ url: OWN }]);
+    const minted = await first.mint();
+
+    const fresh = new ChainSeedStore({
+      signer: () => account,
+      seedRelays: () => [PROFILE_RELAY],
+      cache: new InMemoryChainSeedCache(),
+      dial: fakeRelayNetwork([own, toon]),
+      timeoutMs: 200,
+    });
+    expect((await fresh.refresh()).state).toBe('absent');
+
+    const found = await fresh.refresh({ relays: [OWN] });
+    expect(found.state).toBe('ready');
+    expect(found.addresses).toEqual(minted.addresses);
+
+    // And it is remembered, so the URL is typed once.
+    expect((await fresh.refresh()).state).toBe('ready');
+  });
+
+  it('publishes nothing while looking', async () => {
+    const w = world();
+    const before = w.own.events.length;
+    await w.store.refresh({ relays: [OWN] });
+    expect(w.own.events).toHaveLength(before);
+  });
+
+  it('refuses a hint that is not a relay URL', async () => {
+    const w = world();
+    await expect(w.store.refresh({ relays: ['relay.example'] })).rejects.toMatchObject({
+      code: 'invalid_relay_url',
+    });
+  });
+});

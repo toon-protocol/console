@@ -29,7 +29,7 @@ export interface ChainSeedState {
   readonly refusals?: PublishOutcome[];
   reload(): void;
   clearError(): void;
-  refresh(): Promise<boolean>;
+  refresh(relays?: string[]): Promise<boolean>;
   acknowledge(): Promise<boolean>;
   mint(): Promise<boolean>;
   importMnemonic(mnemonic: string): Promise<boolean>;
@@ -98,7 +98,7 @@ export function useChainSeed(options: { pubkey?: string | undefined } = {}): Cha
       setErrorCode(undefined);
       setRefusals(undefined);
     },
-    refresh: () => run(() => daemon.refreshChainSeed()),
+    refresh: (relays) => run(() => daemon.refreshChainSeed(relays)),
     acknowledge: () => run(() => daemon.acknowledgeCustody()),
     mint: () => run(() => daemon.mintChainSeed()),
     importMnemonic: (mnemonic) => run(() => daemon.importChainSeed(mnemonic)),

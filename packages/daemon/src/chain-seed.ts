@@ -7,6 +7,7 @@ import {
 import { supersedes, tagValue, type NostrEvent } from './nostr.js';
 import {
   NO_RELAY_LIST,
+  normalizeRelayUrl,
   readRelayListOf,
   relayListTemplate,
   type RelayList,
@@ -272,14 +273,32 @@ export class ChainSeedStore {
    * Reads are free (spec §5 prices a provider's routes, never a relay's
    * reads), so this asks every relay the account named, read and write alike,
    * plus the network profile's. A seed found on one of them is a seed found.
+   *
+   * `relays` is the escape hatch for the case that breaks the chain: a network
+   * profile whose only relay is a TOON relay, which carries no account's
+   * NIP-65 list because it charges for writes. A fresh machine there has
+   * nowhere to start looking, and the honest fix is to let a person say where
+   * — one relay URL, read-only, remembered afterwards so it only has to be
+   * typed once. It publishes nothing, so it is safe to try with a guess.
    */
-  async refresh(): Promise<ChainSeedStatus> {
+  async refresh(options: { relays?: readonly string[] } = {}): Promise<ChainSeedStatus> {
     const signer = this.#require();
     this.#reason = undefined;
-    const cached = this.#deps.cache.read(signer.pubkey);
-    this.#relayList = await this.#readRelayList(signer.pubkey, cached);
+    const hints = (options.relays ?? []).map((url) => {
+      const relay = normalizeRelayUrl(url);
+      if (relay === undefined) {
+        throw new ChainSeedError(
+          'invalid_relay_url',
+          `\`${String(url)}\` is not a relay URL. A relay is \`wss://host\` or \`ws://host\`.`
+        );
+      }
+      return relay;
+    });
 
-    const fromRelays = await this.#readRecords(signer.pubkey);
+    const cached = this.#deps.cache.read(signer.pubkey);
+    this.#relayList = await this.#readRelayList(signer.pubkey, cached, hints);
+
+    const fromRelays = await this.#readRecords(signer.pubkey, hints);
     const candidates = [
       ...(cached?.event
         ? [{ event: cached.event, source: 'cache' as const, relays: [] }]
@@ -287,6 +306,12 @@ export class ChainSeedStore {
       ...fromRelays,
     ];
     this.#looked = true;
+
+    // A hint that turned something up is worth keeping; one that turned up
+    // nothing is a guess, and a cache of guesses is a slower read every time.
+    if (hints.length > 0 && (candidates.length > 0 || this.#relayList.entries.length > 0)) {
+      this.#deps.cache.rememberRelays(signer.pubkey, hints);
+    }
 
     if (candidates.length === 0) {
       this.#open = undefined;
@@ -536,11 +561,12 @@ export class ChainSeedStore {
 
   async #readRelayList(
     pubkey: string,
-    cached: CachedChainSeed | undefined
+    cached: CachedChainSeed | undefined,
+    hints: readonly string[]
   ): Promise<RelayList> {
     // Relays the cached record was last seen on are worth asking too: an
     // account whose list moved still has its old relays holding the record.
-    const seeds = [...this.#deps.seedRelays(), ...(cached?.relays ?? [])];
+    const seeds = [...hints, ...this.#deps.seedRelays(), ...(cached?.relays ?? [])];
     if (seeds.length === 0) return NO_RELAY_LIST;
     return readRelayListOf(pubkey, seeds, {
       ...(this.#deps.dial === undefined ? {} : { dial: this.#deps.dial }),
@@ -549,13 +575,16 @@ export class ChainSeedStore {
   }
 
   async #readRecords(
-    pubkey: string
+    pubkey: string,
+    hints: readonly string[]
   ): Promise<{ event: NostrEvent; source: 'relays'; relays: string[] }[]> {
     const relays = [
       ...new Set([
+        ...hints,
         ...(this.#relayList?.read ?? []),
         ...(this.#relayList?.write ?? []),
         ...this.#deps.seedRelays(),
+        ...(this.#deps.cache.read(pubkey)?.relays ?? []),
       ]),
     ].filter((url) => url.length > 0);
     if (relays.length === 0) return [];

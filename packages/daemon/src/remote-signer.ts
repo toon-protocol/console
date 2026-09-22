@@ -84,8 +84,25 @@ export async function connectToBunker(
   const bunker = BunkerSigner.fromBunker(clientKey, pointer);
   return withTimeout(
     (async () => {
-      await bunker.connect(CLIENT_METADATA);
-      const pubkey = await bunker.getPublicKey();
+      // A bunker that answers and REFUSES is not an internal fault, and it is
+      // the commonest thing that goes wrong here: a `bunker://` secret is
+      // single-use in NIP-46, so a URI that worked once answers `unauthorized`
+      // the second time. Said plainly, that is a person copying a fresh URI;
+      // unwrapped, it was a 500 with one word in it.
+      await bunker.connect(CLIENT_METADATA).catch((error: unknown) => {
+        throw new RemoteSignerError(
+          'signer_refused',
+          `The signer refused the connection: ${errorText(error)}. A \`bunker://\` secret is ` +
+            'usually good for one connection — ask the signer for a fresh URI, or authorize ' +
+            'this console there.'
+        );
+      });
+      const pubkey = await bunker.getPublicKey().catch((error: unknown) => {
+        throw new RemoteSignerError(
+          'signer_refused',
+          `The signer connected but would not say which account it signs as: ${errorText(error)}`
+        );
+      });
       return {
         signer: new BunkerConsoleSigner(bunker, pubkey),
         pointer,

@@ -280,6 +280,17 @@ function RelayList({ status, seed }: { status: ChainSeedStatus; seed: ChainSeedS
           <Button size="sm" type="submit" disabled={seed.busy || url.trim() === ''}>
             Publish
           </Button>
+          {/* Read-only, and the safe thing to press first on a machine that
+              has never seen this account: a look publishes nothing. */}
+          <Button
+            size="sm"
+            variant="outline"
+            type="button"
+            disabled={seed.busy || url.trim() === ''}
+            onClick={() => void seed.refresh([url])}
+          >
+            Just look there
+          </Button>
         </form>
       )}
     </div>

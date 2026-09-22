@@ -284,7 +284,18 @@ async function handleChainSeed(
   const at = (route: string, verb: string) => path === route && method === verb;
 
   if (at('/api/chain-seed', 'GET')) return ok(seed.status());
-  if (at('/api/chain-seed/refresh', 'POST')) return ok(await seed.refresh());
+
+  if (at('/api/chain-seed/refresh', 'POST')) {
+    // Optional `relays`: extra places to LOOK, for a fresh machine whose
+    // network profile names only a relay that carries no NIP-65 list. It
+    // publishes nothing.
+    const hinted = asRecord(body).relays;
+    if (hinted === undefined) return ok(await seed.refresh());
+    const relays = readRelayEntries(body);
+    if ('error' in relays) return problem(400, 'invalid_request', relays.error);
+    return ok(await seed.refresh({ relays: relays.value.map((entry) => entry.url) }));
+  }
+
   if (at('/api/chain-seed/acknowledge', 'POST')) return ok(seed.acknowledgeWarning());
   if (at('/api/chain-seed/mint', 'POST')) return ok(await seed.mint());
 

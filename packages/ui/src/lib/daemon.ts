@@ -401,7 +401,12 @@ export const daemon = {
     post<ChainSeedStatus>('/api/account/relays', { relays }),
 
   chainSeed: () => call<ChainSeedStatus>('/api/chain-seed'),
-  refreshChainSeed: () => post<ChainSeedStatus>('/api/chain-seed/refresh'),
+  /** `relays` names extra places to LOOK. Nothing is published by a refresh. */
+  refreshChainSeed: (relays?: string[]) =>
+    post<ChainSeedStatus>(
+      '/api/chain-seed/refresh',
+      relays && relays.length > 0 ? { relays: relays.map((url) => ({ url })) } : undefined
+    ),
   acknowledgeCustody: () => post<ChainSeedStatus>('/api/chain-seed/acknowledge'),
   mintChainSeed: () => post<ChainSeedStatus>('/api/chain-seed/mint'),
   // One way only: the words go to the daemon, and the answer is addresses.
