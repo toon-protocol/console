@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { generateAccountKey, toNsec } from './account-key.js';
 import { AccountSession } from './account-session.js';
+import { ChainSeedStore } from './chain-seed.js';
+import { InMemoryChainSeedCache } from './chain-seed-cache.js';
 import { handleApi, type ApiDeps, type ApiResponse } from './api.js';
 import { PassphraseFileKeystore, keystoreFilePath } from './keystore-file.js';
 import { activeProfileFilePath, consolePaths, type ConsolePaths } from './paths.js';
@@ -25,12 +27,18 @@ describe('the account routes', () => {
   beforeEach(() => {
     home = mkdtempSync(join(tmpdir(), 'toon-console-api-account-'));
     paths = consolePaths({ HOME: home } as NodeJS.ProcessEnv);
+    const session = new AccountSession({
+      keystore: new PassphraseFileKeystore(keystoreFilePath(paths)),
+      signers: new SignerIndex(signerIndexPath(paths)),
+      relays: () => [],
+    });
     deps = {
       profiles: new ProfileStore(activeProfileFilePath(paths)),
-      session: new AccountSession({
-        keystore: new PassphraseFileKeystore(keystoreFilePath(paths)),
-        signers: new SignerIndex(signerIndexPath(paths)),
-        relays: () => [],
+      session,
+      chainSeed: new ChainSeedStore({
+        signer: () => session.signingPort(),
+        seedRelays: () => [],
+        cache: new InMemoryChainSeedCache(),
       }),
       version: { name: '@toon-protocol/console-daemon', version: '0.1.0' },
       paths,

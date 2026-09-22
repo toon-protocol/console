@@ -162,6 +162,24 @@ describe('browsing the Provider Directory', () => {
           );
         }
         if (url.startsWith('/api/health')) return Promise.resolve(jsonResponse(health));
+        // Signed out: the Chain Seed has nothing to show and nothing to ask.
+        if (url.startsWith('/api/chain-seed')) {
+          return Promise.resolve(
+            jsonResponse({
+              state: 'signed_out',
+              relayList: {
+                state: 'unknown',
+                read: [],
+                write: [],
+                writeTargets: [],
+                writeTargetSource: 'none',
+              },
+              warning: { text: 'whoever holds the key holds the funds' },
+              supersededSeeds: 0,
+              checkedAt: '2026-09-22T00:00:00.000Z',
+            })
+          );
+        }
         throw new Error(`unexpected fetch: ${url}`);
       })
     );

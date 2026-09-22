@@ -100,6 +100,24 @@ function stubDaemon(
         }
         return Promise.resolve(jsonResponse(stub.account));
       }
+      // Signed out: the Chain Seed has nothing to show and nothing to ask.
+      if (url.startsWith('/api/chain-seed')) {
+        return Promise.resolve(
+          jsonResponse({
+            state: 'signed_out',
+            relayList: {
+              state: 'unknown',
+              read: [],
+              write: [],
+              writeTargets: [],
+              writeTargetSource: 'none',
+            },
+            warning: { text: 'whoever holds the key holds the funds' },
+            supersededSeeds: 0,
+            checkedAt: '2026-09-22T00:00:00.000Z',
+          })
+        );
+      }
       if (url.startsWith('/api/profiles')) {
         return Promise.resolve(jsonResponse({ activeId: 'devnet', profiles: [] }));
       }

@@ -10,6 +10,8 @@ import type { ConnectorHealth } from './connector-health.js';
 import { PassphraseFileKeystore, keystoreFilePath } from './keystore-file.js';
 import { activeProfileFilePath, consolePaths } from './paths.js';
 import { ProfileStore } from './profile-store.js';
+import { ChainSeedStore } from './chain-seed.js';
+import { InMemoryChainSeedCache } from './chain-seed-cache.js';
 import { startServer, type RunningServer } from './server.js';
 import { SignerIndex, signerIndexPath } from './signer-index.js';
 
@@ -45,12 +47,18 @@ describe('the daemon server', () => {
     writeFileSync(join(uiRoot, 'app.js'), 'export default 1;');
 
     const paths = consolePaths({ HOME: home } as NodeJS.ProcessEnv);
+    const session = new AccountSession({
+      keystore: new PassphraseFileKeystore(keystoreFilePath(paths)),
+      signers: new SignerIndex(signerIndexPath(paths)),
+      relays: () => [],
+    });
     const deps: ApiDeps = {
       profiles: new ProfileStore(activeProfileFilePath(paths)),
-      session: new AccountSession({
-        keystore: new PassphraseFileKeystore(keystoreFilePath(paths)),
-        signers: new SignerIndex(signerIndexPath(paths)),
-        relays: () => [],
+      session,
+      chainSeed: new ChainSeedStore({
+        signer: () => session.signingPort(),
+        seedRelays: () => [],
+        cache: new InMemoryChainSeedCache(),
       }),
       version: { name: '@toon-protocol/console-daemon', version: '0.1.0' },
       paths,

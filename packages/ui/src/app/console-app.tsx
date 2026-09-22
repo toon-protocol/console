@@ -2,10 +2,12 @@ import { useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { useAccount } from '@/hooks/use-account';
+import { useChainSeed } from '@/hooks/use-chain-seed';
 import { useConsole } from '@/hooks/use-console';
 import { useDirectory } from '@/hooks/use-directory';
 
 import { AccountCard, AccountChip } from './account-view';
+import { ChainSeedCard } from './chain-seed-view';
 import { DirectoryView } from './directory-view';
 import { HealthView } from './health-view';
 import { ProfileSwitcher } from './profile-switcher';
@@ -15,8 +17,8 @@ import { SignInView } from './sign-in-view';
  * The shell.
  *
  * Three views now — health (#87), the Provider Directory (#91) and the Account
- * (#88) — behind the header that will carry the rest: funds (#89) and the
- * workload dashboard (#90 onward).
+ * (#88, with its Chain Seed from #89) — behind the header that will carry the
+ * rest: funds (#90) and the workload dashboard (#93 onward).
  *
  * The console is NOT gated on signing in, and that is deliberate. Reading the
  * directory and asking the connector what it settles in are free, they need no
@@ -48,6 +50,9 @@ export function ConsoleApp() {
   });
   const account = useAccount();
   const signedIn = account.status?.signedIn === true;
+  // Keyed to the account: the Chain Seed belongs to whoever is signed in, and
+  // signing in as somebody else is a different seed or none (ADR 0020).
+  const chainSeed = useChainSeed({ pubkey: account.status?.account?.pubkey });
 
   return (
     <div className="min-h-dvh">
@@ -108,7 +113,14 @@ export function ConsoleApp() {
 
         {tab === 'account' ? (
           account.status &&
-          (signedIn ? <AccountCard account={account} /> : <SignInView account={account} />)
+          (signedIn ? (
+            <div className="space-y-4">
+              <AccountCard account={account} />
+              <ChainSeedCard seed={chainSeed} />
+            </div>
+          ) : (
+            <SignInView account={account} />
+          ))
         ) : tab === 'directory' ? (
           <DirectoryView
             {...(directory.directory === undefined ? {} : { directory: directory.directory })}

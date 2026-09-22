@@ -1,4 +1,5 @@
 import type { NostrEvent } from './nostr.js';
+import { parseRelayList, RELAY_LIST_KIND } from './relay-list.js';
 import { queryRelays, type RelayDialer } from './relay-pool.js';
 
 /**
@@ -59,7 +60,6 @@ export interface ProfileReadOptions {
 }
 
 const METADATA_KIND = 0;
-const RELAY_LIST_KIND = 10002;
 
 export async function readAccountProfile(
   pubkey: string,
@@ -74,7 +74,10 @@ export async function readAccountProfile(
   // kind-10002 beside it, and asking twice would double a sign-in's slowest
   // step for nothing.
   const first = await read(seeds, [METADATA_KIND, RELAY_LIST_KIND], pubkey, options);
-  const declared = readRelayList(newest(first, RELAY_LIST_KIND));
+  // A kind-0 is READ from the relays the account reads on. Which relays its
+  // own records are WRITTEN to is `relay-list.ts`'s other half, and the Chain
+  // Seed's business (TOON_Network#89).
+  const declared = parseRelayList(newest(first, RELAY_LIST_KIND)).read;
   let metadataEvent = newest(first, METADATA_KIND);
 
   if (declared.length > 0) {
@@ -126,23 +129,6 @@ function newest(
     if (!held || event.created_at > held.created_at) held = event;
   }
   return held;
-}
-
-/**
- * NIP-65: `["r", "<url>"]`, optionally with `"read"` or `"write"`. A bare `r`
- * is both, so a tag marked `write` only is the one to drop here.
- */
-function readRelayList(event: NostrEvent | undefined): string[] {
-  if (!event) return [];
-  const urls: string[] = [];
-  for (const tag of event.tags) {
-    if (tag[0] !== 'r') continue;
-    const url = tag[1];
-    if (typeof url !== 'string' || url.length === 0) continue;
-    if (tag[2] === 'write') continue;
-    if (!urls.includes(url)) urls.push(url);
-  }
-  return urls;
 }
 
 function parseMetadata(event: NostrEvent | undefined): AccountMetadata | undefined {

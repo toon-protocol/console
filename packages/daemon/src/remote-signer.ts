@@ -84,8 +84,25 @@ export async function connectToBunker(
   const bunker = BunkerSigner.fromBunker(clientKey, pointer);
   return withTimeout(
     (async () => {
-      await bunker.connect(CLIENT_METADATA);
-      const pubkey = await bunker.getPublicKey();
+      // A bunker that answers and REFUSES is not an internal fault, and it is
+      // the commonest thing that goes wrong here: a `bunker://` secret is
+      // single-use in NIP-46, so a URI that worked once answers `unauthorized`
+      // the second time. Said plainly, that is a person copying a fresh URI;
+      // unwrapped, it was a 500 with one word in it.
+      await bunker.connect(CLIENT_METADATA).catch((error: unknown) => {
+        throw new RemoteSignerError(
+          'signer_refused',
+          `The signer refused the connection: ${errorText(error)}. A \`bunker://\` secret is ` +
+            'usually good for one connection — ask the signer for a fresh URI, or authorize ' +
+            'this console there.'
+        );
+      });
+      const pubkey = await bunker.getPublicKey().catch((error: unknown) => {
+        throw new RemoteSignerError(
+          'signer_refused',
+          `The signer connected but would not say which account it signs as: ${errorText(error)}`
+        );
+      });
       return {
         signer: new BunkerConsoleSigner(bunker, pubkey),
         pointer,
@@ -180,6 +197,39 @@ class BunkerConsoleSigner implements ConsoleSigner {
       throw new RemoteSignerError(
         'signer_refused',
         `The remote signer did not sign it: ${errorText(error)}`
+      );
+    }
+  }
+
+  /**
+   * `nip44_encrypt` with the account's own pubkey as the third party.
+   *
+   * NIP-46 has no "to myself" request, so the account's key is named as the
+   * counterparty — which is what NIP-44 self-sealing is: a conversation key
+   * with oneself. The pubkey passed is the one the bunker told this console it
+   * signs as, never one a caller supplies, so nothing here can be steered into
+   * sealing an account's Chain Seed to somebody else.
+   */
+  async sealToSelf(plaintext: string): Promise<string> {
+    try {
+      return await this.#bunker.nip44Encrypt(this.pubkey, plaintext);
+    } catch (error) {
+      throw new RemoteSignerError(
+        'signer_refused',
+        `The remote signer did not seal it: ${errorText(error)}. A signer that allows ` +
+          '`sign_event` may still have to be asked separately for `nip44_encrypt`.'
+      );
+    }
+  }
+
+  async unsealFromSelf(ciphertext: string): Promise<string> {
+    try {
+      return await this.#bunker.nip44Decrypt(this.pubkey, ciphertext);
+    } catch (error) {
+      throw new RemoteSignerError(
+        'signer_refused',
+        `The remote signer did not open it: ${errorText(error)}. A signer that allows ` +
+          '`sign_event` may still have to be asked separately for `nip44_decrypt`.'
       );
     }
   }
