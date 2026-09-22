@@ -1,0 +1,25 @@
+The TOON Console: a local daemon plus a web UI, opened as an Omarchy web app. See
+`README.md`.
+
+## Agent skills
+
+### Issue tracker
+
+Issues are tracked in GitHub Issues on toon-protocol/TOON_Network (via `gh`), not in this
+repository — TOON_Network holds the specs and the tickets for every repo in the fleet
+(ADR 0001). A console change cites its TOON_Network issue number.
+
+### Domain docs
+
+The vocabulary and the decisions live in TOON_Network: `CONTEXT.md` (the **Console**
+section: Console, Account, Signer, Chain Seed, Lease Vault) and `docs/adr/` (0019, 0020 and
+0021 for the console). Use those terms here; do not start a second glossary.
+
+## House rules
+
+- Chain facts come from a connector's `GET /ilp`, never from a constant. A chain id, token
+  address or settlement address in this repository is a bug, and
+  `packages/daemon/src/profiles.test.ts` is the test that says so.
+- The daemon binds `127.0.0.1` only, and every `/api/*` route is behind the per-launch
+  token.
+- `npm run lint && npm run typecheck && npm test && npm run test:packaging` before a PR.

@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+#
+# Install the console for the current user: the systemd --user service, the
+# launcher on PATH, and the Omarchy web app entry.
+#
+# Everything lands under $HOME. Nothing here needs root, and nothing here is
+# system-wide, because the daemon is a user service holding one person's keys
+# (ADR 0019). The AUR package (TOON_Network#99) will place the same files from
+# a package-owned prefix; this script is what a checkout uses.
+#
+# Usage: packaging/bin/toon-console-install [--repo <dir>] [--no-webapp]
+
+set -euo pipefail
+
+REPO=""
+INSTALL_WEBAPP=true
+APP_NAME="TOON Console"
+
+while (($#)); do
+  case "$1" in
+  --repo)
+    REPO="${2:?--repo needs a directory}"
+    shift 2
+    ;;
+  --no-webapp)
+    INSTALL_WEBAPP=false
+    shift
+    ;;
+  *)
+    echo "usage: toon-console-install [--repo <dir>] [--no-webapp]" >&2
+    exit 1
+    ;;
+  esac
+done
+
+if [[ -z $REPO ]]; then
+  REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+fi
+
+DAEMON_ENTRY="$REPO/packages/daemon/dist/main.js"
+UI_ROOT="$REPO/packages/ui/dist"
+BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
+UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+ICON_SOURCE="$REPO/packaging/icons/toon-console.png"
+
+die() {
+  echo "toon-console-install: $1" >&2
+  exit 1
+}
+
+[[ -f $DAEMON_ENTRY ]] || die "no built daemon at $DAEMON_ENTRY — run 'npm run build' first"
+[[ -d $UI_ROOT ]] || die "no built UI at $UI_ROOT — run 'npm run build' first"
+
+NODE_BIN="$(command -v node)" || die "node is not on PATH"
+
+mkdir -p "$BIN_DIR" "$UNIT_DIR"
+
+# The launcher, on PATH.
+install -m 0755 "$REPO/packaging/bin/toon-console" "$BIN_DIR/toon-console"
+
+# The unit, with this checkout's absolute paths substituted in. systemd does
+# not expand $PATH or relative paths in ExecStart, so they have to be resolved
+# here rather than left as placeholders.
+sed \
+  -e "s|@NODE@|$NODE_BIN|g" \
+  -e "s|@DAEMON@|$DAEMON_ENTRY|g" \
+  -e "s|@UI_ROOT@|$UI_ROOT|g" \
+  "$REPO/packaging/systemd/toon-console.service" >"$UNIT_DIR/toon-console.service"
+
+systemctl --user daemon-reload
+systemctl --user enable --now toon-console.service
+
+if [[ $INSTALL_WEBAPP == true ]] && command -v omarchy-webapp-install >/dev/null 2>&1; then
+  # Arguments are: name, url, icon, custom-exec.
+  #
+  # The URL is the daemon's base and is NOT what gets opened: the custom exec
+  # is, because the URL that opens the window carries a token minted at launch
+  # and cannot be written into a .desktop file at install time. omarchy still
+  # requires a valid http(s) URL in that position, so the base is what it gets.
+  omarchy-webapp-install \
+    "$APP_NAME" \
+    "http://127.0.0.1:7797" \
+    "$ICON_SOURCE" \
+    "$BIN_DIR/toon-console"
+  echo "Installed the '$APP_NAME' web app. SUPER + SPACE to launch it."
+else
+  # Any other desktop gets a plain desktop entry (ADR 0019).
+  DESKTOP_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+  mkdir -p "$DESKTOP_DIR"
+  cat >"$DESKTOP_DIR/toon-console.desktop" <<EOF
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=$APP_NAME
+Comment=Run workloads on TOON Network
+Exec=$BIN_DIR/toon-console
+Icon=$ICON_SOURCE
+Terminal=false
+StartupNotify=true
+Categories=Development;Network;
+EOF
+  echo "Installed $DESKTOP_DIR/toon-console.desktop."
+fi
+
+echo "Daemon: systemctl --user status toon-console.service"
+echo "Open:   toon-console"

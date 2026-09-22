@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+#
+# Open the console.
+#
+# This is what the desktop entry runs. It is a script and not a bare URL
+# because the URL is not knowable at install time: the daemon mints a fresh
+# token on every launch (there is no long-lived credential to put in a
+# .desktop file), and the URL carrying it is written to the runtime directory
+# when the daemon comes up. So: make sure the daemon is running, read the URL
+# it published, and hand that to Omarchy's launch-or-focus.
+#
+# Usage: toon-console [--print-url]
+
+set -euo pipefail
+
+UNIT="toon-console.service"
+WINDOW_PATTERN="${TOON_CONSOLE_WINDOW_PATTERN:-TOON Console}"
+RUNTIME_DIR="${XDG_RUNTIME_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}}/toon-console"
+LAUNCH_FILE="$RUNTIME_DIR/launch.json"
+
+die() {
+  echo "toon-console: $1" >&2
+  exit 1
+}
+
+ensure_daemon() {
+  command -v systemctl >/dev/null 2>&1 || die "systemctl not found; start the daemon yourself"
+  if ! systemctl --user is-active --quiet "$UNIT"; then
+    # Clear a previous run's start-limit first, or a unit that hit it refuses
+    # to start again even once whatever broke it has been fixed.
+    systemctl --user reset-failed "$UNIT" >/dev/null 2>&1 || true
+    systemctl --user start "$UNIT" ||
+      die "could not start $UNIT (journalctl --user -u $UNIT)"
+  fi
+}
+
+# The daemon writes the launch file only once it is actually listening, so
+# waiting for the file is waiting for a URL that answers -- not a fixed sleep.
+wait_for_launch_file() {
+  local waited=0
+  while [[ ! -s $LAUNCH_FILE ]]; do
+    ((waited += 1))
+    if ((waited > 100)); then
+      die "the daemon did not come up within 10s (journalctl --user -u $UNIT)"
+    fi
+    sleep 0.1
+  done
+}
+
+read_launch_url() {
+  # No jq dependency: the launcher has to work on a machine that has the
+  # console and nothing else, and node is already there because the daemon is.
+  node -e '
+    const { readFileSync } = require("node:fs");
+    const record = JSON.parse(readFileSync(process.argv[1], "utf8"));
+    if (typeof record.launchUrl !== "string") throw new Error("no launchUrl in the launch record");
+    process.stdout.write(record.launchUrl);
+  ' "$LAUNCH_FILE"
+}
+
+main() {
+  ensure_daemon
+  wait_for_launch_file
+  local url
+  url=$(read_launch_url)
+
+  if [[ ${1:-} == "--print-url" ]]; then
+    printf '%s\n' "$url"
+    return 0
+  fi
+
+  if command -v omarchy-launch-or-focus-webapp >/dev/null 2>&1; then
+    # <window-pattern> then the URL: focus the window if it is already open,
+    # and open it as a web app if it is not.
+    exec omarchy-launch-or-focus-webapp "$WINDOW_PATTERN" "$url"
+  fi
+
+  # Any other desktop: hand the URL to whatever opens URLs.
+  command -v xdg-open >/dev/null 2>&1 || die "no omarchy-launch-or-focus-webapp and no xdg-open"
+  exec xdg-open "$url"
+}
+
+main "$@"

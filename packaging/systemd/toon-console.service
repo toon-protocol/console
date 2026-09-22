@@ -1,0 +1,32 @@
+[Unit]
+Description=TOON Console daemon (local API and UI on 127.0.0.1)
+Documentation=https://github.com/toon-protocol/console
+# A user service, not a system one (ADR 0019): the console holds the account's
+# keys and runs as the person who owns them, in their session, with their
+# XDG directories. Nothing about it belongs to root.
+After=graphical-session.target
+# Give up after five failures in a minute. Without this, a daemon that cannot
+# start at all — a taken port, a missing build — restarts forever and buries
+# the one error message that explains why in a wall of identical ones.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=@NODE@ @DAEMON@
+Environment=NODE_ENV=production
+Environment=TOON_CONSOLE_PORT=7797
+Environment=TOON_CONSOLE_UI_ROOT=@UI_ROOT@
+Restart=on-failure
+RestartSec=2
+# The daemon binds loopback and reads and writes only its own XDG directories,
+# so it is told it may do nothing else.
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectHostname=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=default.target
