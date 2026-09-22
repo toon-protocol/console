@@ -48,6 +48,8 @@ describe('the daemon server', () => {
       paths,
       startedAt: new Date('2026-09-22T00:00:00Z'),
       readHealth: () => Promise.resolve(HEALTHY),
+      readDirectory: () =>
+        Promise.resolve({ state: 'unconfigured', reason: 'not what this file tests' }),
     };
     running = await startServer({ deps, token: TOKEN, uiRoot, host: '127.0.0.1', port: 0 });
   });
