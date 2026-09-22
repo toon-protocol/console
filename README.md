@@ -6,9 +6,10 @@ Omarchy web app. It is not a website. A `systemd --user` service runs
 this one — holds the account's keys and manages its workloads. Nothing about an account
 lives on a server anyone else operates ([ADR 0019][adr19]).
 
-It installs, starts and opens, it knows which network it is pointed at, it can tell you
-what that network's connector says about itself, and an **Account** can sign in with its
-**Signer**. Funds ([#89][i89]) and the workload dashboard ([#90][i90] onward) build on it.
+It installs, starts and opens, it knows which network it is pointed at, it can tell you what
+that network's connector says about itself, it browses the Provider Directory, and an
+**Account** can sign in with its **Signer**. Funds ([#89][i89]) and the workload dashboard
+([#90][i90] onward) build on it.
 
 ## What is here
 
@@ -102,6 +103,35 @@ settles in, what a route costs — is read from that connector's own free `GET /
 health view is opened. There is no chain id, token address or settlement address anywhere
 in this repository, and `packages/daemon/src/profiles.test.ts` fails if one appears.
 
+## The Provider Directory
+
+The **Providers** view reads the directory — **Provider Profiles** (kind `10432`),
+**Listings** (`30432`) and **Liveness** (`10433`) — free, over NIP-01, and shows them
+together ([#91][i91], spec §4). Nothing is spent and no key is needed: a relay read is
+free, so browsing costs nothing and the console holds no lease to do it.
+
+- It starts at the relay the active profile names, then goes back to **each provider's own
+  Relay Set**, which only that provider's Profile can tell it.
+- A relay is not trusted. Every event has its id re-derived and its signature checked
+  before it is shown, and a Listing whose Profile is on no relay read is not purchasable.
+- Filters — isolation, arch, GPU, capabilities and hidden — go to the relay as the `l` and
+  `t` tag filters §4.4 defines, and every one of them is checked again locally. "Not
+  hidden" has no relay filter at all: a provider that is not hidden carries no `hidden:`
+  label, and absence is not something a filter can ask for.
+- Only the **current** version of a Listing is shown; older ones are counted and set aside
+  (ADR 0009). Prices are shown per **Lease Interval**, in the µUSDC the Listing published —
+  never converted.
+- **Liveness** is live or stale, decided against the clock. The badge counts the provider's
+  own `expiration` down in the browser and flips itself over when it passes, with no
+  refetch and no new event (ADR 0007).
+
+Choosing a tier and spawning on it is [#90][i90].
+
+```bash
+curl -H "authorization: Bearer $TOKEN" \
+  'http://127.0.0.1:7797/api/directory?arch=amd64&capability=docker'
+```
+
 ## Security
 
 The daemon binds `127.0.0.1` and refuses a request whose `Host` is not a loopback name. The
@@ -139,3 +169,4 @@ published identity; nothing in this repository should suggest otherwise.
 [adr21]: https://github.com/toon-protocol/TOON_Network/blob/main/docs/adr/0021-root-secrets-are-vaulted-on-the-accounts-own-relays.md
 [i89]: https://github.com/toon-protocol/TOON_Network/issues/89
 [i90]: https://github.com/toon-protocol/TOON_Network/issues/90
+[i91]: https://github.com/toon-protocol/TOON_Network/issues/91

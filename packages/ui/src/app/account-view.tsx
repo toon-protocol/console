@@ -66,18 +66,36 @@ export function AccountCard({ account }: { account: AccountState }) {
   );
 }
 
-/** The header's line: enough to tell which account, and no more. */
-export function AccountChip({ account }: { account: AccountState }) {
+/**
+ * The header's line: enough to tell which account, and no more.
+ *
+ * A button rather than a label, because the one thing a person wants after
+ * glancing at it is the view it names.
+ */
+export function AccountChip({
+  account,
+  onOpen,
+}: {
+  account: AccountState;
+  onOpen: () => void;
+}) {
   const view = account.status?.account;
   if (!view) return null;
   const metadata = view.profile?.metadata;
   return (
-    <div className="flex items-center gap-2">
+    <Button
+      type="button"
+      size="sm"
+      variant="ghost"
+      onClick={onOpen}
+      title={view.npub}
+      className="gap-2"
+    >
       <Avatar src={metadata?.picture} alt={metadata?.name ?? view.npub} size={24} />
       <span className="max-w-[14rem] truncate text-sm">
         {metadata?.displayName ?? metadata?.name ?? shortNpub(view.npub)}
       </span>
-    </div>
+    </Button>
   );
 }
 

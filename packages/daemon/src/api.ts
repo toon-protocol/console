@@ -3,6 +3,13 @@ import { SessionError, type AccountSession } from './account-session.js';
 import { channelStoreFor } from './channel-store.js';
 import type { ConnectorHealth } from './connector-health.js';
 import {
+  ANY_GPU,
+  ARCHITECTURES,
+  ISOLATIONS,
+  type DirectoryFilters,
+  type DirectoryResult,
+} from './directory.js';
+import {
   KeystoreUnavailableError,
   PassphraseRequiredError,
   WrongPassphraseError,
@@ -22,13 +29,14 @@ import type { DaemonVersion } from './version.js';
  * sockets, headers and files. The seam is also where `smoke-console` will
  * attach later (TOON_Network#84's testing decisions).
  *
- * Health, the network profile list and the switch came with the skeleton
- * (#87). `/api/account/*` is sign-in (#88): the Account, its Signer and the
- * local keystore. Funds (#89) and workloads (#90 onward) add their own.
+ * Health, the profile list and the switch came with the skeleton (#87); the
+ * Provider Directory joins them here (#91); `/api/account/*` is sign-in (#88):
+ * the Account, its Signer and the local keystore. Funds (#89) and workloads
+ * (#90 onward) add their own.
  *
  * Every route here is already behind the per-launch token — `server.ts` checks
  * it before anything in this file runs — and that matters more now than it did
- * with three read-only routes, because these ones import keys.
+ * with read-only routes, because the account ones import keys.
  *
  * The rule the account routes are written to: **no request body is ever echoed
  * back**. An nsec, a mnemonic, a passphrase and a bunker secret all arrive here
@@ -46,6 +54,10 @@ export interface ApiDeps {
   readonly version: DaemonVersion;
   readonly startedAt: Date;
   readonly paths: ConsolePaths;
+  readonly readDirectory: (
+    profile: NetworkProfile,
+    filters: DirectoryFilters
+  ) => Promise<DirectoryResult>;
   readonly now?: (() => Date) | undefined;
 }
 
@@ -91,6 +103,17 @@ export async function handleApi(deps: ApiDeps, request: ApiRequest): Promise<Api
       throw error;
     }
     return { status: 200, body: profilesBody(deps) };
+  }
+
+  if (path === '/api/directory' && method === 'GET') {
+    const filters = readFilters(request.query);
+    if ('error' in filters) {
+      return problem(400, 'invalid_filter', filters.error);
+    }
+    return {
+      status: 200,
+      body: await deps.readDirectory(deps.profiles.active(), filters.value),
+    };
   }
 
   if (path === '/api/account' && method === 'GET') {
@@ -306,6 +329,70 @@ function profilesBody(deps: ApiDeps) {
 function toProfileView(profile: NetworkProfile, active: NetworkProfile): ProfileView {
   return { ...profile, configured: isConfigured(profile), active: profile.id === active.id };
 }
+
+/**
+ * `GET /api/directory`'s filters, out of the query string.
+ *
+ * A value outside §4.4's vocabulary is refused rather than passed on. The
+ * alternative is an empty directory and no way to tell a network with no
+ * `arm64` provider from a typo, and the vocabulary is fixed for exactly this
+ * reason: a value must mean the same thing on every provider.
+ *
+ * `capability` repeats, and every one of them must be granted. `hidden` is
+ * three-valued: absent shows Hidden Providers alongside the rest, `true` shows
+ * only them, `false` excludes them (§4.2).
+ */
+function readFilters(query: URLSearchParams): { value: DirectoryFilters } | { error: string } {
+  const filters: {
+    isolation?: string;
+    arch?: string;
+    gpu?: string;
+    capabilities?: string[];
+    hidden?: boolean;
+  } = {};
+
+  const isolation = query.get('isolation');
+  if (isolation !== null && isolation !== '') {
+    if (!(ISOLATIONS as readonly string[]).includes(isolation)) {
+      return { error: `\`isolation\` is one of ${ISOLATIONS.join(', ')}.` };
+    }
+    filters.isolation = isolation;
+  }
+
+  const arch = query.get('arch');
+  if (arch !== null && arch !== '') {
+    if (!(ARCHITECTURES as readonly string[]).includes(arch)) {
+      return { error: `\`arch\` is one of ${ARCHITECTURES.join(', ')}.` };
+    }
+    filters.arch = arch;
+  }
+
+  const gpu = query.get('gpu');
+  if (gpu !== null && gpu !== '') {
+    if (gpu !== ANY_GPU && !GPU_FILTER.test(gpu)) {
+      return {
+        error: `\`gpu\` is \`${ANY_GPU}\`, or a \`<vendor>-<model>\` label such as \`nvidia-rtx-4090\`.`,
+      };
+    }
+    filters.gpu = gpu;
+  }
+
+  const capabilities = query.getAll('capability').filter((value) => value !== '');
+  if (capabilities.length > 0) filters.capabilities = [...new Set(capabilities)];
+
+  const hidden = query.get('hidden');
+  if (hidden !== null && hidden !== '') {
+    if (hidden !== 'true' && hidden !== 'false') {
+      return { error: '`hidden` is `true`, `false`, or left out to show both.' };
+    }
+    filters.hidden = hidden === 'true';
+  }
+
+  return { value: filters };
+}
+
+/** §4.4's GPU label grammar, as a query may spell it. */
+const GPU_FILTER = /^(nvidia|amd|intel|apple)(-[a-z0-9]+)+$/;
 
 function readProfileId(body: unknown): string | undefined {
   if (typeof body !== 'object' || body === null) return undefined;

@@ -1,61 +1,38 @@
 import { describe, expect, it } from 'vitest';
 
 import { readAccountProfile } from './account-metadata.js';
-import type { NostrEvent, RelaySocket, SocketFactory } from './relay-read.js';
+import { fakeProvider, fakeRelays, sign, type FakeProvider } from './directory.testkit.js';
+import type { NostrEvent } from './nostr.js';
 
-const PUBKEY = 'aa'.repeat(32);
+/**
+ * The kind-0 read, against fake relays that answer the way a relay does.
+ *
+ * Signed, because `relay-pool` verifies before it hands anything over — and
+ * that is the point of the last test here: a relay that serves SOMEBODY ELSE'S
+ * kind-0 under this account's pubkey would otherwise choose the face a person
+ * sees while they decide what to pay for.
+ */
 
-function event(overrides: Partial<NostrEvent>): NostrEvent {
-  return {
-    id: 'id',
-    pubkey: PUBKEY,
-    created_at: 1_000,
-    kind: 0,
-    tags: [],
-    content: '{}',
-    sig: 'ff'.repeat(64),
-    ...overrides,
-  };
+const account = fakeProvider('the-account');
+const stranger = fakeProvider('somebody-else');
+
+function metadata(who: FakeProvider, content: unknown, createdAt = 1_000): NostrEvent {
+  return sign(who, { kind: 0, created_at: createdAt, tags: [], content: JSON.stringify(content) });
 }
 
-/** Each relay answers with whatever it holds, whatever the filter asks. */
-function relaysHolding(holdings: Record<string, NostrEvent[]>): SocketFactory {
-  return (url) => {
-    const held = holdings[url] ?? [];
-    let subscription = '';
-    const socket: RelaySocket = {
-      send: (data) => {
-        const frame = JSON.parse(data) as [string, string, { kinds?: number[] }];
-        if (frame[0] !== 'REQ') return;
-        subscription = frame[1];
-        const kinds = frame[2].kinds ?? [];
-        queueMicrotask(() => {
-          for (const candidate of held.filter((one) => kinds.includes(one.kind))) {
-            socket.onmessage?.({ data: JSON.stringify(['EVENT', subscription, candidate]) });
-          }
-          socket.onmessage?.({ data: JSON.stringify(['EOSE', subscription]) });
-        });
-      },
-      close: () => undefined,
-      onopen: null,
-      onmessage: null,
-      onerror: null,
-      onclose: null,
-    };
-    queueMicrotask(() => socket.onopen?.());
-    return socket;
-  };
+function relayList(who: FakeProvider, tags: string[][], createdAt = 1_000): NostrEvent {
+  return sign(who, { kind: 10_002, created_at: createdAt, tags, content: '' });
 }
 
 describe('the account’s kind-0', () => {
   it('reads name and picture from the profile’s relay when there is no NIP-65', async () => {
-    const profile = await readAccountProfile(PUBKEY, ['wss://devnet'], {
-      socketFactory: relaysHolding({
-        'wss://devnet': [
-          event({ content: JSON.stringify({ name: 'ada', picture: 'https://pic/1' }) }),
-        ],
-      }),
-    });
+    const { dial } = fakeRelays([
+      {
+        url: 'wss://devnet',
+        events: [metadata(account, { name: 'ada', picture: 'https://pic/1' })],
+      },
+    ]);
+    const profile = await readAccountProfile(account.pubkey, ['wss://devnet'], { dial });
     expect(profile.metadata?.name).toBe('ada');
     expect(profile.metadata?.picture).toBe('https://pic/1');
     expect(profile.relaySource).toBe('profile');
@@ -63,77 +40,95 @@ describe('the account’s kind-0', () => {
   });
 
   it('follows the account’s NIP-65 list and prefers what it finds there', async () => {
-    const profile = await readAccountProfile(PUBKEY, ['wss://devnet'], {
-      socketFactory: relaysHolding({
-        'wss://devnet': [
-          event({ created_at: 1_000, content: JSON.stringify({ name: 'stale' }) }),
-          event({
-            kind: 10_002,
-            tags: [
-              ['r', 'wss://own-read', 'read'],
-              ['r', 'wss://own-both'],
-              ['r', 'wss://own-write', 'write'],
-            ],
-          }),
+    const { dial } = fakeRelays([
+      {
+        url: 'wss://devnet',
+        events: [
+          metadata(account, { name: 'stale' }, 1_000),
+          relayList(account, [
+            ['r', 'wss://own-read', 'read'],
+            ['r', 'wss://own-both'],
+            ['r', 'wss://own-write', 'write'],
+          ]),
         ],
-        'wss://own-read': [
-          event({ created_at: 2_000, content: JSON.stringify({ name: 'current' }) }),
-        ],
-        'wss://own-both': [],
-      }),
-    });
+      },
+      { url: 'wss://own-read', events: [metadata(account, { name: 'current' }, 2_000)] },
+      { url: 'wss://own-both', events: [] },
+    ]);
+    const profile = await readAccountProfile(account.pubkey, ['wss://devnet'], { dial });
     expect(profile.metadata?.name).toBe('current');
     expect(profile.relaySource).toBe('nip65');
     // A write-only relay is not somewhere to read from.
     expect(profile.relays).toEqual(['wss://own-read', 'wss://own-both']);
   });
 
-  it('keeps the older copy when the account’s own relays have nothing newer', async () => {
-    const profile = await readAccountProfile(PUBKEY, ['wss://devnet'], {
-      socketFactory: relaysHolding({
-        'wss://devnet': [
-          event({ created_at: 5_000, content: JSON.stringify({ name: 'newest' }) }),
-          event({ kind: 10_002, tags: [['r', 'wss://own']] }),
+  it('keeps the newer copy when the account’s own relays have nothing fresher', async () => {
+    const { dial } = fakeRelays([
+      {
+        url: 'wss://devnet',
+        events: [
+          metadata(account, { name: 'newest' }, 5_000),
+          relayList(account, [['r', 'wss://own']]),
         ],
-        'wss://own': [
-          event({ created_at: 1_000, content: JSON.stringify({ name: 'older' }) }),
-        ],
-      }),
-    });
+      },
+      { url: 'wss://own', events: [metadata(account, { name: 'older' }, 1_000)] },
+    ]);
+    const profile = await readAccountProfile(account.pubkey, ['wss://devnet'], { dial });
     expect(profile.metadata?.name).toBe('newest');
   });
 
   it('is a signed-in account with no name when nothing answers', async () => {
-    const profile = await readAccountProfile(PUBKEY, ['wss://devnet'], {
-      socketFactory: relaysHolding({ 'wss://devnet': [] }),
-    });
+    const { dial } = fakeRelays([{ url: 'wss://devnet', events: [] }]);
+    const profile = await readAccountProfile(account.pubkey, ['wss://devnet'], { dial });
+    expect(profile.metadata).toBeUndefined();
+    expect(profile.relaySource).toBe('profile');
+  });
+
+  it('survives a relay that will not answer at all', async () => {
+    const { dial } = fakeRelays([{ url: 'wss://devnet', events: [], broken: true }]);
+    const profile = await readAccountProfile(account.pubkey, ['wss://devnet'], { dial });
     expect(profile.metadata).toBeUndefined();
     expect(profile.relaySource).toBe('profile');
   });
 
   it('does not fall over on a kind-0 that is not JSON', async () => {
-    const profile = await readAccountProfile(PUBKEY, ['wss://devnet'], {
-      socketFactory: relaysHolding({ 'wss://devnet': [event({ content: 'hello' })] }),
-    });
+    const { dial } = fakeRelays([
+      {
+        url: 'wss://devnet',
+        events: [sign(account, { kind: 0, created_at: 1_000, tags: [], content: 'hello' })],
+      },
+    ]);
+    const profile = await readAccountProfile(account.pubkey, ['wss://devnet'], { dial });
     expect(profile.metadata?.name).toBeUndefined();
     expect(profile.metadata?.publishedAt).toBeDefined();
   });
 
   it('truncates a name long enough to be an attack on the layout', async () => {
-    const profile = await readAccountProfile(PUBKEY, ['wss://devnet'], {
-      socketFactory: relaysHolding({
-        'wss://devnet': [event({ content: JSON.stringify({ name: 'a'.repeat(5_000) }) })],
-      }),
-    });
+    const { dial } = fakeRelays([
+      { url: 'wss://devnet', events: [metadata(account, { name: 'a'.repeat(5_000) })] },
+    ]);
+    const profile = await readAccountProfile(account.pubkey, ['wss://devnet'], { dial });
     expect(profile.metadata?.name).toHaveLength(512);
   });
 
   it('asks nothing at all when the profile names no relay', async () => {
-    const profile = await readAccountProfile(PUBKEY, [], {
-      socketFactory: () => {
+    const profile = await readAccountProfile(account.pubkey, [], {
+      dial: () => {
         throw new Error('nothing should have been dialled');
       },
     });
     expect(profile.relaySource).toBe('none');
+  });
+
+  /**
+   * The read is filtered on the account's pubkey, and verified on top of that,
+   * so a relay cannot put a stranger's face on this account.
+   */
+  it('shows no name a relay made up', async () => {
+    const { dial } = fakeRelays([
+      { url: 'wss://devnet', events: [metadata(stranger, { name: 'not-the-account' })] },
+    ]);
+    const profile = await readAccountProfile(account.pubkey, ['wss://devnet'], { dial });
+    expect(profile.metadata).toBeUndefined();
   });
 });

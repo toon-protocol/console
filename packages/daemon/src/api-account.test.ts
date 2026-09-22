@@ -37,6 +37,8 @@ describe('the account routes', () => {
       startedAt: new Date('2026-09-22T00:00:00Z'),
       readHealth: () =>
         Promise.resolve({ state: 'unconfigured', reason: 'not asked in this test' }),
+      readDirectory: () =>
+        Promise.resolve({ state: 'unconfigured', reason: 'not asked in this test' }),
     };
   });
 

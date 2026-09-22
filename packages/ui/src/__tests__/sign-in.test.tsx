@@ -111,6 +111,15 @@ function stubDaemon(
   );
 }
 
+/**
+ * Render the shell and open the Account view, the way a person does: the
+ * console is not gated on signing in, so sign-in is one of the three tabs.
+ */
+async function openAccount(): Promise<void> {
+  render(<ConsoleApp />);
+  await userEvent.click(await screen.findByRole('button', { name: 'Account' }));
+}
+
 describe('signing in with a Nostr signer', () => {
   let stub: Stub;
 
@@ -127,7 +136,7 @@ describe('signing in with a Nostr signer', () => {
 
   it('offers a remote signer first, and the local keystore beside it', async () => {
     stubDaemon(stub);
-    render(<ConsoleApp />);
+    await openAccount();
     expect(await screen.findByText('Connect a remote signer')).toBeInTheDocument();
     expect(screen.getByText('Use the local keystore')).toBeInTheDocument();
     expect(screen.getByText('gnome-keyring')).toBeInTheDocument();
@@ -135,7 +144,7 @@ describe('signing in with a Nostr signer', () => {
 
   it('generates a key and shows the account’s name and avatar', async () => {
     stubDaemon(stub, () => signedIn());
-    render(<ConsoleApp />);
+    await openAccount();
     await userEvent.click(await screen.findByRole('button', { name: 'Generate and sign in' }));
 
     expect((await screen.findAllByText('Ada L')).length).toBeGreaterThan(0);
@@ -149,7 +158,7 @@ describe('signing in with a Nostr signer', () => {
 
   it('sends an imported nsec to the daemon and keeps it out of the window', async () => {
     stubDaemon(stub, () => signedIn());
-    render(<ConsoleApp />);
+    await openAccount();
     await userEvent.click(await screen.findByRole('button', { name: 'Import nsec' }));
     const nsec = 'nsec1vl029mgpspedva04g90vltkh6fvh240zqtv9k0t9af8935ke9laqsnlfe5';
     await userEvent.type(screen.getByLabelText('Secret key'), nsec);
@@ -167,7 +176,7 @@ describe('signing in with a Nostr signer', () => {
   it('asks for a passphrase when the keystore is the encrypted file', async () => {
     stub.account = signedOut('file');
     stubDaemon(stub, () => signedIn('file'));
-    render(<ConsoleApp />);
+    await openAccount();
     expect(await screen.findByText('encrypted file')).toBeInTheDocument();
     const passphrase = screen.getByLabelText('Keystore passphrase', {
       selector: '#local-passphrase',
@@ -188,7 +197,7 @@ describe('signing in with a Nostr signer', () => {
         ? { account: { ...remote.account, signerKind: 'remote' as const } }
         : {}),
     }));
-    render(<ConsoleApp />);
+    await openAccount();
     await userEvent.type(
       await screen.findByLabelText('Bunker URI'),
       'bunker://abc?relay=ws://127.0.0.1:10547'
@@ -209,7 +218,7 @@ describe('signing in with a Nostr signer', () => {
       ...signedOut(),
       invitation: { uri, state: 'waiting' as const, expiresAt: '2026-09-22T00:03:00.000Z' },
     }));
-    render(<ConsoleApp />);
+    await openAccount();
     await userEvent.click(
       await screen.findByRole('button', { name: 'Show a nostrconnect invitation' })
     );
@@ -222,7 +231,7 @@ describe('signing in with a Nostr signer', () => {
     stubDaemon(stub, (url) =>
       url.endsWith('/signout') ? { ...signedOut(), signers: signedIn().signers } : signedIn()
     );
-    render(<ConsoleApp />);
+    await openAccount();
     await userEvent.click(await screen.findByRole('button', { name: 'Sign out' }));
 
     expect(await screen.findByText('Connect a remote signer')).toBeInTheDocument();
@@ -234,7 +243,7 @@ describe('signing in with a Nostr signer', () => {
     stubDaemon(stub, () =>
       jsonResponse({ error: 'invalid_nsec', message: 'That is not an nsec.' }, 400)
     );
-    render(<ConsoleApp />);
+    await openAccount();
     await userEvent.click(await screen.findByRole('button', { name: 'Import nsec' }));
     await userEvent.type(screen.getByLabelText('Secret key'), 'nsec1nonsense');
     await userEvent.click(screen.getByRole('button', { name: 'Import and sign in' }));
@@ -261,7 +270,7 @@ describe('signing in with a Nostr signer', () => {
         return Promise.resolve(jsonResponse({ error: 'not in this test' }, 500));
       })
     );
-    render(<ConsoleApp />);
+    await openAccount();
     await userEvent.click(await screen.findByRole('button', { name: 'Sign a test event' }));
     expect(await screen.findByTestId('test-signature')).toHaveTextContent('deadbeef');
   });
