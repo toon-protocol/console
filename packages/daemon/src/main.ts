@@ -3,6 +3,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { defaultConnectorReader, readConnectorHealth } from './connector-health.js';
+import { readDirectory } from './directory.js';
 import {
   mintLaunchToken,
   removeLaunchRecord,
@@ -58,6 +59,7 @@ export async function main(): Promise<void> {
       paths,
       startedAt: new Date(),
       readHealth: (profile, options) => readConnectorHealth(profile, reader, options),
+      readDirectory: (profile, filters) => readDirectory({ profile, filters }),
     },
   }).catch((error: unknown) => {
     if (isAddressInUse(error)) {
