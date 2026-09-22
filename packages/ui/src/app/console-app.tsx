@@ -1,27 +1,40 @@
 import { useState } from 'react';
 
 import { Button } from '@/components/ui/button';
+import { useAccount } from '@/hooks/use-account';
 import { useConsole } from '@/hooks/use-console';
 import { useDirectory } from '@/hooks/use-directory';
 
+import { AccountCard, AccountChip } from './account-view';
 import { DirectoryView } from './directory-view';
 import { HealthView } from './health-view';
 import { ProfileSwitcher } from './profile-switcher';
+import { SignInView } from './sign-in-view';
 
 /**
  * The shell.
  *
- * Two views now — health (#87) and the Provider Directory (#91) — behind the
- * header that will carry the rest: the account and its signer (#88), funds
- * (#89) and the workload dashboard (#90 onward). The header is what stays;
- * the main region is what those tickets fill.
+ * Three views now — health (#87), the Provider Directory (#91) and the Account
+ * (#88) — behind the header that will carry the rest: funds (#89) and the
+ * workload dashboard (#90 onward).
+ *
+ * The console is NOT gated on signing in, and that is deliberate. Reading the
+ * directory and asking the connector what it settles in are free, they need no
+ * key, and a person deciding whether TOON Network is worth an account should be
+ * able to look first. Sign-in is a view like the others; the tickets that spend
+ * money are what will need it.
+ *
+ * Whether an account is signed in is the daemon's answer to `/api/account`, and
+ * never anything this window remembers: ADR 0020 puts the key in a signer the
+ * daemon holds, so the daemon is the only thing that knows.
  */
 
-type Tab = 'health' | 'directory';
+type Tab = 'health' | 'directory' | 'account';
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'health', label: 'Health' },
   { id: 'directory', label: 'Providers' },
+  { id: 'account', label: 'Account' },
 ];
 
 export function ConsoleApp() {
@@ -33,6 +46,8 @@ export function ConsoleApp() {
     active: tab === 'directory',
     ...(health === undefined ? {} : { profileId: health.profile.id }),
   });
+  const account = useAccount();
+  const signedIn = account.status?.signedIn === true;
 
   return (
     <div className="min-h-dvh">
@@ -45,6 +60,9 @@ export function ConsoleApp() {
             </p>
           </div>
           <div className="flex items-center gap-2">
+            {/* Only when signed in: the Account tab is right there, and a
+                second control saying the same thing is noise. */}
+            {signedIn && <AccountChip account={account} onOpen={() => setTab('account')} />}
             <nav className="flex items-center gap-1" aria-label="Views">
               {TABS.map((entry) => (
                 <Button
@@ -71,16 +89,27 @@ export function ConsoleApp() {
       </header>
 
       <main className="mx-auto max-w-5xl space-y-4 px-6 py-6">
-        {(error ?? directory.error) && (
+        {/* One region, not one per concern: a window with no launch token fails
+            every call at once, and three identical boxes saying so is noise a
+            person has to read three times. */}
+        {(error ?? directory.error ?? account.error) && (
           <div
             role="alert"
-            className="border-destructive/40 bg-destructive/10 text-destructive rounded-lg border px-4 py-3 text-sm"
+            className="border-destructive/40 bg-destructive/10 text-destructive space-y-1 rounded-lg border px-4 py-3 text-sm"
           >
-            {error ?? directory.error}
+            {[error, directory.error, account.error]
+              .filter((message): message is string => Boolean(message))
+              .filter((message, at, all) => all.indexOf(message) === at)
+              .map((message) => (
+                <p key={message}>{message}</p>
+              ))}
           </div>
         )}
 
-        {tab === 'directory' ? (
+        {tab === 'account' ? (
+          account.status &&
+          (signedIn ? <AccountCard account={account} /> : <SignInView account={account} />)
+        ) : tab === 'directory' ? (
           <DirectoryView
             {...(directory.directory === undefined ? {} : { directory: directory.directory })}
             filters={directory.filters}

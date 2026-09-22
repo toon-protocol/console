@@ -2,8 +2,10 @@ import { mkdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { AccountSession } from './account-session.js';
 import { defaultConnectorReader, readConnectorHealth } from './connector-health.js';
 import { readDirectory } from './directory.js';
+import { openKeystore } from './keystore-open.js';
 import {
   mintLaunchToken,
   removeLaunchRecord,
@@ -13,6 +15,7 @@ import {
 import { activeProfileFilePath, consolePaths, launchFilePath } from './paths.js';
 import { ProfileStore } from './profile-store.js';
 import { startServer } from './server.js';
+import { SignerIndex, signerIndexPath } from './signer-index.js';
 import { daemonVersion } from './version.js';
 
 /**
@@ -41,6 +44,17 @@ export async function main(): Promise<void> {
   const token = mintLaunchToken();
   const reader = defaultConnectorReader();
 
+  // Probed once, here, so that the sign-in screen can say where a key would go
+  // before anyone types one in (TOON_Network#88, ADR 0020).
+  const keystore = await openKeystore(paths);
+  const session = new AccountSession({
+    keystore,
+    signers: new SignerIndex(signerIndexPath(paths)),
+    // The kind-0 fallback relay is the ACTIVE profile's, read each time rather
+    // than captured: switching networks switches which relay a sign-in reads.
+    relays: () => [profiles.active().relayUrl].filter((url) => url.length > 0),
+  });
+
   const port = Number(process.env.TOON_CONSOLE_PORT ?? DEFAULT_PORT);
   const recordPath = launchFilePath(paths);
 
@@ -55,6 +69,7 @@ export async function main(): Promise<void> {
     port,
     deps: {
       profiles,
+      session,
       version,
       paths,
       startedAt: new Date(),
@@ -83,6 +98,7 @@ export async function main(): Promise<void> {
   process.stdout.write(
     `${version.name} ${version.version} listening on ${running.url}\n` +
       `active profile: ${profiles.active().label}\n` +
+      `keystore: ${keystore.location}\n` +
       `open: ${record.launchUrl}\n`
   );
 

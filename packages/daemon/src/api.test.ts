@@ -4,11 +4,14 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { AccountSession } from './account-session.js';
 import { handleApi, type ApiDeps } from './api.js';
 import type { ConnectorHealth } from './connector-health.js';
 import type { DirectoryFilters, DirectoryResult } from './directory.js';
+import { PassphraseFileKeystore, keystoreFilePath } from './keystore-file.js';
 import { consolePaths, activeProfileFilePath } from './paths.js';
 import { ProfileStore } from './profile-store.js';
+import { SignerIndex, signerIndexPath } from './signer-index.js';
 
 /**
  * The directory route, at the seam the API is built around: a `{ method,
@@ -31,6 +34,11 @@ describe('GET /api/directory', () => {
     const paths = consolePaths({ HOME: home } as NodeJS.ProcessEnv);
     deps = {
       profiles: new ProfileStore(activeProfileFilePath(paths)),
+      session: new AccountSession({
+        keystore: new PassphraseFileKeystore(keystoreFilePath(paths)),
+        signers: new SignerIndex(signerIndexPath(paths)),
+        relays: () => [],
+      }),
       version: { name: '@toon-protocol/console-daemon', version: '0.1.0' },
       paths,
       startedAt: new Date('2026-09-22T00:00:00Z'),

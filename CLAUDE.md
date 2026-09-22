@@ -22,4 +22,8 @@ section: Console, Account, Signer, Chain Seed, Lease Vault) and `docs/adr/` (001
   `packages/daemon/src/profiles.test.ts` is the test that says so.
 - The daemon binds `127.0.0.1` only, and every `/api/*` route is behind the per-launch
   token.
+- A private key never reaches a log line, an API response or the UI's storage. Key material
+  lives in a **Signer** — a NIP-46 remote signer, or the local keystore in libsecret or the
+  passphrase-encrypted file (ADR 0020). Write against `ConsoleSigner`, never against a key;
+  `packages/daemon/src/api-account.test.ts` is the test that says so.
 - `npm run lint && npm run typecheck && npm test && npm run test:packaging` before a PR.

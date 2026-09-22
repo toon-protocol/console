@@ -54,7 +54,8 @@ const healthFor = (id: string, label: string): Health => ({
     uptimeSeconds: 42,
   },
   profile: profile(id, label, true),
-  connector: id === 'mainnet' ? { state: 'unconfigured', reason: 'no connector yet' } : devnetConnector,
+  connector:
+    id === 'mainnet' ? { state: 'unconfigured', reason: 'no connector yet' } : devnetConnector,
   storage: {
     data: '/home/a/.local/share/toon-console',
     config: '/home/a/.config/toon-console',
@@ -105,11 +106,27 @@ describe('the console shell', () => {
             new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401 })
           );
         }
+        // Sign-in has its own test; this one only needs the shell to get an
+        // answer it can render around.
+        if (url.startsWith('/api/account')) {
+          return Promise.resolve(
+            jsonResponse({
+              signedIn: false,
+              signers: [],
+              keystore: {
+                backend: 'libsecret',
+                location: 'gnome-keyring (libsecret)',
+                needsPassphrase: false,
+              },
+            })
+          );
+        }
         if (url.startsWith('/api/profiles/active')) {
           activeId = JSON.parse(String(init?.body)).id as string;
           return Promise.resolve(jsonResponse(profilesBody()));
         }
-        if (url.startsWith('/api/profiles')) return Promise.resolve(jsonResponse(profilesBody()));
+        if (url.startsWith('/api/profiles'))
+          return Promise.resolve(jsonResponse(profilesBody()));
         if (url.startsWith('/api/health')) {
           const label = profilesBody().profiles.find((p) => p.id === activeId)?.label ?? '';
           return Promise.resolve(jsonResponse(healthFor(activeId, label)));

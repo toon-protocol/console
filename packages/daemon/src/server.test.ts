@@ -4,11 +4,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { AccountSession } from './account-session.js';
 import type { ApiDeps } from './api.js';
 import type { ConnectorHealth } from './connector-health.js';
+import { PassphraseFileKeystore, keystoreFilePath } from './keystore-file.js';
 import { activeProfileFilePath, consolePaths } from './paths.js';
 import { ProfileStore } from './profile-store.js';
 import { startServer, type RunningServer } from './server.js';
+import { SignerIndex, signerIndexPath } from './signer-index.js';
 
 const TOKEN = 'a-launch-token';
 
@@ -44,6 +47,11 @@ describe('the daemon server', () => {
     const paths = consolePaths({ HOME: home } as NodeJS.ProcessEnv);
     const deps: ApiDeps = {
       profiles: new ProfileStore(activeProfileFilePath(paths)),
+      session: new AccountSession({
+        keystore: new PassphraseFileKeystore(keystoreFilePath(paths)),
+        signers: new SignerIndex(signerIndexPath(paths)),
+        relays: () => [],
+      }),
       version: { name: '@toon-protocol/console-daemon', version: '0.1.0' },
       paths,
       startedAt: new Date('2026-09-22T00:00:00Z'),
