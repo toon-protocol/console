@@ -6,9 +6,9 @@ Omarchy web app. It is not a website. A `systemd --user` service runs
 this one — holds the account's keys and manages its workloads. Nothing about an account
 lives on a server anyone else operates ([ADR 0019][adr19]).
 
-This repository is the skeleton: it installs, starts and opens, it knows which network it
-is pointed at, and it can tell you what that network's connector says about itself. Sign-in
-([#88][i88]), funds ([#89][i89]) and the workload dashboard ([#90][i90] onward) build on it.
+It installs, starts and opens, it knows which network it is pointed at, it can tell you
+what that network's connector says about itself, and an **Account** can sign in with its
+**Signer**. Funds ([#89][i89]) and the workload dashboard ([#90][i90] onward) build on it.
 
 ## What is here
 
@@ -51,7 +51,44 @@ you get a plain `.desktop` entry instead.
 
 `packaging/bin/toon-console-uninstall` removes both. It never touches
 `~/.local/share/toon-console`, which is where channel state — and later the Lease Vault
-cache — lives.
+cache — lives, nor the keystore.
+
+## Signing in
+
+An **Account** is a Nostr identity, and the console never becomes its key's owner
+([ADR 0020][adr20]). Two ways in:
+
+**A NIP-46 remote signer** — Amber, nsec.app, `nak bunker`. Paste the `bunker://` URI the
+signer gives you, or let the console print a `nostrconnect://` for the signer to come to.
+The private key never leaves the signer; every signature is a round trip to it, which means
+a signature can take a moment and can be refused.
+
+```bash
+# A signer and a relay to reach it on, both locally:
+nak serve --port 10547
+nak bunker --sec $(nak key generate) ws://127.0.0.1:10547
+# -> bunker://<pubkey>?relay=ws%3A%2F%2F127.0.0.1%3A10547&secret=…
+```
+
+**The console's local keystore** — generate a key, import an `nsec`, or import a NIP-06
+mnemonic. The secret goes into **gnome-keyring through libsecret** when a Secret Service
+answers on the session bus, and into a **passphrase-encrypted file** (scrypt + AES-256-GCM,
+`~/.config/toon-console/keystore.json`, mode 0600) when none does. The header line the
+daemon prints at startup says which you have; `TOON_CONSOLE_KEYSTORE=file` forces the
+fallback.
+
+Either way, `~/.config/toon-console/signers.json` lists the signers this machine knows —
+label, npub, and a bunker's relays — and holds **no secret**, so the sign-in screen can say
+what it would be unlocking before it asks.
+
+The account's kind-0 name and avatar are read from its own NIP-65 relays when it publishes
+a list, and otherwise from the relay the active network profile names. Reads are free, and
+a relay that does not answer costs a name on screen and nothing else.
+
+A **restart signs you out and forgets nothing else**: the session lives in the daemon
+process, the signers and their secrets outlive it. That is deliberate — the UI's launch
+token is minted per launch too, so a restarted daemon has no window to hand a session back
+to.
 
 ## Networks
 
@@ -71,8 +108,15 @@ The daemon binds `127.0.0.1` and refuses a request whose `Host` is not a loopbac
 UI's files are public and served to anyone on the machine who asks; the **API is not** —
 every `/api/*` call carries a bearer token minted fresh at each launch and handed to the
 window once, on the URL. A restart invalidates it. There is no long-lived credential on
-disk, and **this skeleton holds no key material at all**: signers, the Chain Seed and the
-Lease Vault arrive with [#88][i88] and [ADR 0020][adr20] / [ADR 0021][adr21].
+disk.
+
+Key material is held by the daemon and by the keystore, and by nothing else. **A private
+key never appears in an API response, in a log line, or in the UI's storage** — the only
+thing the window keeps is the launch token, in `sessionStorage`. An nsec, a mnemonic and a
+keystore passphrase travel one way: typed into a form, posted once over loopback under the
+launch token, and sealed. `api-account.test.ts` and `sign-in.test.tsx` are the tests that
+say so. The Chain Seed and the Lease Vault arrive with [ADR 0020][adr20] / [ADR 0021][adr21]
+and [#89][i89] onward.
 
 ## Development
 
@@ -93,6 +137,5 @@ published identity; nothing in this repository should suggest otherwise.
 [adr19]: https://github.com/toon-protocol/TOON_Network/blob/main/docs/adr/0019-the-console-is-a-local-app-not-a-website.md
 [adr20]: https://github.com/toon-protocol/TOON_Network/blob/main/docs/adr/0020-an-accounts-chain-keys-come-from-a-seed-sealed-to-it.md
 [adr21]: https://github.com/toon-protocol/TOON_Network/blob/main/docs/adr/0021-root-secrets-are-vaulted-on-the-accounts-own-relays.md
-[i88]: https://github.com/toon-protocol/TOON_Network/issues/88
 [i89]: https://github.com/toon-protocol/TOON_Network/issues/89
 [i90]: https://github.com/toon-protocol/TOON_Network/issues/90

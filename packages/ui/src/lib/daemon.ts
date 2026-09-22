@@ -73,12 +73,99 @@ export interface Profiles {
   profiles: ProfileView[];
 }
 
+/**
+ * The Account, its Signer and the local keystore (TOON_Network#88).
+ *
+ * Note what is NOT here and never will be: an nsec, a mnemonic, a passphrase
+ * or a bunker secret. Those go one way — typed into a form, posted once, and
+ * sealed by the daemon — and the answer to every account call is this shape.
+ */
+
+export interface AccountMetadata {
+  name?: string;
+  displayName?: string;
+  about?: string;
+  picture?: string;
+  nip05?: string;
+  publishedAt?: string;
+}
+
+export interface AccountProfile {
+  metadata?: AccountMetadata;
+  relays: string[];
+  relaySource: 'nip65' | 'profile' | 'none';
+  readAt: string;
+}
+
+export interface SignerRecord {
+  id: string;
+  kind: 'local' | 'remote';
+  label: string;
+  pubkey: string;
+  npub: string;
+  backend: 'libsecret' | 'file';
+  origin?: 'generated' | 'nsec' | 'nip06';
+  bunkerRelays?: string[];
+  bunkerPubkey?: string;
+  createdAt: string;
+  lastUsedAt?: string;
+}
+
+export interface AccountView {
+  pubkey: string;
+  npub: string;
+  signerId: string;
+  signerKind: 'local' | 'remote';
+  signerLabel: string;
+  signedInAt: string;
+  profileState: 'loading' | 'ready' | 'none';
+  profile?: AccountProfile;
+}
+
+export interface Invitation {
+  uri: string;
+  state: 'waiting' | 'failed';
+  expiresAt: string;
+  error?: string;
+}
+
+export interface SessionStatus {
+  signedIn: boolean;
+  account?: AccountView;
+  signers: SignerRecord[];
+  keystore: { backend: 'libsecret' | 'file'; location: string; needsPassphrase: boolean };
+  invitation?: Invitation;
+}
+
+export interface SignedEvent {
+  id: string;
+  pubkey: string;
+  created_at: number;
+  kind: number;
+  tags: string[][];
+  content: string;
+  sig: string;
+}
+
+export interface LocalSignerRequest {
+  mode: 'generate' | 'nsec' | 'nip06';
+  nsec?: string;
+  mnemonic?: string;
+  mnemonicPassphrase?: string;
+  accountIndex?: number;
+  label?: string;
+  passphrase?: string;
+}
+
 export class DaemonError extends Error {
   readonly status: number;
-  constructor(status: number, message: string) {
+  /** The daemon's machine-readable code, e.g. `passphrase_required`. */
+  readonly code: string;
+  constructor(status: number, message: string, code = 'error') {
     super(message);
     this.name = 'DaemonError';
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -99,10 +186,24 @@ async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
     },
   });
   if (!response.ok) {
-    const problem = (await response.json().catch(() => null)) as { message?: string } | null;
-    throw new DaemonError(response.status, problem?.message ?? `The daemon answered ${response.status}.`);
+    const problem = (await response.json().catch(() => null)) as {
+      message?: string;
+      error?: string;
+    } | null;
+    throw new DaemonError(
+      response.status,
+      problem?.message ?? `The daemon answered ${response.status}.`,
+      problem?.error ?? 'error'
+    );
   }
   return (await response.json()) as T;
+}
+
+function post<T>(path: string, body?: unknown): Promise<T> {
+  return call<T>(path, {
+    method: 'POST',
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
 }
 
 export const daemon = {
@@ -111,4 +212,23 @@ export const daemon = {
   profiles: () => call<Profiles>('/api/profiles'),
   setProfile: (id: string) =>
     call<Profiles>('/api/profiles/active', { method: 'POST', body: JSON.stringify({ id }) }),
+
+  account: () => call<SessionStatus>('/api/account'),
+  addLocalSigner: (request: LocalSignerRequest) =>
+    post<SessionStatus>('/api/account/signers/local', request),
+  addBunkerSigner: (request: { uri: string; label?: string; passphrase?: string }) =>
+    post<SessionStatus>('/api/account/signers/bunker', request),
+  invite: (request: { label?: string; passphrase?: string } = {}) =>
+    post<SessionStatus>('/api/account/signers/invite', request),
+  cancelInvite: () => call<SessionStatus>('/api/account/signers/invite', { method: 'DELETE' }),
+  signIn: (request: { id: string; passphrase?: string }) =>
+    post<SessionStatus>('/api/account/signin', request),
+  signOut: () => post<SessionStatus>('/api/account/signout'),
+  forgetSigner: (id: string) =>
+    call<SessionStatus>(`/api/account/signers/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
+  refreshAccountProfile: () => post<SessionStatus>('/api/account/profile/refresh'),
+  sign: (template: { kind: number; content?: string; tags?: string[][] }) =>
+    post<{ event: SignedEvent }>('/api/account/sign', template),
 };

@@ -17,7 +17,8 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@toon-protocol/client": "3.1.0"
+    "@toon-protocol/client": "3.1.0",
+    "nostr-tools": "^2.25.2"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
