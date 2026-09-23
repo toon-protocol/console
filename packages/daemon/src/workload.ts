@@ -1704,7 +1704,12 @@ export class WorkloadStore {
       rpcUrl?: string;
     } = {
       route,
-      payAt: chosen.url,
+      // Where to pay is the connector's OWN name for itself, not the URL
+      // this console dialled: the client keys a channel binding by the
+      // string it is configured with, and a connector that answers on
+      // `localhost` and `127.0.0.1` alike publishes only one of them
+      // (TOON_Network#126, found again on this path by #101).
+      payAt: chosen.health.selfEndpoint,
       via: chosen.via,
       reason,
       price: chosen.price,
@@ -1722,7 +1727,11 @@ export class WorkloadStore {
     // for a lease the spawn had paid for perfectly well.
     const settlements = orderChains(chosen.health.settlements, wanted ?? lease.paidChain);
     for (const settlement of settlements) {
-      const binding = findChannelBinding(channels.store, chosen.url, settlement.chain);
+      const binding = findChannelBinding(
+        channels.store,
+        chosen.health.selfEndpoint,
+        settlement.chain
+      );
       if (!binding) continue;
       const rpcUrl = resolveRpc(profile, settlement.kind).url;
       return {

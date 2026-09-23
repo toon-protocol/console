@@ -21,7 +21,8 @@
     "test": "npm run test --workspaces",
     "test:packaging": "node --test \"packaging/*.test.mjs\"",
     "dev:site": "npm run dev -w @toon-protocol/console-site",
-    "docs:publish": "npm run docs:publish -w @toon-protocol/console-daemon --"
+    "docs:publish": "npm run docs:publish -w @toon-protocol/console-daemon --",
+    "smoke:console": "npm run smoke:console -w @toon-protocol/console-daemon --"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",

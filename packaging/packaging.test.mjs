@@ -27,6 +27,46 @@ import { fileURLToPath } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url));
 const read = (name) => readFileSync(join(here, name), 'utf8');
 
+/**
+ * The environment an installer script may be run in, and the ONE way to build
+ * one.
+ *
+ * `HOME` and the XDG variables send everything a script writes into a
+ * throwaway tree. `systemctl` does not read any of them: `systemctl --user`
+ * talks to the session bus, so a test that runs the real
+ * `toon-console-uninstall` with only a fake `HOME` reaches out of its sandbox
+ * and stops and disables the console the person at this desk is running. That
+ * happened, repeatedly, before this helper existed — every `npm run
+ * test:packaging` left the desktop's own service `inactive` and `disabled`.
+ *
+ * So a stub `systemctl` goes on `PATH` first, records what it was asked to do,
+ * and does none of it. The recording is the point twice over: it is what
+ * `fakePrefixInstall`'s callers assert the unit was enabled and restarted with,
+ * and it is what makes "nothing real was touched" checkable rather than hoped
+ * for.
+ */
+function sandboxEnv({ dir, home, config, data, binHome }) {
+  const stub = join(dir, 'stub-bin');
+  mkdirSync(stub, { recursive: true });
+  const log = join(dir, 'systemctl.log');
+  writeFileSync(
+    join(stub, 'systemctl'),
+    `#!/bin/bash\nprintf '%s\\n' "$*" >>${JSON.stringify(log)}\nexit 0\n`,
+    { mode: 0o755 }
+  );
+  return {
+    env: {
+      ...process.env,
+      HOME: home,
+      ...(config === undefined ? {} : { XDG_CONFIG_HOME: config }),
+      ...(data === undefined ? {} : { XDG_DATA_HOME: data }),
+      ...(binHome === undefined ? {} : { XDG_BIN_HOME: binHome }),
+      PATH: `${stub}:${process.env.PATH}`,
+    },
+    systemctl: () => (existsSync(log) ? readFileSync(log, 'utf8') : ''),
+  };
+}
+
 const SCRIPTS = [
   'bin/toon-console',
   'bin/toon-console-install',
@@ -211,7 +251,7 @@ test('the installer puts the menu entries in and the uninstaller takes them out'
     execFileSync('mkdir', ['-p', dirname(menu)]);
     writeFileSync(menu, theirs);
 
-    const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: join(home, '.config') };
+    const { env, systemctl } = sandboxEnv({ dir, home, config: join(home, '.config') });
     const run = (args) =>
       execFileSync('bash', [join(here, 'bin', args[0]), ...args.slice(1)], { env });
 
@@ -230,6 +270,10 @@ test('the installer puts the menu entries in and the uninstaller takes them out'
 
     run(['toon-console-uninstall']);
     assert.equal(readFileSync(menu, 'utf8'), theirs);
+    // And it asked a systemctl that recorded rather than acted. Without this
+    // the same line reaches the session bus and stops the console the person
+    // at this desk is running.
+    assert.match(systemctl(), /disable --now toon-console\.service/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -241,7 +285,7 @@ test('installing the Omarchy half writes the template and the hook, and nothing 
     const home = join(dir, 'home');
     const config = join(home, '.config');
     execFileSync('mkdir', ['-p', join(config, 'omarchy')]);
-    const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: config };
+    const { env } = sandboxEnv({ dir, home, config });
     execFileSync('bash', [join(here, 'bin', 'toon-console-install'), '--omarchy-only', '--no-retheme'], { env });
 
     const hook = readFileSync(join(config, 'omarchy', 'hooks', 'theme-set.d', 'toon-console'), 'utf8');
@@ -502,40 +546,21 @@ function fakePrefixInstall(run) {
     mkdirSync(join(data, 'toon-console', 'accounts', 'a'), { recursive: true });
     writeFileSync(join(data, 'toon-console', 'accounts', 'a', 'leases.json'), '{"keep":true}');
 
-    // A systemctl that records what it was asked to do and does none of it.
-    const stub = join(dir, 'stub');
-    mkdirSync(stub, { recursive: true });
-    const log = join(dir, 'systemctl.log');
-    writeFileSync(
-      join(stub, 'systemctl'),
-      `#!/bin/bash\nprintf '%s\\n' "$*" >>${JSON.stringify(log)}\nexit 0\n`,
-      { mode: 0o755 }
-    );
-
-    const env = {
-      ...process.env,
-      HOME: home,
-      XDG_CONFIG_HOME: config,
-      XDG_DATA_HOME: data,
-      XDG_BIN_HOME: join(home, '.local', 'bin'),
-      PATH: `${stub}:${process.env.PATH}`,
-    };
+    const { env, systemctl } = sandboxEnv({
+      dir,
+      home,
+      config,
+      data,
+      binHome: join(home, '.local', 'bin'),
+    });
     const exec = (script, args = []) =>
       execFileSync('bash', [script, ...args], { env, encoding: 'utf8' });
 
-    run({ dir, prefix, home, config, data, env, exec, systemctl: () => read_(log) });
+    run({ dir, prefix, home, config, data, env, exec, systemctl });
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 }
-
-const read_ = (file) => {
-  try {
-    return readFileSync(file, 'utf8');
-  } catch {
-    return '';
-  }
-};
 
 test('a packaged install enables the package unit and writes only under $HOME', () => {
   fakePrefixInstall(({ prefix, home, config, data, exec, systemctl }) => {
