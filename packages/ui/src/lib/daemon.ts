@@ -1216,6 +1216,80 @@ export interface WithdrawalResult {
   view: GatewayView;
 }
 
+/* -------------------------------------------------------------------------- */
+/* Rotation (TOON_Network#96, spec §6.8, ADR 0018)                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * What a rotation looks like from the window.
+ *
+ * Note, again, the fields that are not here and never will be: the lease's
+ * **Root Secret**, the rotation's new one, and any Continuation Token derived
+ * from either. A rotation is the one operation with TWO secrets to not carry,
+ * and none of these types has a field for one.
+ */
+export interface RotationMemberView {
+  pubkey: string;
+  index: number;
+  role: 'standalone' | 'primary' | 'standby';
+  /** True once this member holds a token of the new Root Secret. */
+  confirmed: boolean;
+  ok: boolean;
+  problems: string[];
+  route?: OpRouteView;
+  /** Left out: this member's own spawn was refused, so it holds no lease. */
+  skipped?: boolean;
+}
+
+export interface RotationView {
+  workloadId: string;
+  /** A rotation is part-way through: some members hold the new token. */
+  underWay: boolean;
+  ok: boolean;
+  problems: string[];
+  members: RotationMemberView[];
+  confirmed: number;
+  of: number;
+  startedAt?: string;
+  rotatedAt?: string;
+  vault: RelayWriteTargets;
+  localOnly: boolean;
+}
+
+export interface RotationMemberResult {
+  pubkey: string;
+  index: number;
+  role: 'standalone' | 'primary' | 'standby';
+  sent: boolean;
+  rotated: boolean;
+  /** The answer was lost and a free `status` with the new token settled it. */
+  recovered?: boolean;
+  already?: boolean;
+  /** Worth asking again with nothing changed — `unavailable`, or silence. */
+  retryable?: boolean;
+  route?: OpRouteView;
+  cost?: string;
+  providerError?: string;
+  message?: string;
+  problems?: string[];
+}
+
+export interface RotationResult {
+  workloadId: string;
+  /** False when the new Root Secret could not be recorded: nothing was sent. */
+  started: boolean;
+  /** True only when EVERY member confirmed. */
+  rotated: boolean;
+  problems: string[];
+  members: RotationMemberResult[];
+  confirmed: number;
+  of: number;
+  cost?: string;
+  vaultCost?: string;
+  vaultBehind?: string;
+  view: RotationView;
+}
+
 export interface HandoverRequestBody {
   expiresAt?: number;
   expiresIn?: number;
@@ -1531,6 +1605,25 @@ export const daemon = {
     post<WithdrawalResult>(
       `/api/workloads/${encodeURIComponent(workloadId)}/gateway/withdraw`
     ),
+
+  /**
+   * How far a rotation has got, and what the next one would cost
+   * (TOON_Network#96, spec §6.8). Free: it asks connectors what they carry and
+   * sends no lease packet.
+   */
+  rotation: (workloadId: string) =>
+    call<RotationView>(`/api/workloads/${encodeURIComponent(workloadId)}/rotation`),
+  /**
+   * Replace this lease's Continuation Token at every member of its Standby
+   * Set, from a fresh Root Secret.
+   *
+   * It is free at the providers and costs one paid relay write to record the
+   * new secret before anything is sent, plus one per member confirmed. Sending
+   * it again FINISHES a rotation that was left part-way through — it never
+   * starts a second one.
+   */
+  rotateWorkload: (workloadId: string) =>
+    post<RotationResult>(`/api/workloads/${encodeURIComponent(workloadId)}/rotate`),
 };
 
 /** The filters, as the daemon's query string spells them. */

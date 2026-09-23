@@ -23,6 +23,7 @@ import {
   leaseVaultD,
   type VaultedLease,
 } from './lease-vault.js';
+import { continuationFor } from './continuation.js';
 import { RelayWriteError } from './relay-write.js';
 import {
   FileLeaseVaultCache,
@@ -113,6 +114,20 @@ describe('the Lease Vault', () => {
       dial: fakeRelayNetwork(relays),
       timeoutMs: 200,
     });
+
+  /** What the relay holds for this lease right now, unsealed. */
+  const held = async (): Promise<VaultedLease> => {
+    const event = toon.events
+      .filter(
+        (candidate) =>
+          candidate.kind === LEASE_VAULT_KIND &&
+          tagValue(candidate, 'd') === leaseVaultD(WORKLOAD)
+      )
+      .sort((left, right) => left.created_at - right.created_at)
+      .at(-1);
+    if (event === undefined) throw new Error('no record on the relay');
+    return JSON.parse(await account.unsealFromSelf(event.content)) as VaultedLease;
+  };
 
   beforeEach(async () => {
     home = mkdtempSync(join(tmpdir(), 'toon-console-vault-'));
@@ -351,6 +366,118 @@ describe('the Lease Vault', () => {
     await expect(
       vault.publish(leaseRecord({ state: 'live', expires_at: 1_790_003_600 }))
     ).resolves.toMatchObject({ state: 'live' });
+  });
+
+  /* ---------------------------------------------------------------------- */
+
+  describe('a Rotation (TOON_Network#96, spec §6.8, ADR 0021)', () => {
+    const PRIMARY = 'd'.repeat(64);
+    const STANDBY = 'f'.repeat(64);
+    const setRecord = () => leaseRecord({ standby_set: [PRIMARY, STANDBY], state: 'live' });
+
+    it('records a fresh root before anything is asked, and keeps the old one beside it', async () => {
+      await vault.publish(setRecord());
+      const view = await vault.beginRotation(WORKLOAD);
+      const record = await held();
+
+      expect(view.rotation?.members).toEqual([PRIMARY, STANDBY]);
+      expect(view.rotation?.pending).toEqual([PRIMARY, STANDBY]);
+      // The record on the relay carries BOTH, and `root_secret` is still the
+      // old one: the members that have not confirmed are read with it.
+      expect(record.root_secret).toBe(ROOT_SECRET);
+      expect(record.rotation?.root_secret).not.toBe(ROOT_SECRET);
+      expect(record.rotation?.confirmed).toEqual([]);
+      // And a view never carries either of them.
+      expect(JSON.stringify(view)).not.toContain(record.rotation!.root_secret);
+      expect(JSON.stringify(view)).not.toContain(ROOT_SECRET);
+    });
+
+    it('is resumed, never restarted: a second call keeps the same new root', async () => {
+      await vault.publish(setRecord());
+      await vault.beginRotation(WORKLOAD);
+      const first = (await held()).rotation?.root_secret;
+
+      await vault.beginRotation(WORKLOAD);
+
+      // A third root secret would strand every member the second one reached.
+      expect((await held()).rotation?.root_secret).toBe(first);
+    });
+
+    it('reads each member with whichever root holds it, member by member', async () => {
+      await vault.publish(setRecord());
+      await vault.beginRotation(WORKLOAD);
+      const next = (await held()).rotation!.root_secret;
+
+      await vault.confirmRotation(WORKLOAD, PRIMARY);
+
+      const borrowed = async (member: string) =>
+        vault.withContinuation(WORKLOAD, member, (token) => Promise.resolve(token));
+      expect(await borrowed(PRIMARY)).toBe(continuationFor(next, PRIMARY));
+      expect(await borrowed(STANDBY)).toBe(continuationFor(ROOT_SECRET, STANDBY));
+    });
+
+    it('drops the old root in the same write that confirms the last member', async () => {
+      await vault.publish(setRecord());
+      await vault.beginRotation(WORKLOAD);
+      const next = (await held()).rotation!.root_secret;
+
+      await vault.confirmRotation(WORKLOAD, PRIMARY);
+      const last = await vault.confirmRotation(WORKLOAD, STANDBY);
+      const record = await held();
+
+      expect(last.finished).toBe(true);
+      // The one legitimate way a lease's Root Secret changes (§6.8).
+      expect(record.root_secret).toBe(next);
+      expect(record.rotation).toBeUndefined();
+      expect(record.rotated_at).toBeDefined();
+      expect(
+        await vault.withContinuation(WORKLOAD, STANDBY, (token) => Promise.resolve(token))
+      ).toBe(continuationFor(next, STANDBY));
+    });
+
+    it('lends the two tokens one rotate request names, and no root', async () => {
+      await vault.publish(setRecord());
+      await vault.beginRotation(WORKLOAD);
+      const next = (await held()).rotation!.root_secret;
+
+      const tokens = await vault.withRotation(WORKLOAD, PRIMARY, (borrowed) =>
+        Promise.resolve(borrowed)
+      );
+
+      expect(tokens.current).toBe(continuationFor(ROOT_SECRET, PRIMARY));
+      expect(tokens.next).toBe(continuationFor(next, PRIMARY));
+      // A member of no set of this lease's is refused rather than derived for.
+      await expect(
+        vault.withRotation(WORKLOAD, 'a'.repeat(64), () => Promise.resolve(null))
+      ).rejects.toMatchObject({ code: 'not_a_member' });
+    });
+
+    it('refuses `next` for a lease that is not rotating', async () => {
+      await vault.publish(setRecord());
+
+      await expect(
+        vault.withRotation(WORKLOAD, PRIMARY, () => Promise.resolve(null))
+      ).rejects.toMatchObject({ code: 'no_rotation' });
+      await expect(vault.confirmRotation(WORKLOAD, PRIMARY)).rejects.toMatchObject({
+        code: 'no_rotation',
+      });
+    });
+
+    it('leaves NEITHER root in the tombstone a retraction publishes', async () => {
+      await vault.publish(setRecord());
+      await vault.beginRotation(WORKLOAD);
+      const next = (await held()).rotation!.root_secret;
+
+      await vault.retract(WORKLOAD, 'the spawn was refused: no_capacity');
+      const tombstone = await held();
+
+      expect(tombstone.state).toBe('retracted');
+      expect(tombstone.root_secret).toBe('0'.repeat(64));
+      // The rotation's second secret is DROPPED, not spread through: zeroing
+      // one and publishing the other would be worse than doing neither.
+      expect(tombstone.rotation).toBeUndefined();
+      expect(JSON.stringify(tombstone)).not.toContain(next);
+    });
   });
 
   it('refuses a record whose workload id or secret is not 32 bytes of hex', async () => {

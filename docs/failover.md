@@ -90,6 +90,22 @@ The Console does this for you from the workload card. The reason for the order i
 crash between minting a new root and recording it would lose the lease — and nothing in the
 protocol can recover a lost root secret.
 
+**A member that does not answer does not block the others.** Rotating is one request per
+member, so a set rotated at some members and not at others is a perfectly good state: the
+Console reads each member with whichever root holds it, and the card shows *1 of 2
+confirmed* with a **Finish the rotation** button. Pressing it again asks only the members
+that have not confirmed, with the same new root secret — never a third one.
+
+**"Could not save" is not "rotated".** A provider that accepted the request but could not
+persist it answers `unavailable`: nothing changed and your old token still works. The
+Console shows that member as retryable rather than as done, because believing a leaked
+token is dead when it is not is the one mistake worth going out of the way to avoid.
+
+**Rotating ends every gateway grant of the old token**, at each member it reaches, with no
+grace period. If your workload is behind a [Workload Gateway](gateways), hand it over
+again afterwards and the hostname works again — the new handover carries grants derived
+from the new token.
+
 ## With a gateway
 
 A takeover moves the workload to another provider's address. A [Workload

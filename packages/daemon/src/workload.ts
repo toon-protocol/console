@@ -533,11 +533,58 @@ export interface AutoExtendReader {
   view(pubkey: string, workloadId: string): AutoExtendView | undefined;
 }
 
+/**
+ * One planned packet to one member of a Standby Set, as a seam.
+ *
+ * `rotation.ts` (TOON_Network#96) sends `rotate` and `status` to each member
+ * in turn, on the provider's own free routes, and every question this module
+ * already answers about such a packet is the same question there: which
+ * connector carries this route, which of them prices it at zero, which channel
+ * pays, whether the member is a Hidden Provider and must be reached over a
+ * circuit. Reproducing that would be a second answer that could differ from
+ * this one, and it is the expensive kind of difference — a packet paid at a
+ * hop that charges, or not sent at all.
+ *
+ * So rotation borrows the planning rather than copying it, and `plan` names
+ * only the two ops it needs: both are free at the provider (§5), and neither
+ * needs the Provider Directory to be readable.
+ */
+export interface MemberOpPort {
+  plan(
+    lease: LeaseView,
+    member: LeaseMemberView,
+    op: 'status' | 'rotate',
+    problems: string[]
+  ): Promise<MemberOpPlan | undefined>;
+  send(plan: MemberOpPlan, body: unknown): Promise<PacketOutcome>;
+  /** The route, the price and who collects, for a person to read. */
+  view(plan: MemberOpPlan): OpRouteView;
+}
+
+/** An opaque plan: `rotation.ts` carries one between `plan` and `send`. */
+export type MemberOpPlan = OpPlan;
+
 export class WorkloadStore {
   readonly #deps: WorkloadStoreDeps;
 
   constructor(deps: WorkloadStoreDeps) {
     this.#deps = deps;
+  }
+
+  /**
+   * The planning and sending of one member's free packet, for `rotation.ts`.
+   *
+   * Narrow on purpose: it hands over no card, no note store and no vault, so
+   * a rotation cannot quietly grow a second opinion about what a lease is
+   * doing. What it borrows is the routing, which is the part that costs money
+   * to get wrong.
+   */
+  memberOps(): MemberOpPort {
+    return {
+      plan: (lease, member, op, problems) => this.#plan(lease, member, op, problems),
+      send: (plan, body) => this.#send(plan, body),
+      view: (plan) => viewOf(plan),
+    };
   }
 
   /**
@@ -1437,14 +1484,17 @@ export class WorkloadStore {
    *
    * `extend` additionally needs the Listing to still exist AT THIS LEASE'S
    * VERSION, because §6.3 refuses any other version — and bills for it.
-   * `status` and `terminate` do not need the directory at all: the vault
-   * record says where the provider is and which key to seal to, so a lease can
-   * be read and stopped on a day the relays are unreachable.
+   * `status`, `terminate` and `rotate` do not need the directory at all: the
+   * vault record says where the provider is and which key to seal to, so a
+   * lease can be read, rotated and stopped on a day the relays are
+   * unreachable. That matters most for `rotate`: a token is rotated because it
+   * is believed to have leaked, and waiting for a relay to answer first would
+   * be a delay somebody else is spending.
    */
   async #plan(
     lease: LeaseView,
     member: LeaseMemberView,
-    op: 'status' | 'terminate' | ExtendOp,
+    op: 'status' | 'terminate' | 'rotate' | ExtendOp,
     problems: string[],
     wanted?: string | undefined
   ): Promise<OpPlan | undefined> {

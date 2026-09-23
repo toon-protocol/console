@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import type { WorkloadsState } from '@/hooks/use-workloads';
 import { GatewayPanel } from './gateway-panel';
+import { RotationPanel } from './rotation-panel';
 import type {
   LeaseAccess,
   LeaseLife,
@@ -61,6 +62,11 @@ import type {
  * workload's card and nowhere else — and `gateway-panel.tsx` owns it, with
  * its own hook, so that a card with no gateway is a card with an empty
  * section rather than a card that fails.
+ *
+ * **Rotation is the section BELOW it** (TOON_Network#96), and the order is
+ * deliberate: rotating ends every Gateway Grant this lease has handed out, so
+ * the thing it breaks is on screen directly above the button that breaks it.
+ * `rotation-panel.tsx` owns it, with its own hook, for the same reason.
  */
 
 export function WorkloadCard({ card, workloads }: { card: Card; workloads: WorkloadsState }) {
@@ -129,6 +135,7 @@ export function WorkloadCard({ card, workloads }: { card: Card; workloads: Workl
       {card.set.warm && <Members card={card} workloads={workloads} busy={busy} />}
       <AutoExtend card={card} workloads={workloads} busy={busy} />
       <GatewayPanel workloadId={card.workloadId} />
+      <RotationPanel workloadId={card.workloadId} />
     </article>
   );
 }

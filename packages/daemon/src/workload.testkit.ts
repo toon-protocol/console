@@ -136,6 +136,10 @@ export function providerRoutes(input: {
     { prefix: `${address}.status`, price: free },
     { prefix: `${address}.terminate`, price: free },
     { prefix: `${address}.availability`, price: free },
+    // §5's fourth free route, and the one TOON_Network#96 sends on. The live
+    // sandbox publishes it exactly here, at `0` on each provider's own
+    // connector: `g.toon.provider.rotate` and `g.toon.provider2.rotate`.
+    { prefix: `${address}.rotate`, price: free },
   ];
 }
 
