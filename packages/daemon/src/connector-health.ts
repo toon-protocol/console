@@ -29,6 +29,26 @@ export type ConnectorHealth =
   | {
       readonly state: 'ok';
       readonly endpoint: string;
+      /**
+       * What this connector calls ITSELF — `GET /ilp`'s own `httpEndpoint`,
+       * resolved and normalized to the client-edge base. Falls back to
+       * {@link endpoint} (the URL this console dialled) only when the connector
+       * publishes none.
+       *
+       * `endpoint` says how THIS console reached the connector; `selfEndpoint`
+       * says what the connector says about itself, and the two are not always
+       * the same string even when they name the same machine — the sandbox
+       * connector answers on `localhost` and on `127.0.0.1` alike but publishes
+       * only one of them. `@toon-protocol/client` keys a channel binding by
+       * whatever string a caller configured as its connector, so a caller that
+       * wants an already-opened channel to be found again — whatever spelling
+       * of the host reached it this time — opens and looks one up by
+       * `selfEndpoint`, never by `endpoint` or by a profile's raw
+       * `connectorUrl` (TOON_Network#126). A genuinely different connector
+       * still publishes a genuinely different `selfEndpoint`, so this never
+       * makes two nodes look like one.
+       */
+      readonly selfEndpoint: string;
       readonly ilpAddresses: readonly string[];
       readonly settlements: readonly SettlementView[];
       readonly routes: readonly RouteView[];
@@ -148,6 +168,7 @@ export async function readConnectorHealth(
     return {
       state: 'ok',
       endpoint,
+      selfEndpoint: selfReportedEndpoint(described, profile.connectorUrl, endpoint),
       ilpAddresses: described.ilpAddresses,
       settlements: described.settlements.map(toSettlementView),
       routes: described.routes.map(toRouteView),
@@ -160,6 +181,36 @@ export async function readConnectorHealth(
     };
   } catch (error) {
     return { state: 'unreachable', endpoint, reason: describeError(error) };
+  }
+}
+
+/**
+ * The connector's own `httpEndpoint`, resolved against the URL it was read
+ * from (it MAY be published relative — `client.ts`'s `httpEndpointOf` resolves
+ * it the same way for the send path) and normalized to the client-edge base
+ * that `@toon-protocol/client` keys a channel binding by.
+ *
+ * Falls back to `endpoint` — the base this console actually dialled — only
+ * when the connector's document names no `httpEndpoint` at all; a connector
+ * that publishes nothing about itself gives nobody a better identity to key
+ * on than the one just used to reach it.
+ */
+function selfReportedEndpoint(
+  described: NodeSelfDescription,
+  dialledFrom: string,
+  endpoint: string
+): string {
+  const published = described.httpEndpoint;
+  if (published === undefined) return endpoint;
+  const absolute = /^[a-zA-Z][a-zA-Z0-9+.-]*:/u.test(published)
+    ? published
+    : new URL(published, dialledFrom).toString();
+  try {
+    return connectorEdgeBaseUrl(absolute);
+  } catch {
+    // A malformed publication is not this console's to repair — fall back to
+    // the endpoint it actually reached rather than throw out of a health read.
+    return endpoint;
   }
 }
 

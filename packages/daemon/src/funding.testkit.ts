@@ -131,11 +131,21 @@ export function fakeChainPort(initial: Partial<FakeChainState> = {}): FakeChainP
   };
 }
 
-/** A connector that settles on whatever a test says it does. */
-export function healthWith(settlements: readonly SettlementView[]): ConnectorHealth {
+/**
+ * A connector that settles on whatever a test says it does.
+ *
+ * `selfEndpoint` defaults to the same value as the endpoint this console
+ * dialled — a test that wants the localhost/127.0.0.1 case (TOON_Network#126)
+ * passes a different one.
+ */
+export function healthWith(
+  settlements: readonly SettlementView[],
+  selfEndpoint?: string
+): ConnectorHealth {
   return {
     state: 'ok',
     endpoint: SANDBOX.connectorUrl,
+    selfEndpoint: selfEndpoint ?? SANDBOX.connectorUrl,
     ilpAddresses: ['g.toon.relay'],
     settlements,
     routes: [],

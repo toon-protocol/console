@@ -152,6 +152,14 @@ export function fakeProvider(
 /** A connector that publishes exactly the routes and settlements a test wants. */
 export function connectorHealth(input: {
   endpoint: string;
+  /**
+   * What the connector says about ITSELF — defaults to `endpoint`. Give a
+   * different value to simulate a connector reached under one spelling of its
+   * host (`endpoint`) that publishes another (`selfEndpoint`), the way the
+   * sandbox answers on both `localhost` and `127.0.0.1` but names only the
+   * second (TOON_Network#126).
+   */
+  selfEndpoint?: string;
   routes?: readonly { prefix: string; price: string }[];
   settlements?: readonly SettlementView[];
   /** What this node answers for itself — where a relay write is bought (#120). */
@@ -168,6 +176,7 @@ export function connectorHealth(input: {
   return {
     state: 'ok',
     endpoint: input.endpoint,
+    selfEndpoint: input.selfEndpoint ?? input.endpoint,
     ilpAddresses: input.ilpAddresses ?? ['g.toon.relay'],
     settlements: input.settlements ?? [
       {

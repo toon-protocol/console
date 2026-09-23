@@ -10,6 +10,7 @@ import { adoptLaunchToken, forgetLaunchToken } from '@/lib/launch-token';
 const devnetConnector = {
   state: 'ok' as const,
   endpoint: 'https://proxy.relay.devnet.toonprotocol.dev',
+  selfEndpoint: 'https://proxy.relay.devnet.toonprotocol.dev',
   ilpAddresses: ['g.toon.relay', 'g.toon.relay.ephemeral'],
   settlements: [
     {
