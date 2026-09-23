@@ -13,6 +13,13 @@ import {
   type DirectoryResult,
 } from './directory.js';
 import { FundingError, type FundingStore } from './funding.js';
+import {
+  GatewayError,
+  type GatewayView,
+  type HandoverRequest,
+  type HandoverResult,
+  type WithdrawalResult,
+} from './gateway.js';
 import { LeaseError, type LeaseStore, type SpawnRequest } from './lease.js';
 import { LeaseVaultError, type LeaseVault } from './lease-vault.js';
 import {
@@ -108,6 +115,11 @@ export interface ApiDeps {
   /** The budgets. A dashboard reads perfectly well without them armed. */
   readonly autoExtend?: AutoExtendPort | undefined;
   /**
+   * The hostname (TOON_Network#97). Absent in a build that wired the dashboard
+   * without it, and the routes say so rather than pretending.
+   */
+  readonly gateway?: GatewayPort | undefined;
+  /**
    * The desktop around the window: the current Omarchy theme, and whatever the
    * Omarchy menu last asked to be opened (TOON_Network#99). Absent only in a
    * build that did not wire it, and the route says so rather than pretending.
@@ -143,6 +155,13 @@ export interface WorkloadPort {
     options?: { maxPrice?: string | undefined; chain?: string | undefined }
   ): Promise<ExtendResult>;
   terminate(workloadId: string): Promise<TerminateResult>;
+}
+
+/** What `/api/workloads/<id>/gateway*` needs of `GatewayStore`, and no more. */
+export interface GatewayPort {
+  view(workloadId: string, options?: { probe?: boolean }): Promise<GatewayView>;
+  handover(workloadId: string, request?: HandoverRequest): Promise<HandoverResult>;
+  withdraw(workloadId: string): Promise<WithdrawalResult>;
 }
 
 /** What `/api/workloads/<id>/auto-extend` needs of `AutoExtender`. */
@@ -832,28 +851,37 @@ async function handleWorkloads(
   query: URLSearchParams,
   body: unknown
 ): Promise<ApiResponse> {
-  const workloads = deps.workloads;
-  if (workloads === undefined) {
-    return problem(
-      501,
-      'dashboard_unwired',
-      'This console holds leases but has no dashboard wired to act on them. That is a ' +
-        'packaging fault rather than anything about the request.'
-    );
-  }
-
   const refresh = query.get('refresh') === '1';
   if (path === '/api/workloads' && method === 'GET') {
-    return ok(await workloads.dashboard({ refresh }));
+    if (deps.workloads === undefined) return dashboardUnwired();
+    return ok(await deps.workloads.dashboard({ refresh }));
   }
 
   const parts = path.split('/').filter((part) => part !== '');
-  // ['api', 'workloads', '<id>', '<action>'?]
+  // ['api', 'workloads', '<id>', '<action>'?, '<verb>'?] — the fifth part is
+  // the gateway's alone: `handover` and `withdraw` are two messages about one
+  // thing, and hanging them off `…/gateway` keeps that visible in the URL.
   const workloadId = parts[2];
   const action = parts[3];
-  if (workloadId === undefined || parts.length > 4) {
+  const verb = parts[4];
+  if (
+    workloadId === undefined ||
+    parts.length > 5 ||
+    (parts.length === 5 && action !== 'gateway')
+  ) {
     return problem(404, 'unknown_route', `No route ${method} ${path}.`);
   }
+
+  // The gateway is reached before the dashboard is required, because it is a
+  // separate thing that happens to hang off the same id: a build with a
+  // hostname and no dashboard is odd but not broken, and `gateway_unwired` and
+  // `dashboard_unwired` are two different packaging faults.
+  if (action === 'gateway') {
+    return handleGateway(deps, method, path, query, body, workloadId, verb);
+  }
+
+  const workloads = deps.workloads;
+  if (workloads === undefined) return dashboardUnwired();
 
   try {
     if (action === undefined && method === 'GET') {
@@ -908,6 +936,88 @@ async function handleWorkloads(
     throw error;
   }
 
+  return problem(404, 'unknown_route', `No route ${method} ${path}.`);
+}
+
+function dashboardUnwired(): ApiResponse {
+  return problem(
+    501,
+    'dashboard_unwired',
+    'This console holds leases but has no dashboard wired to act on them. That is a ' +
+      'packaging fault rather than anything about the request.'
+  );
+}
+
+/**
+ * The hostname: handing a workload to a Workload Gateway and taking it back
+ * (TOON_Network#97, spec §12).
+ *
+ * Three routes, and what they cost is again the shape of the surface.
+ *
+ * `GET …/gateway` is built from what this console already knows and sends
+ * nothing. `?probe=1` additionally knocks on the hostname itself — an ordinary
+ * HTTPS request to the name, reaching no provider, no connector and no relay —
+ * which is how the answer to "does the hostname the console shows match what
+ * the gateway serves" is a check rather than a claim.
+ *
+ * `POST …/gateway/handover` derives one Gateway Grant per member of the
+ * Standby Set and seals one message. It is free on every gateway built so far,
+ * and the answer says where it was bought and what it cost, because "free" is
+ * the gateway's price and not the network's.
+ *
+ * `POST …/gateway/withdraw` stops the gateway serving. It is free too, and
+ * irreversible only in the sense that nothing here un-withdraws: handing over
+ * again is an ordinary second handover.
+ *
+ * And, as everywhere else on this surface, **no answer carries a Gateway
+ * Grant.** A grant is a secret — whoever holds it reads that lease's `status`
+ * — and it is derived inside the vault for the length of one sealed message.
+ * `api-gateway.test.ts` is the test that says so.
+ */
+async function handleGateway(
+  deps: ApiDeps,
+  method: string,
+  path: string,
+  query: URLSearchParams,
+  body: unknown,
+  workloadId: string,
+  verb: string | undefined
+): Promise<ApiResponse> {
+  const gateway = deps.gateway;
+  if (gateway === undefined) {
+    return problem(
+      501,
+      'gateway_unwired',
+      'This console holds leases but has no gateway wired to hand them to. That is a ' +
+        'packaging fault rather than anything about the request.'
+    );
+  }
+  try {
+    if (verb === undefined && method === 'GET') {
+      return ok(await gateway.view(workloadId, { probe: query.get('probe') === '1' }));
+    }
+    if (verb === 'handover' && method === 'POST') {
+      const fields = asRecord(body);
+      return ok(
+        await gateway.handover(workloadId, {
+          ...optional('expiresAt', number(fields, 'expiresAt')),
+          ...optional('expiresIn', number(fields, 'expiresIn')),
+          ...optional('httpPort', number(fields, 'httpPort')),
+          ...optional('name', string(fields, 'name')),
+          ...optional('chain', string(fields, 'chain')),
+        })
+      );
+    }
+    if (verb === 'withdraw' && method === 'POST') {
+      return ok(await gateway.withdraw(workloadId));
+    }
+  } catch (error) {
+    if (error instanceof GatewayError) return problem(error.status, error.code, error.message);
+    if (error instanceof LeaseVaultError) {
+      return problem(error.status, error.code, error.message);
+    }
+    throw error;
+  }
   return problem(404, 'unknown_route', `No route ${method} ${path}.`);
 }
 

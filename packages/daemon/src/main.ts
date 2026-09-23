@@ -16,6 +16,8 @@ import { defaultConnectorReader, readConnectorHealth } from './connector-health.
 import { readDirectory } from './directory.js';
 import { DocsStore } from './docs.js';
 import { FundingStore } from './funding.js';
+import { GatewayStore } from './gateway.js';
+import { LiveGatewayProbe } from './gateway-probe.js';
 import { LiveChainPort } from './funding-chain.js';
 import { LeaseStore } from './lease.js';
 import { LiveProviderPort } from './lease-route.js';
@@ -220,6 +222,25 @@ export async function main(): Promise<void> {
     autoExtend: () => budgets,
   });
 
+  // The hostname (TOON_Network#97). It shares the provider port with the
+  // dashboard above — a Gateway Handover is the same kind of thing as a Lease
+  // Request, a body sealed to a connector's pinned key on a route that
+  // connector terminates — and the same note store, because what this console
+  // handed to a gateway belongs beside what it last heard about the lease.
+  //
+  // What it does NOT share is the vault's secret: every Gateway Grant is
+  // derived inside `vault.withContinuation` for the length of one message.
+  const gateway = new GatewayStore({
+    profile: () => profiles.active(),
+    vault,
+    chainSeed,
+    readHealth: (profile) => readConnectorHealth(profile, reader),
+    gateway: new LiveProviderPort(),
+    probe: new LiveGatewayProbe(),
+    paths,
+    notes,
+  });
+
   // Budgets: the one thing here that spends with nobody present. It is armed
   // per lease, never by default, and `auto-extend.ts` lists the nine rules
   // that can each stop it on its own.
@@ -282,6 +303,7 @@ export async function main(): Promise<void> {
       spawnFromTemplate: (request) => leases.spawnFromTemplate(request),
       workloads: watchedWorkloads,
       autoExtend: budgets,
+      gateway,
       desktop,
     },
   }).catch((error: unknown) => {

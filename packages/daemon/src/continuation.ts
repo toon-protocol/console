@@ -37,13 +37,21 @@ import { HEX_32 } from './spawn-content.js';
  * the same fixture the provider's CI checks itself against. A copy that drifts
  * fails there before it can spend anything.
  *
- * `gatewaySub` — §6.5.1's Gateway Grant — is deliberately NOT here. It belongs
- * to the handover ticket (#97), and a derivation with no caller is a derivation
- * with no test.
+ * **`gatewaySub` is here now** (TOON_Network#97). It was left out until a
+ * caller existed, and the handover is that caller. It sits beside
+ * `continuationFor` because the two are one derivation applied twice — the
+ * provider expresses them with a single `expand`, and so does the tenant tool
+ * — and because the second takes the first's output as its input: a Gateway
+ * Grant is derived from the Continuation Token, never from the Root Secret
+ * (§6.5.1). Splitting them across two files would be an invitation to derive
+ * a grant from the wrong value.
  */
 
 /** The HKDF `info` prefix a Continuation Token is derived under (spec §6.1.1). */
 export const CONTINUATION_DOMAIN = 'toon-network-continuation:';
+
+/** The HKDF `info` prefix a Gateway Grant is derived under (spec §6.5.1). */
+export const GATEWAY_DOMAIN = 'toon-network-gateway:';
 
 export class ContinuationError extends Error {
   readonly code: string;
@@ -114,5 +122,65 @@ export function continuationFor(rootSecret: string, providerPubkey: string): str
       `${CONTINUATION_DOMAIN}${providerPubkey}`,
       32
     )
+  );
+}
+
+/**
+ * The Gateway Grant this lease's token derives for one moment (spec §6.5.1).
+ *
+ * ```
+ * gateway_sub(provider, expires_at) = HKDF-SHA256(ikm  = continuation(provider),
+ *                                                 salt = empty,
+ *                                                 info = "toon-network-gateway:" || expires_at,
+ *                                                 L    = 32)
+ * ```
+ *
+ * `expires_at` is spelled into `info` as **unpadded decimal** unix seconds, so
+ * `1700086400` and `01700086400` are different grants and only the first is
+ * the one the provider recomputes.
+ *
+ * Three facts about this value decide how the rest of the console treats it.
+ *
+ * **It is derived from the TOKEN, not from the Root Secret.** So it is derived
+ * per provider, exactly as the token is: a grant derived for the primary is
+ * `bad_grant` at a standby, which is the whole of why a Gateway Handover
+ * carries one grant per member of the Standby Set rather than one value
+ * (§12.1, ADR 0017).
+ *
+ * **It is a secret.** Whoever holds it can read that lease's `status` until
+ * the moment it names. It goes into the sealed handover and nowhere else —
+ * never into a log line, an API answer, a note on disk or an error message.
+ * `gateway.test.ts` and `api-gateway.test.ts` are the tests that say so.
+ *
+ * **It has no revocation of its own.** Deriving the same inputs again gives
+ * the same 32 bytes on any machine, and deriving at a later moment renews
+ * without taking anything back. What revokes is replacing the Continuation
+ * Token it came from — a Rotation (§6.8, ADR 0018) — after which every grant
+ * of the old token is `bad_grant` at once.
+ *
+ * @param continuation the lease's Continuation Token for one provider, 64
+ *   lowercase hex, as `continuationFor` derived it.
+ * @param expiresAt unix seconds: a non-negative, safe integer.
+ * @throws {ContinuationError} when either is not spelled that way.
+ */
+export function gatewaySub(continuation: string, expiresAt: number): string {
+  if (!HEX_32.test(continuation)) {
+    // Never the VALUE, for the same reason `continuationFor` never quotes a
+    // root secret back: this one is a secret too.
+    throw new ContinuationError(
+      'invalid_continuation',
+      'A Continuation Token is 32 bytes as 64 lowercase hex characters (spec §6.1.1).'
+    );
+  }
+  if (!Number.isSafeInteger(expiresAt) || expiresAt < 0) {
+    throw new ContinuationError(
+      'invalid_expires_at',
+      `${JSON.stringify(expiresAt)} is not a moment: \`expires_at\` is unix seconds as a ` +
+        'whole, non-negative number, and it is spelled into the derivation as unpadded ' +
+        'decimal (spec §6.5.1).'
+    );
+  }
+  return bytesToHex(
+    hkdf(sha256, hexToBytes(continuation), undefined, `${GATEWAY_DOMAIN}${expiresAt}`, 32)
   );
 }

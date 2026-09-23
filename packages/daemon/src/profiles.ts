@@ -60,6 +60,27 @@ export interface NetworkProfile {
   readonly relayUrl: string;
   /** The suffix a Workload Gateway serves hostnames under. Empty when unconfigured. */
   readonly gatewayDomain: string;
+  /**
+   * The client edge of the Workload Gateway's OWN connector — where a Gateway
+   * Handover is sealed to (spec §12.1, ADR 0017). Empty when this profile
+   * names no gateway.
+   *
+   * It is a second connector and not the profile's, because a gateway is a
+   * separate TOON app reached through a connector of its own: on devnet the
+   * profile's connector fronts the relay and publishes no route that carries
+   * `…workload-gateway.handover`. Which is also why this is an endpoint rather
+   * than a route or a key — **the gateway's ILP address, its pinned sealing
+   * key and the handover's price are all read from its `GET /ilp`** at the
+   * moment of sending, exactly as every other connector fact in this console
+   * is (TOON_Network#87). A key written here would be a constant this
+   * repository's own rule forbids, and `profiles.test.ts` is the test that
+   * says so.
+   *
+   * A gateway is chosen by a packet, never by a publication (ADR 0017), so
+   * this is the whole of "which gateway": change it and the next handover
+   * goes somewhere else, with nothing to deregister from.
+   */
+  readonly gatewayConnectorUrl: string;
   /** Where to get test funds, when the network has a faucet. */
   readonly faucetUrl?: string | undefined;
   /** Where to read the chains and send transactions. Empty uses the client's. */
@@ -82,6 +103,7 @@ export const DEVNET: NetworkProfile = {
   connectorUrl: 'https://proxy.relay.devnet.toonprotocol.dev/ilp',
   relayUrl: 'wss://relay-ws.devnet.toonprotocol.dev',
   gatewayDomain: 'gw.devnet.toonprotocol.dev',
+  gatewayConnectorUrl: 'https://proxy.gateway.devnet.toonprotocol.dev/ilp',
   faucetUrl: 'https://faucet.devnet.toonprotocol.dev',
   // Left to the client's own presets: the public test chains' endpoints are
   // published by `@toon-protocol/client` already, and a second copy here would
@@ -97,6 +119,7 @@ export const SANDBOX: NetworkProfile = {
   connectorUrl: 'http://localhost:3200/ilp',
   relayUrl: 'ws://localhost:7100',
   gatewayDomain: 'gw.localhost:3280',
+  gatewayConnectorUrl: 'http://localhost:3260/ilp',
   // The sandbox's own chains, on this machine. Nothing could default to these.
   rpc: { evm: 'http://localhost:8545', solana: 'http://localhost:8899' },
   origin: 'built-in',
@@ -109,6 +132,7 @@ export const MAINNET: NetworkProfile = {
   connectorUrl: '',
   relayUrl: '',
   gatewayDomain: '',
+  gatewayConnectorUrl: '',
   rpc: {},
   origin: 'built-in',
 };

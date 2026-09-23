@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
+import type { GatewayNote } from './gateway.js';
 import { accountWorkloadsPath, type ConsolePaths } from './paths.js';
 import type { LeaseEnding, WorkloadStatus } from './workload.js';
 
@@ -33,6 +34,18 @@ export interface WorkloadNote {
   readonly endedAs?: LeaseEnding | undefined;
   /** The last `expires_at` anything reported, unix seconds. */
   readonly expiresAt?: number | undefined;
+  /**
+   * What this console handed to a Workload Gateway, when it did
+   * (TOON_Network#97).
+   *
+   * It lives here rather than in the Lease Vault because a handover is not a
+   * fact about the lease: the lease is unchanged by it, the provider never
+   * learns of it, and a second console signed in as the same account would be
+   * right to hand the same workload to a gateway of its own. What it IS, is
+   * this machine's record of which grant it should bear if asked to withdraw
+   * — and it holds no grant, only the two inputs that derive one again.
+   */
+  readonly gateway?: GatewayNote | undefined;
   readonly at: string;
 }
 
