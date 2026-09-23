@@ -13,6 +13,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import type { FundingState } from '@/hooks/use-funding';
+import type { GasStationState } from '@/hooks/use-gas-station';
 import type {
   Amount,
   ChainFundingView,
@@ -53,7 +54,13 @@ import type {
  * press it with an empty gas tank would be teaching the same lesson at the
  * price of a transaction that looks like a bug.
  */
-export function FundingView({ funding }: { funding: FundingState }) {
+export function FundingView({
+  funding,
+  gas,
+}: {
+  funding: FundingState;
+  gas?: GasStationState;
+}) {
   const status = funding.status;
 
   if (!status) {
@@ -73,7 +80,7 @@ export function FundingView({ funding }: { funding: FundingState }) {
       {funding.error && <Problem funding={funding} />}
       {status.heldSeed && <HeldSeed held={status.heldSeed} />}
       {status.supersededSeeds > 0 && <SupersededSeeds count={status.supersededSeeds} />}
-      <GasGate status={status} />
+      <GasGate status={status} funding={funding} {...(gas === undefined ? {} : { gas })} />
       {status.chains.map((chain) => (
         <ChainCard
           key={chain.chain}
@@ -133,10 +140,22 @@ function NotYet({ status, funding }: { status: FundingStatus; funding: FundingSt
  * wrong yet. It names the coin, says plainly that nothing here can supply it,
  * and gives the one thing that does work per chain.
  */
-function GasGate({ status }: { status: FundingStatus }) {
+function GasGate({
+  status,
+  gas,
+  funding,
+}: {
+  status: FundingStatus;
+  gas?: GasStationState;
+  funding: FundingState;
+}) {
   const stuck = status.chains.filter((chain) => chain.gas.verdict !== 'present');
   if (stuck.length === 0) return null;
   const none = stuck.filter((chain) => chain.gas.verdict === 'none');
+  // Whether ANY of the blocked chains can be bought for. It changes the
+  // headline, and nothing else: the explanation below stays word for word,
+  // because it is still true of every chain this cannot help.
+  const buyable = (gas?.status?.chains ?? []).filter((chain) => chain.verdict === 'buyable');
 
   return (
     <Card
@@ -147,9 +166,11 @@ function GasGate({ status }: { status: FundingStatus }) {
     >
       <CardHeader>
         <CardTitle>
-          {none.length > 0
-            ? 'You need native gas, and nothing here can give it to you'
-            : 'Whether you can pay for a transaction is unknown'}
+          {none.length === 0
+            ? 'Whether you can pay for a transaction is unknown'
+            : buyable.length > 0
+              ? 'You need native gas — and one of these chains you can buy'
+              : 'You need native gas, and nothing here can give it to you'}
         </CardTitle>
         <CardDescription>
           Opening a payment channel is a transaction on a chain, so it is paid for in that
@@ -159,6 +180,11 @@ function GasGate({ status }: { status: FundingStatus }) {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
+        {gas?.status?.firstChannel && (
+          <p className="text-sm font-medium" data-testid="first-channel">
+            {gas.status.firstChannel}
+          </p>
+        )}
         {stuck.map((chain) => (
           <div key={chain.chain} className="space-y-2">
             <div className="flex flex-wrap items-center gap-2">
@@ -168,11 +194,189 @@ function GasGate({ status }: { status: FundingStatus }) {
             <p className="text-sm">{chain.gas.headline}</p>
             <p className="text-sm">{chain.gas.detail}</p>
             {chain.gas.command && <CopyLine label="Run this" value={chain.gas.command} />}
+            {gas && <BuyGas chain={chain.chain} gas={gas} funding={funding} />}
           </div>
         ))}
       </CardContent>
     </Card>
   );
+}
+
+/**
+ * Buying one chain's gas with a channel on another (TOON_Network#119).
+ *
+ * The order on this panel is the acceptance criterion, in three steps that
+ * cannot be skipped:
+ *
+ * 1. **What it would do**, from the daemon — which chain pays, at which edge,
+ *    what one packet costs there. A read; nothing has been spent.
+ * 2. **The quote**, bought and then SHOWN: the station's own fee payer, what
+ *    it will move, its own ceiling, and the deadline it merged with its
+ *    blockhash's validity. A countdown, because that deadline is short and a
+ *    person deciding slowly should see it running rather than discover it.
+ * 3. **The purchase**, which names the quote on the screen. There is no button
+ *    that executes without a quote in hand, and nothing recomputes a price:
+ *    what is displayed is the connector's figure and the station's figure,
+ *    each repeated.
+ *
+ * A refusal is shown as a refusal, with what it cost — because a refused paid
+ * request is still billed, and a panel that hid that would be the silent loss
+ * this ticket exists to rule out.
+ */
+function BuyGas({
+  chain,
+  gas,
+  funding,
+}: {
+  chain: string;
+  gas: GasStationState;
+  funding: FundingState;
+}) {
+  const plan = gas.status?.chains.find((entry) => entry.chain === chain);
+  if (!plan || plan.verdict === 'not_blocked') return null;
+
+  const quote = gas.quote?.chain === chain ? gas.quote : undefined;
+  const purchase = gas.purchase?.chain === chain ? gas.purchase : undefined;
+
+  if (plan.verdict !== 'buyable') {
+    return (
+      <div className="space-y-2" data-testid={`gas-buy-${chain}`}>
+        <p className="text-muted-foreground text-sm">{plan.reason}</p>
+        {/*
+          The one case where a dead end has a door in it. Which of a gas
+          station's doors takes which phase is published nowhere, so it is
+          learned from a refusal — and what the console learns is that the
+          channel it holds cannot reach the door it needs. Opening one with the
+          station's own connector reaches all of them. It spends collateral and
+          the chain's own gas, so it is a button and not something the daemon
+          does quietly: `gas-station.ts` never opens a channel.
+        */}
+        {plan.openChannelWith && plan.payer && (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={funding.busy}
+            onClick={() =>
+              void funding.openChannel({
+                chain: plan.payer?.chain ?? '',
+                connector: plan.openChannelWith ?? '',
+              })
+            }
+          >
+            Open a channel with the gas station&rsquo;s connector on {plan.payer.chain}
+          </Button>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2 rounded-md border px-3 py-2" data-testid={`gas-buy-${chain}`}>
+      <p className="text-sm">{plan.reason}</p>
+      {gas.error && (
+        <div role="alert" className="text-destructive space-y-1 text-sm">
+          <p>{gas.error}</p>
+          <Button size="sm" variant="outline" onClick={gas.clearError}>
+            Dismiss
+          </Button>
+        </div>
+      )}
+      {purchase && <GasPurchased purchase={purchase} />}
+      {quote ? (
+        <div className="space-y-2" data-testid={`gas-quote-${chain}`}>
+          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+            <dt className="text-muted-foreground">It will move</dt>
+            <dd className="font-mono">{quote.lamports} lamports</dd>
+            <dt className="text-muted-foreground">To</dt>
+            <dd className="font-mono break-all">{quote.recipient}</dd>
+            <dt className="text-muted-foreground">From its fee payer</dt>
+            <dd className="font-mono break-all">{quote.feePayer}</dd>
+            <dt className="text-muted-foreground">Its own ceiling</dt>
+            <dd className="font-mono">{quote.maxLamports} lamports</dd>
+            <dt className="text-muted-foreground">The route</dt>
+            <dd className="font-mono break-all">
+              {quote.destination} at {quote.price} base units
+            </dd>
+            <dt className="text-muted-foreground">The quote has cost</dt>
+            <dd className="font-mono">{totalOf(quote.attempts)} base units so far</dd>
+          </dl>
+          <p className="text-muted-foreground text-xs">
+            This quote and the blockhash it named expire together, at{' '}
+            {new Date(quote.expiresAt).toLocaleTimeString()}. After that, quote again — a
+            transaction built on an expired blockhash cannot be broadcast, so there is nothing
+            to salvage by sending it.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              disabled={gas.busy}
+              onClick={() => void gas.buyGas({ chain, quoteId: quote.quoteId })}
+            >
+              Pay {quote.price} base units and buy it
+            </Button>
+            <Button size="sm" variant="outline" disabled={gas.busy} onClick={gas.dismiss}>
+              Not now
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={gas.busy}
+          onClick={() => void gas.quoteGas({ chain })}
+        >
+          {gas.busy ? 'Asking the gas station…' : `Get a quote (${plan.price} base units)`}
+        </Button>
+      )}
+    </div>
+  );
+}
+
+/** What a purchase did, in the station's own words where it declined. */
+function GasPurchased({ purchase }: { purchase: NonNullable<GasStationState['purchase']> }) {
+  const cost =
+    purchase.cost === undefined ? '' : ` It cost ${purchase.cost} base units in total.`;
+  if (purchase.state === 'delivered') {
+    return (
+      <p className="text-sm" data-testid="gas-purchase">
+        The gas station co-signed and broadcast it: {purchase.lamports} lamports are on their
+        way to {purchase.recipient}, in transaction{' '}
+        <span className="font-mono break-all">{purchase.signature}</span>.{cost} Refresh the
+        balances below; once the chain shows them, opening a channel here needs nothing
+        further.
+      </p>
+    );
+  }
+  if (purchase.state === 'refused') {
+    return (
+      <p className="text-sm" role="alert" data-testid="gas-purchase">
+        The gas station declined: <span className="font-mono">{purchase.reason}</span>.{' '}
+        {purchase.detail} It answered, so the packet was billed and nothing was bought.{cost}
+      </p>
+    );
+  }
+  return (
+    <p className="text-sm" role="alert" data-testid="gas-purchase">
+      Nobody reported what became of that packet, so whether the gas station ran the job is
+      unknown — it is not done and it is not undone.{cost} Read the balances below before
+      buying again.
+    </p>
+  );
+}
+
+/** Every packet's cost, summed. Never a price multiplied by a packet count. */
+function totalOf(attempts: readonly { cost?: string }[]): string {
+  let total = 0n;
+  for (const attempt of attempts) {
+    if (attempt.cost === undefined) continue;
+    try {
+      total += BigInt(attempt.cost);
+    } catch {
+      continue;
+    }
+  }
+  return total.toString();
 }
 
 function GasBadge({ chain }: { chain: ChainFundingView }) {

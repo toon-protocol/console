@@ -12,7 +12,8 @@ that network's connector says about itself, it browses the Provider Directory, a
 that account can deposit, open a payment channel and watch its balances ([#90][i90]),
 it browses **Templates** and expands one into the spawn it would send ([#94][i94]),
 and that account can **spawn a workload** and keep its Root Secret in the **Lease Vault**
-([#92][i92]). The workload dashboard ([#93][i93] onward) builds on it.
+([#92][i92]), and — once one chain is paid for — it can **buy the next chain's gas** through a
+gas station ([#119][i119]). The workload dashboard ([#93][i93] onward) builds on it.
 
 ## What is here
 
@@ -792,6 +793,7 @@ published identity; nothing in this repository should suggest otherwise.
 [i91]: https://github.com/toon-protocol/TOON_Network/issues/91
 [i92]: https://github.com/toon-protocol/TOON_Network/issues/92
 [i93]: https://github.com/toon-protocol/TOON_Network/issues/93
+[i119]: https://github.com/toon-protocol/TOON_Network/issues/119
 [i94]: https://github.com/toon-protocol/TOON_Network/issues/94
 [i115]: https://github.com/toon-protocol/TOON_Network/issues/115
 [adr5]: https://github.com/toon-protocol/TOON_Network/blob/main/docs/adr/0005-tenant-identity-comes-from-the-request-not-payment-headers.md

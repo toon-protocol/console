@@ -81,6 +81,25 @@ export interface NetworkProfile {
    * goes somewhere else, with nothing to deregister from.
    */
   readonly gatewayConnectorUrl: string;
+  /**
+   * The client edge of the GAS STATION's own connector (TOON_Network#119).
+   *
+   * A third connector, for the same reason there is a second: a gas station is
+   * a separate TOON app — `toon-protocol/gas-station`, which spends its own
+   * native token on a stranger's transaction — reached through a connector of
+   * its own. Empty when this profile names none, which is not a fault: it
+   * means the console explains the gas problem and offers no way to buy out of
+   * it.
+   *
+   * An endpoint and nothing more. **Which doors it serves, what each costs,
+   * what it settles in and which key a forwarded packet is sealed to are all
+   * read from its `GET /ilp`** at the moment of sending, exactly as every
+   * other connector fact in this console is (TOON_Network#87). There is
+   * deliberately no ILP address here: `g.toon.gas` and `g.toon.gastation` are
+   * two deployments' spellings of the same app, and a constant naming either
+   * would be the drift `profiles.test.ts` exists to refuse.
+   */
+  readonly gasConnectorUrl: string;
   /** Where to get test funds, when the network has a faucet. */
   readonly faucetUrl?: string | undefined;
   /** Where to read the chains and send transactions. Empty uses the client's. */
@@ -104,6 +123,7 @@ export const DEVNET: NetworkProfile = {
   relayUrl: 'wss://relay-ws.devnet.toonprotocol.dev',
   gatewayDomain: 'gw.devnet.toonprotocol.dev',
   gatewayConnectorUrl: 'https://proxy.gateway.devnet.toonprotocol.dev/ilp',
+  gasConnectorUrl: 'https://proxy.gas.devnet.toonprotocol.dev/ilp',
   faucetUrl: 'https://faucet.devnet.toonprotocol.dev',
   // Left to the client's own presets: the public test chains' endpoints are
   // published by `@toon-protocol/client` already, and a second copy here would
@@ -120,6 +140,7 @@ export const SANDBOX: NetworkProfile = {
   relayUrl: 'ws://localhost:7100',
   gatewayDomain: 'gw.localhost:3280',
   gatewayConnectorUrl: 'http://localhost:3260/ilp',
+  gasConnectorUrl: 'http://localhost:3220/ilp',
   // The sandbox's own chains, on this machine. Nothing could default to these.
   rpc: { evm: 'http://localhost:8545', solana: 'http://localhost:8899' },
   origin: 'built-in',
@@ -133,6 +154,7 @@ export const MAINNET: NetworkProfile = {
   relayUrl: '',
   gatewayDomain: '',
   gatewayConnectorUrl: '',
+  gasConnectorUrl: '',
   rpc: {},
   origin: 'built-in',
 };

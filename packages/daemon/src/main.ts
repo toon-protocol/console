@@ -19,6 +19,8 @@ import { FundingStore } from './funding.js';
 import { GatewayStore } from './gateway.js';
 import { LiveGatewayProbe } from './gateway-probe.js';
 import { LiveChainPort } from './funding-chain.js';
+import { GasStationStore } from './gas-station.js';
+import { LiveGasJobPort } from './gas-station-route.js';
 import { AnonTransport } from './hidden-transport.js';
 import { LeaseStore } from './lease.js';
 import { LiveProviderPort } from './lease-route.js';
@@ -198,6 +200,26 @@ export async function main(): Promise<void> {
     paths,
   });
 
+  // Buying the next chain's gas with the chain that is already paid for
+  // (TOON_Network#119). It sits beside funding and reads its view rather than
+  // re-deriving one: which chains are blocked, which address each would be
+  // bought for, and what this account holds are all questions #90 already
+  // answers. What this adds is the one thing #90 could not — a claim signed
+  // against a channel costs no gas on any chain, so an account with one funded
+  // channel can buy native gas for a chain it cannot transact on at all.
+  const gasStation = new GasStationStore({
+    profile: () => profiles.active(),
+    funding: () => funding.status(),
+    readHealth: (profile) => readConnectorHealth(profile, reader),
+    // The gas station's own connector, which is never this profile's. As with
+    // the writer's, the profile is passed for its RPC endpoints only.
+    readHealthAt: (connectorUrl) =>
+      readConnectorHealth({ ...profiles.active(), connectorUrl }, reader),
+    chainSeed,
+    paths,
+    port: new LiveGasJobPort(),
+  });
+
   // The Lease Vault follows the account, exactly as the Chain Seed does: one
   // sealed record per lease on the account's own relays, with a local cache
   // (TOON_Network#92, ADR 0021). The records it finds belong to the ACCOUNT
@@ -335,6 +357,7 @@ export async function main(): Promise<void> {
       session,
       chainSeed,
       funding,
+      gasStation,
       vault,
       leases,
       docs,
