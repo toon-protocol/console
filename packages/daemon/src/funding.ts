@@ -486,9 +486,9 @@ export class FundingStore {
         chains: [],
         reason:
           health.state === 'unreachable'
-            ? `${profile.label}'s connector did not answer, so which chains it settles on is ` +
-              `unknown — and an address for a chain that may not be settled on is worse than ` +
-              `none. ${health.reason}`
+            ? `The connector at ${profile.connectorUrl} did not answer, so which chains it ` +
+              `settles on is unknown — and an address for a chain that may not be settled on ` +
+              `is worse than none. ${health.reason}`
             : health.reason,
       };
     }

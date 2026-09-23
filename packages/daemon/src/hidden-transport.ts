@@ -210,10 +210,8 @@ export class AnonTransport implements HiddenTransportPort {
     } catch (error) {
       throw new HiddenTransportError(
         'anon_unreachable',
-        `Nothing is listening on ${proxy}, so no circuit can be built and nothing was sent: ` +
-          `${messageOf(error)} Start the Anyone Protocol \`anon\` daemon whose SOCKS port ` +
-          `that is. This console will not dial a Hidden Provider any other way (spec §10, ` +
-          `ADR 0008).`
+        `No circuit can be built through ${proxy}, so nothing was sent: ${messageOf(error)} ` +
+          `This console will not dial a Hidden Provider any other way (spec §10, ADR 0008).`
       );
     }
     let built;
