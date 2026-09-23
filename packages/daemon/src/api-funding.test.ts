@@ -20,6 +20,7 @@ import {
   fundingStoreFor,
   type FakeChainPort,
 } from './funding.testkit.js';
+import { idleLeases } from './lease.testkit.js';
 import { activeProfileFilePath, consolePaths, type ConsolePaths } from './paths.js';
 import { ProfileStore } from './profile-store.js';
 import { SANDBOX } from './profiles.js';
@@ -78,6 +79,7 @@ describe('the funding routes', () => {
       session: undefined as never,
       chainSeed: seed,
       funding: fundingStoreFor({ chainSeed: seed, paths, chains }),
+      ...idleLeases(paths),
       version: { name: '@toon-protocol/console-daemon', version: '0.1.0' },
       paths,
       startedAt: new Date('2026-09-22T00:00:00Z'),

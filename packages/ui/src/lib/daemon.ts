@@ -575,10 +575,153 @@ export interface FundingStatus {
   checkedAt: string;
 }
 
+/**
+ * Leases: spawning a workload and the Lease Vault (TOON_Network#92, ADR 0021).
+ *
+ * The same hand-kept mirror as everything above, and the sharpest version of
+ * the same rule: **there is no Root Secret in any of these types.** The secret
+ * is minted in the daemon, sealed to the account and published to its relays;
+ * nothing sends one to this window and nothing could, because `LeaseView` has
+ * no field for it. What the browser holds is a workload id, a provider, and
+ * where the workload answers.
+ */
+
+export interface LeasePort {
+  container_port: number;
+  protocol: 'tcp' | 'udp';
+}
+
+export interface LeaseImage {
+  reference?: string;
+  digest: string;
+  registry_entry?: { address: string; relay?: string };
+}
+
+export interface LeaseAccess {
+  host: string;
+  ssh_port?: number;
+  ports?: { container_port: number; host_port: number }[];
+}
+
+export interface LeaseView {
+  workloadId: string;
+  state: 'spawning' | 'live' | 'retracted';
+  standbySet: string[];
+  provider: {
+    pubkey: string;
+    ilp_address: string;
+    connector_url: string;
+    connector_seal_key: string;
+    hidden?: boolean;
+  };
+  paidAt: string;
+  listing: {
+    name: string;
+    version: number;
+    address: string;
+    lease_interval_s: number;
+    price: number;
+  };
+  profileId: string;
+  image: LeaseImage;
+  ports: LeasePort[];
+  envKeys: string[];
+  createdAt: string;
+  /** Marked local only: this lease's record is on this machine and nowhere else. */
+  localOnly: boolean;
+  role?: string;
+  expiresAt?: number;
+  access?: LeaseAccess;
+  retractedBecause?: string;
+  source: 'cache' | 'relays';
+  relays: string[];
+  recordId: string;
+}
+
+export interface LeaseVaultStatus {
+  state: 'signed_out' | 'unknown' | 'ready';
+  pubkey?: string;
+  leases: LeaseView[];
+  writeTargets: string[];
+  writeTargetSource: 'nip65' | 'profile' | 'none';
+  unreadable: number;
+  lastPublish?: {
+    at: string;
+    workloadId: string;
+    what: 'stage' | 'confirm' | 'retract';
+    relays: PublishOutcome[];
+    accepted: string[];
+  };
+  checkedAt: string;
+}
+
+export interface PreflightView {
+  ok: boolean;
+  /** Everything wrong with this spawn, before any of it costs an interval. */
+  problems: string[];
+  provider?: {
+    pubkey: string;
+    ilpAddress: string;
+    connectorUrl: string;
+    hidden: boolean;
+    liveness: string;
+  };
+  listing?: {
+    name: string;
+    version: number;
+    leaseIntervalSeconds: number;
+    price: number;
+    capabilities: string[];
+  };
+  route?: string;
+  payment?: {
+    connectorUrl: string;
+    via: 'profile-connector' | 'provider-connector';
+    reason: string;
+    chain?: string;
+    channelId?: string;
+    routePrice?: string;
+  };
+  vault: { localOnly: boolean; relays: string[]; source: 'nip65' | 'profile' | 'none' };
+}
+
+export interface SpawnResult {
+  lease?: LeaseView;
+  preflight: PreflightView;
+  answer?: unknown;
+  /** What the packet cost, in base units of the settlement token. */
+  cost?: string;
+  retractionFailed?: string;
+  confirmationFailed?: string;
+}
+
+/** What the form posts. The daemon builds the Lease Request from it (§6.2). */
+export interface SpawnRequestBody {
+  provider: string;
+  listing: string;
+  image: {
+    reference?: string;
+    digest: string;
+    registryEntry?: { address: string; relay?: string };
+  };
+  env?: Record<string, string>;
+  ports?: { containerPort: number; protocol?: 'tcp' | 'udp' }[];
+  sshPublicKey: string;
+  volumeGb?: number;
+  entrypoint?: string[];
+  args?: string[];
+  template?: string;
+  localOnly?: boolean;
+  /** `evm:84532`, `solana` — as the paying connector names it. */
+  chain?: string;
+}
+
 export class DaemonError extends Error {
   readonly status: number;
   /** The daemon's machine-readable code, e.g. `passphrase_required`. */
   readonly code: string;
+  /** A provider's OWN refusal code, when a paid route refused (spec §5). */
+  providerError?: string;
   /** Per-relay detail on a publish that persisted nothing, when there is any. */
   readonly relays?: PublishOutcome[];
   constructor(status: number, message: string, code = 'error', relays?: PublishOutcome[]) {
@@ -611,13 +754,16 @@ async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
       message?: string;
       error?: string;
       relays?: PublishOutcome[];
+      providerError?: string;
     } | null;
-    throw new DaemonError(
+    const failure = new DaemonError(
       response.status,
       problem?.message ?? `The daemon answered ${response.status}.`,
       problem?.error ?? 'error',
       problem?.relays
     );
+    if (problem?.providerError !== undefined) failure.providerError = problem.providerError;
+    throw failure;
   }
   return (await response.json()) as T;
 }
@@ -695,9 +841,27 @@ export const daemon = {
    * to state, and rounding it in the browser as well is how a figure stops
    * matching.
    */
-  openChannel: (request: { chain: string; deposit?: string }) =>
+  /**
+   * `connector` names which connector to open WITH. Absent is the active
+   * profile's own; a spawn paid at a provider's connector needs a channel with
+   * that one instead (#92).
+   */
+  openChannel: (request: { chain: string; deposit?: string; connector?: string }) =>
     post<FundingStatus>('/api/funding/channel', request),
   faucetDrip: (chain: string) => post<FundingStatus>('/api/funding/faucet', { chain }),
+
+  leases: () => call<LeaseVaultStatus>('/api/leases'),
+  /** Re-read the vault from the account's relays. Free: a relay read costs nothing. */
+  refreshLeases: () => post<LeaseVaultStatus>('/api/leases/refresh'),
+  /** What a spawn WOULD do, with nothing spent. Safe to call on every keystroke. */
+  preflightSpawn: (request: SpawnRequestBody) =>
+    post<PreflightView>('/api/leases/preflight', request),
+  /**
+   * Buy a lease. This **spends money**: one Lease Interval at the listing's
+   * price, and a refusal is billed too (spec §5, ADR 0003). The daemon
+   * publishes the Root Secret to the Lease Vault before it sends anything.
+   */
+  spawn: (request: SpawnRequestBody) => post<SpawnResult>('/api/leases/spawn', request),
 };
 
 /** The filters, as the daemon's query string spells them. */

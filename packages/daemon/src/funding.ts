@@ -228,7 +228,16 @@ export interface FaucetView {
 
 export interface FundingStatus {
   readonly state: FundingState;
-  readonly profile: { readonly id: string; readonly label: string };
+  /**
+   * Which profile this view is of — and WHICH CONNECTOR, which is not always
+   * the profile's own: a spawn may be paid at a provider's connector, and a
+   * channel is opened with one connector and not with a network (#92).
+   */
+  readonly profile: {
+    readonly id: string;
+    readonly label: string;
+    readonly connectorUrl: string;
+  };
   readonly pubkey?: string | undefined;
   /** The custody sentence ADR 0020 requires, shown before any address is. */
   readonly custody: { readonly text: string; readonly acknowledgedAt?: string | undefined };
@@ -245,6 +254,18 @@ export interface FundingStatus {
   readonly channelStorePath?: string | undefined;
   readonly reason?: string | undefined;
   readonly checkedAt: string;
+}
+
+/**
+ * Which connector this view is about.
+ *
+ * Absent means the active profile's own, which is every case #90 had. A spawn
+ * paid at a provider's connector needs a channel with THAT connector, and it
+ * is the same view of the same account's money (#92).
+ */
+export interface FundingViewOptions {
+  readonly refresh?: boolean | undefined;
+  readonly connectorUrl?: string | undefined;
 }
 
 export class FundingError extends Error {
@@ -391,11 +412,11 @@ export class FundingStore {
    * the UI can poll for a pending open without hammering an RPC endpoint every
    * second.
    */
-  async status(options: { refresh?: boolean } = {}): Promise<FundingStatus> {
-    const profile = this.#deps.profile();
+  async status(options: FundingViewOptions = {}): Promise<FundingStatus> {
+    const profile = this.#target(options.connectorUrl);
     const seed = await this.#seed();
     const base = {
-      profile: { id: profile.id, label: profile.label },
+      profile: { id: profile.id, label: profile.label, connectorUrl: profile.connectorUrl },
       custody: {
         text: CUSTODY_WARNING,
         ...(seed.warning.acknowledgedAt === undefined
@@ -503,9 +524,15 @@ export class FundingStore {
    * (the client's ADR 0059), so a duplicate would be harmless — but it would
    * also be two transactions' worth of gas to learn that.
    */
-  async openChannel(input: { chain: string; deposit?: string }): Promise<FundingStatus> {
-    const profile = this.#deps.profile();
-    const status = await this.status();
+  async openChannel(input: {
+    chain: string;
+    deposit?: string;
+    connectorUrl?: string;
+  }): Promise<FundingStatus> {
+    const profile = this.#target(input.connectorUrl);
+    const view: FundingViewOptions =
+      input.connectorUrl === undefined ? {} : { connectorUrl: input.connectorUrl };
+    const status = await this.status(view);
     if (status.state !== 'ready') {
       throw new FundingError(
         'not_fundable',
@@ -523,7 +550,7 @@ export class FundingStore {
       );
     }
 
-    const key = this.#openKey(profile.id, status.pubkey ?? '', chain.chain);
+    const key = this.#openKey(profile.connectorUrl, status.pubkey ?? '', chain.chain);
     const running = this.#opens.get(key);
     if (running?.state === 'opening') return this.status();
 
@@ -578,7 +605,7 @@ export class FundingStore {
         if (error instanceof ChainOpenError && error.outOfGas) record.outOfGas = true;
       });
 
-    return this.status();
+    return this.status(view);
   }
 
   /**
@@ -589,10 +616,10 @@ export class FundingStore {
    * an HTTP request held open for the length of a chain confirmation is the
    * thing a pending state exists to avoid.
    */
-  async settled(chain: string): Promise<void> {
-    const profile = this.#deps.profile();
+  async settled(chain: string, connectorUrl?: string): Promise<void> {
+    const profile = this.#target(connectorUrl);
     const pubkey = this.#deps.chainSeed.status().pubkey ?? '';
-    await this.#opens.get(this.#openKey(profile.id, pubkey, chain))?.work;
+    await this.#opens.get(this.#openKey(profile.connectorUrl, pubkey, chain))?.work;
   }
 
   /**
@@ -689,7 +716,7 @@ export class FundingStore {
     const { profile, settlement, seed, faucet, quote, store, refresh } = input;
     const address = settlement.kind === 'evm' ? seed.addresses?.evm : seed.addresses?.solana;
     const rpc = resolveRpc(profile, settlement.kind);
-    const balanceKey = `${profile.id}|${seed.pubkey ?? ''}|${settlement.chain}`;
+    const balanceKey = `${profile.connectorUrl}|${seed.pubkey ?? ''}|${settlement.chain}`;
 
     let balances = this.#balances.get(balanceKey);
     if (balances === undefined || refresh) {
@@ -704,10 +731,9 @@ export class FundingStore {
     }
 
     const channel = this.#channelView({
-      profileId: profile.id,
+      connectorUrl: profile.connectorUrl,
       pubkey: seed.pubkey ?? '',
       chain: settlement.chain,
-      connectorUrl: profile.connectorUrl,
       store,
     });
     const gas = gasView({
@@ -773,13 +799,14 @@ export class FundingStore {
    * shown, and it is why this view can poll.
    */
   #channelView(input: {
-    profileId: string;
+    connectorUrl: string;
     pubkey: string;
     chain: string;
-    connectorUrl: string;
     store: ChannelStore;
   }): ChannelView {
-    const running = this.#opens.get(this.#openKey(input.profileId, input.pubkey, input.chain));
+    const running = this.#opens.get(
+      this.#openKey(input.connectorUrl, input.pubkey, input.chain)
+    );
     if (running?.state === 'opening') {
       return {
         phase: 'opening',
@@ -847,7 +874,7 @@ export class FundingStore {
 
   async #readFaucet(
     profile: NetworkProfile,
-    options: { refresh?: boolean }
+    options: FundingViewOptions
   ): Promise<FaucetView | undefined> {
     const url = profile.faucetUrl;
     if (!url) return undefined;
@@ -877,8 +904,25 @@ export class FundingStore {
     };
   }
 
-  #openKey(profileId: string, pubkey: string, chain: string): string {
-    return `${profileId}|${pubkey}|${chain}`;
+  #openKey(connectorUrl: string, pubkey: string, chain: string): string {
+    return `${connectorUrl}|${pubkey}|${chain}`;
+  }
+
+  /**
+   * The profile this view is of, with one field possibly replaced.
+   *
+   * A channel is opened with a CONNECTOR, not with a network: the settlement
+   * address, the token and the chains all come from that connector's own
+   * `GET /ilp`. Everything else — which chains this console can reach, where
+   * its channel state lives, whether there is a faucet — stays the active
+   * profile's. So a connector override is exactly one substituted field, and
+   * the rest of the funding machinery does not need to know it happened (#92).
+   */
+  #target(connectorUrl?: string): NetworkProfile {
+    const profile = this.#deps.profile();
+    return connectorUrl === undefined || connectorUrl === profile.connectorUrl
+      ? profile
+      : { ...profile, connectorUrl };
   }
 
   #at(): Date {

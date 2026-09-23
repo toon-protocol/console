@@ -12,6 +12,7 @@ import type { ConnectorHealth } from './connector-health.js';
 import type { DirectoryFilters, DirectoryResult } from './directory.js';
 import { PassphraseFileKeystore, keystoreFilePath } from './keystore-file.js';
 import { fakeChainPort, fundingStoreFor } from './funding.testkit.js';
+import { idleLeases } from './lease.testkit.js';
 import { consolePaths, activeProfileFilePath } from './paths.js';
 import { ProfileStore } from './profile-store.js';
 import { SignerIndex, signerIndexPath } from './signer-index.js';
@@ -57,6 +58,7 @@ describe('GET /api/directory', () => {
         paths,
         chains: fakeChainPort(),
       }),
+      ...idleLeases(paths),
       version: { name: '@toon-protocol/console-daemon', version: '0.1.0' },
       paths,
       startedAt: new Date('2026-09-22T00:00:00Z'),

@@ -11,6 +11,8 @@ import {
   type DirectoryResult,
 } from './directory.js';
 import { FundingError, type FundingStore } from './funding.js';
+import { LeaseError, type LeaseStore, type SpawnRequest } from './lease.js';
+import { LeaseVaultError, type LeaseVault } from './lease-vault.js';
 import {
   KeystoreUnavailableError,
   PassphraseRequiredError,
@@ -62,6 +64,8 @@ export interface ApiDeps {
   readonly session: AccountSession;
   readonly chainSeed: ChainSeedStore;
   readonly funding: FundingStore;
+  readonly vault: LeaseVault;
+  readonly leases: LeaseStore;
   readonly readHealth: (
     profile: NetworkProfile,
     options?: { forceRefresh?: boolean }
@@ -166,6 +170,14 @@ export async function handleApi(deps: ApiDeps, request: ApiRequest): Promise<Api
   if (path === '/api/chain-seed' || path.startsWith('/api/chain-seed/')) {
     try {
       return await handleChainSeed(deps.chainSeed, method, path, request.body);
+    } catch (error) {
+      return accountProblem(error);
+    }
+  }
+
+  if (path === '/api/leases' || path.startsWith('/api/leases/')) {
+    try {
+      return await handleLeases(deps, method, path, request.body);
     } catch (error) {
       return accountProblem(error);
     }
@@ -369,7 +381,12 @@ async function handleFunding(
   const at = (route: string, verb: string) => path === route && method === verb;
 
   if (at('/api/funding', 'GET')) {
-    return ok(await funding.status({ refresh: query.get('refresh') === '1' }));
+    return ok(
+      await funding.status({
+        refresh: query.get('refresh') === '1',
+        ...optional('connectorUrl', query.get('connector') ?? undefined),
+      })
+    );
   }
 
   if (at('/api/funding/channel', 'POST')) {
@@ -387,6 +404,10 @@ async function handleFunding(
         await funding.openChannel({
           chain,
           ...optional('deposit', string(asRecord(body), 'deposit')),
+          // Which connector to open WITH. Absent is the active profile's own,
+          // which is every case #90 had; a spawn paid at a provider's
+          // connector needs a channel with that one instead (#92).
+          ...optional('connectorUrl', string(asRecord(body), 'connector')),
         })
       );
     } catch (error) {
@@ -535,6 +556,131 @@ async function handleTemplates(
   return problem(404, 'unknown_route', `No route ${method} ${path}.`);
 }
 
+/**
+ * Leases: the Lease Vault and the paid spawn (TOON_Network#92, ADR 0021).
+ *
+ * `GET` is the vault — every lease this account holds, and where a new record
+ * would be written. `POST /preflight` is a spawn with nothing spent, which
+ * exists because a refused paid request is still billed (spec §5,
+ * TOON_Network#115): a person is shown the route, the price, the connector
+ * that pays and every problem with the request before any of it costs an
+ * interval. `POST /spawn` is the one route in this console that hands money to
+ * somebody else — and `POST /api/templates/spawn` above ends up in the same
+ * place, through `LeaseStore.spawnFromTemplate`.
+ *
+ * **No answer here carries a Root Secret.** The type `LeaseView` has no such
+ * field, so there is no route out of the vault that could return one by
+ * forgetting to strip it, and `api-leases.test.ts` is the test that says so.
+ */
+async function handleLeases(
+  deps: ApiDeps,
+  method: string,
+  path: string,
+  body: unknown
+): Promise<ApiResponse> {
+  const at = (route: string, verb: string) => path === route && method === verb;
+
+  if (at('/api/leases', 'GET')) return ok(deps.vault.status());
+  if (at('/api/leases/refresh', 'POST')) return ok(await deps.vault.refresh());
+
+  if (at('/api/leases/preflight', 'POST') || at('/api/leases/spawn', 'POST')) {
+    const request = readSpawnRequest(body);
+    if ('error' in request) return problem(400, 'invalid_request', request.error);
+    if (path === '/api/leases/preflight') {
+      return ok(await deps.leases.preflight(request.value));
+    }
+    return ok(await deps.leases.spawn(request.value));
+  }
+
+  return problem(404, 'unknown_route', `No route ${method} ${path}.`);
+}
+
+/**
+ * A manual spawn request, out of a JSON body.
+ *
+ * Read field by field rather than cast, because everything here ends up in a
+ * packet that is paid for: a body with an extra key must not become a Lease
+ * Request with an extra key, which a provider refuses as `invalid_request` and
+ * bills for (spec §6.1, ADR 0004). The content itself is assembled by
+ * `buildSpawnContent` — the same builder the Template path uses — so what
+ * happens here is translation and nothing more.
+ */
+function readSpawnRequest(body: unknown): { value: SpawnRequest } | { error: string } {
+  const fields = asRecord(body);
+  const provider = string(fields, 'provider');
+  const listing = string(fields, 'listing');
+  if (!provider || !listing) {
+    return { error: 'Body must name the `provider` and the `listing` to spawn on.' };
+  }
+  const image = asRecord(fields.image);
+  const digest = string(image, 'digest');
+  if (!digest) {
+    return {
+      error: 'Body must carry an `image` with a `digest`: `sha256:` and 64 hex characters.',
+    };
+  }
+  const entry = image.registryEntry === undefined ? undefined : asRecord(image.registryEntry);
+  const entryAddress = entry === undefined ? undefined : string(entry, 'address');
+
+  const ports: { containerPort: number; protocol?: 'tcp' | 'udp' }[] = [];
+  const rawPorts = fields.ports;
+  if (rawPorts !== undefined) {
+    if (!Array.isArray(rawPorts)) return { error: '`ports` is an array.' };
+    for (const raw of rawPorts) {
+      const containerPort =
+        typeof raw === 'number' ? raw : number(asRecord(raw), 'containerPort');
+      if (containerPort === undefined) return { error: 'Every port needs a `containerPort`.' };
+      const protocol = typeof raw === 'number' ? undefined : string(asRecord(raw), 'protocol');
+      if (protocol !== undefined && protocol !== 'tcp' && protocol !== 'udp') {
+        return { error: 'A port\u2019s `protocol` is "tcp" or "udp".' };
+      }
+      ports.push({ containerPort, ...(protocol === undefined ? {} : { protocol }) });
+    }
+  }
+
+  const env: Record<string, string> = {};
+  for (const [name, value] of Object.entries(asRecord(fields.env))) {
+    if (typeof value !== 'string')
+      return { error: `The value of env \`${name}\` is a string.` };
+    env[name] = value;
+  }
+
+  return {
+    value: {
+      provider,
+      listing,
+      image: {
+        digest,
+        ...optional('reference', string(image, 'reference')),
+        ...(entryAddress === undefined
+          ? {}
+          : {
+              registryEntry: {
+                address: entryAddress,
+                ...optional('relay', string(entry ?? {}, 'relay')),
+              },
+            }),
+      },
+      sshPublicKey: string(fields, 'sshPublicKey') ?? '',
+      ...(ports.length === 0 ? {} : { ports }),
+      ...(Object.keys(env).length === 0 ? {} : { env }),
+      ...optional('volumeGb', number(fields, 'volumeGb')),
+      ...optional('entrypoint', strings(fields, 'entrypoint')),
+      ...optional('args', strings(fields, 'args')),
+      ...optional('workloadId', string(fields, 'workloadId')),
+      ...optional('chain', string(fields, 'chain')),
+      ...(fields.localOnly === true ? { localOnly: true } : {}),
+    } as SpawnRequest,
+  };
+}
+
+/** An array of strings, or nothing. An array with a non-string in it is nothing. */
+function strings(fields: Record<string, unknown>, key: string): string[] | undefined {
+  const value = fields[key];
+  if (!Array.isArray(value)) return undefined;
+  return value.every((entry) => typeof entry === 'string') ? (value as string[]) : undefined;
+}
+
 /** The half of a spawn a Template leaves to the tenant (§8.3). */
 function readTemplateSettings(
   fields: Record<string, unknown>
@@ -618,6 +764,30 @@ function accountProblem(error: unknown): ApiResponse {
   if (error instanceof RelayListError) return problem(400, error.code, error.message);
   if (error instanceof FundingError) return problem(error.status, error.code, error.message);
   if (error instanceof SealingError) return problem(409, error.code, error.message);
+  if (error instanceof LeaseVaultError) {
+    return {
+      status: error.status,
+      body: {
+        error: error.code,
+        message: error.message,
+        ...(error.relays ? { relays: error.relays } : {}),
+      },
+    };
+  }
+  if (error instanceof LeaseError) {
+    // The provider's OWN refusal code travels with the problem, because "the
+    // spawn was refused" is only useful beside which code it was refused with
+    // (spec §5). None of it comes from the request body.
+    return {
+      status: error.status,
+      body: {
+        error: error.code,
+        message: error.message,
+        ...(error.providerError === undefined ? {} : { providerError: error.providerError }),
+        ...(error.relays ? { relays: error.relays } : {}),
+      },
+    };
+  }
   if (error instanceof ChainSeedError) {
     // The per-relay detail travels with the problem, because "it was not
     // published" is only useful alongside which relay said what. None of it

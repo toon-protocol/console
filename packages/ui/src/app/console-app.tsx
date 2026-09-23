@@ -6,6 +6,7 @@ import { useChainSeed } from '@/hooks/use-chain-seed';
 import { useConsole } from '@/hooks/use-console';
 import { useDirectory } from '@/hooks/use-directory';
 import { useFunding } from '@/hooks/use-funding';
+import { useLeases } from '@/hooks/use-leases';
 import { useTemplates } from '@/hooks/use-templates';
 
 import { AccountCard, AccountChip } from './account-view';
@@ -16,13 +17,21 @@ import { HealthView } from './health-view';
 import { ProfileSwitcher } from './profile-switcher';
 import { SignInView } from './sign-in-view';
 import { TemplatesView } from './templates-view';
+import { WorkloadsView } from './workloads-view';
 
 /**
  * The shell.
  *
- * Five views now — health (#87), the Provider Directory (#91), Templates (#94),
- * the Account (#88, with its Chain Seed from #89) and Funds (#90) — behind the
- * header that will carry the workload dashboard (#93 onward).
+ * Six views now — health (#87), the Provider Directory (#91), Templates (#94),
+ * Workloads (#92), the Account (#88, with its Chain Seed from #89) and Funds
+ * (#90) — behind the header that will carry the runway and the extend and
+ * terminate controls (#93).
+ *
+ * Workloads is where the console first SPENDS: it holds the Lease Vault and
+ * the spawn form. It is also the one view that needs the Provider Directory
+ * loaded for a reason other than looking at it, which is why the directory
+ * hook is live on both tabs — a spawn names a Listing, and the Listing's
+ * current version and price come off the relays rather than out of a form.
  *
  * Templates sits beside Providers rather than inside it, because the two
  * answer different questions: a Listing is WHERE a workload runs and what it
@@ -45,12 +54,13 @@ import { TemplatesView } from './templates-view';
  * daemon holds, so the daemon is the only thing that knows.
  */
 
-type Tab = 'health' | 'directory' | 'templates' | 'account' | 'funds';
+type Tab = 'health' | 'directory' | 'templates' | 'workloads' | 'account' | 'funds';
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'health', label: 'Health' },
   { id: 'directory', label: 'Providers' },
   { id: 'templates', label: 'Templates' },
+  { id: 'workloads', label: 'Workloads' },
   { id: 'funds', label: 'Funds' },
   { id: 'account', label: 'Account' },
 ];
@@ -61,7 +71,7 @@ export function ConsoleApp() {
   // The directory is keyed to the active profile: a switch is another network,
   // another relay and another set of providers.
   const directory = useDirectory({
-    active: tab === 'directory',
+    active: tab === 'directory' || tab === 'workloads',
     ...(health === undefined ? {} : { profileId: health.profile.id }),
   });
   // Keyed to the profile for the same reason the directory is: Templates are
@@ -81,6 +91,13 @@ export function ConsoleApp() {
     active: tab === 'funds',
     pubkey: account.status?.account?.pubkey,
     ...(health === undefined ? {} : { profileId: health.profile.id }),
+  });
+  // Keyed to the ACCOUNT alone. A lease belongs to whoever holds its Root
+  // Secret, and the vault holds leases from every network this account has
+  // spawned on — each record says which (ADR 0021).
+  const leases = useLeases({
+    active: tab === 'workloads',
+    pubkey: account.status?.account?.pubkey,
   });
 
   return (
@@ -140,7 +157,14 @@ export function ConsoleApp() {
           </div>
         )}
 
-        {tab === 'funds' ? (
+        {tab === 'workloads' ? (
+          <WorkloadsView
+            leases={leases}
+            {...(directory.directory === undefined ? {} : { directory: directory.directory })}
+            signedIn={signedIn}
+            onFindProviders={() => setTab('directory')}
+          />
+        ) : tab === 'funds' ? (
           <FundingView funding={funding} />
         ) : tab === 'account' ? (
           account.status &&

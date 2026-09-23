@@ -11,6 +11,7 @@ import { InMemoryChainSeedCache } from './chain-seed-cache.js';
 import { handleApi, type ApiDeps, type ApiResponse } from './api.js';
 import { PassphraseFileKeystore, keystoreFilePath } from './keystore-file.js';
 import { fakeChainPort, fundingStoreFor } from './funding.testkit.js';
+import { idleLeases } from './lease.testkit.js';
 import { activeProfileFilePath, consolePaths, type ConsolePaths } from './paths.js';
 import { ProfileStore } from './profile-store.js';
 import { SignerIndex, signerIndexPath } from './signer-index.js';
@@ -50,6 +51,7 @@ describe('the account routes', () => {
         paths,
         chains: fakeChainPort(),
       }),
+      ...idleLeases(paths),
       version: { name: '@toon-protocol/console-daemon', version: '0.1.0' },
       paths,
       startedAt: new Date('2026-09-22T00:00:00Z'),
