@@ -29,6 +29,9 @@ import { startServer } from './server.js';
 import { SignerIndex, signerIndexPath } from './signer-index.js';
 import { readTemplates } from './templates.js';
 import { daemonVersion } from './version.js';
+import { AutoExtender, FileAutoExtendStore } from './auto-extend.js';
+import { WorkloadStore } from './workload.js';
+import { FileWorkloadNoteStore } from './workload-cache.js';
 
 /**
  * `toon-console-daemon` — what `systemd --user` starts.
@@ -44,6 +47,17 @@ import { daemonVersion } from './version.js';
  */
 
 const DEFAULT_PORT = 7797;
+
+/**
+ * How often every armed budget is looked at.
+ *
+ * A minute, against a Lease Interval measured in hours and a lead window of at
+ * least sixty seconds, so a window is never missed by more than one tick. It
+ * costs one free `status` per armed lease per minute at the provider — and
+ * nothing at all for a lease with no budget, which is every lease until
+ * somebody arms one.
+ */
+const AUTO_EXTEND_TICK_MS = 60_000;
 
 export async function main(): Promise<void> {
   const paths = consolePaths();
@@ -167,6 +181,35 @@ export async function main(): Promise<void> {
     npub: () => process.env.TOON_CONSOLE_DOCS_NPUB,
   });
 
+  // The dashboard: the module a person lives in after a spawn
+  // (TOON_Network#93). It shares the provider port with the spawn above —
+  // `status`, `extend` and `terminate` are the same kind of packet on the same
+  // kind of route — and takes its own note store, which caches nothing but the
+  // answers to a FREE read (§6.5) so that a card opens with what it knew and
+  // an ending survives the provider's own sweep.
+  const notes = new FileWorkloadNoteStore(paths);
+  const workloads = new WorkloadStore({
+    profile: () => profiles.active(),
+    vault,
+    chainSeed,
+    readHealth: (profile) => readConnectorHealth(profile, reader),
+    readDirectory: (profile) => readDirectory({ profile }),
+    provider: new LiveProviderPort(),
+    paths,
+    notes,
+    autoExtend: () => budgets,
+  });
+
+  // Budgets: the one thing here that spends with nobody present. It is armed
+  // per lease, never by default, and `auto-extend.ts` lists the nine rules
+  // that can each stop it on its own.
+  const budgets: AutoExtender = new AutoExtender({
+    store: new FileAutoExtendStore(paths),
+    workloads,
+    pubkey: () => session.signingPort()?.pubkey,
+    profileId: () => profiles.active().id,
+  });
+
   const port = Number(process.env.TOON_CONSOLE_PORT ?? DEFAULT_PORT);
   const recordPath = launchFilePath(paths);
 
@@ -199,6 +242,8 @@ export async function main(): Promise<void> {
       // the same result as the equivalent manual spawn" is true by
       // construction rather than by two builders agreeing.
       spawnFromTemplate: (request) => leases.spawnFromTemplate(request),
+      workloads,
+      autoExtend: budgets,
     },
   }).catch((error: unknown) => {
     if (isAddressInUse(error)) {
@@ -226,7 +271,20 @@ export async function main(): Promise<void> {
       `open: ${record.launchUrl}\n`
   );
 
+  // Every armed budget, once a minute. `unref` so a tick never keeps the
+  // process alive: a daemon that has been asked to stop must stop, and a lease
+  // that missed one minute's window catches it on the next.
+  const ticker = setInterval(() => {
+    void budgets.tick().catch((error: unknown) => {
+      process.stderr.write(
+        `automatic extension: ${error instanceof Error ? error.message : String(error)}\n`
+      );
+    });
+  }, AUTO_EXTEND_TICK_MS);
+  ticker.unref();
+
   const shutdown = (signal: NodeJS.Signals) => {
+    clearInterval(ticker);
     process.stdout.write(`\n${signal} — stopping\n`);
     removeLaunchRecord(recordPath);
     void running.close().then(

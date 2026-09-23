@@ -1,6 +1,6 @@
 import type { ChannelStore } from '@toon-protocol/client';
 
-import { channelStoreFor } from './channel-store.js';
+import { channelStoreFor, findChannelBinding } from './channel-store.js';
 import type { PayerKeys } from './chain-seed.js';
 import type { ConnectorHealth } from './connector-health.js';
 import { resolveRpc } from './funding.js';
@@ -464,13 +464,11 @@ export class PaidRelayWriter implements RelayWriter {
     }
 
     const channels = channelStoreFor(this.#deps.paths, profile.id);
-    const bindings = channels.store.listBindings?.() ?? [];
     for (const settlement of health.settlements) {
-      const binding = bindings.find(
-        (entry) =>
-          entry.binding.supersededAt === undefined &&
-          entry.key.split('|')[1] === settlement.chain &&
-          sameConnector(entry.key.split('|')[0] ?? '', profile.connectorUrl)
+      const binding = findChannelBinding(
+        channels.store,
+        profile.connectorUrl,
+        settlement.chain
       );
       if (!binding) continue;
       return {
@@ -481,7 +479,7 @@ export class PaidRelayWriter implements RelayWriter {
         chain: settlement.chain,
         chainKind: settlement.kind,
         rpcUrl: resolveRpc(profile, settlement.kind).url,
-        channelId: binding.binding.channelId,
+        channelId: binding.channelId,
         channelStore: channels.store,
       };
     }
@@ -551,10 +549,4 @@ function toOutcome(plan: WritePlan, outcome: RelayPacketOutcome): RelayWriteOutc
     state: 'written',
     ...(outcome.cost === undefined ? {} : { cost: outcome.cost }),
   };
-}
-
-/** `https://node.example` and `https://node.example/ilp` are the same node. */
-function sameConnector(a: string, b: string): boolean {
-  const base = (url: string) => url.replace(/\/+$/u, '').replace(/\/ilp$/u, '');
-  return base(a) === base(b);
 }

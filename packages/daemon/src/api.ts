@@ -34,6 +34,14 @@ import {
 } from './template-spawn.js';
 import type { TemplateGalleryResult, TemplateView } from './templates.js';
 import type { DaemonVersion } from './version.js';
+import {
+  WorkloadError,
+  type DashboardView,
+  type ExtendResult,
+  type TerminateResult,
+  type WorkloadCard,
+} from './workload.js';
+import type { ArmRequest, AutoExtendPolicy } from './auto-extend.js';
 
 /**
  * The console's local JSON API.
@@ -91,7 +99,31 @@ export interface ApiDeps {
    * wired, and `POST /api/templates/spawn` says so rather than pretending.
    */
   readonly spawnFromTemplate?: TemplateSpawnPort | undefined;
+  /**
+   * The dashboard (TOON_Network#93). Absent only in a build that wired the
+   * vault without it, and the routes say so rather than pretending.
+   */
+  readonly workloads?: WorkloadPort | undefined;
+  /** The budgets. A dashboard reads perfectly well without them armed. */
+  readonly autoExtend?: AutoExtendPort | undefined;
   readonly now?: (() => Date) | undefined;
+}
+
+/** What `/api/workloads/*` needs of `WorkloadStore`, and no more. */
+export interface WorkloadPort {
+  dashboard(options?: { refresh?: boolean }): Promise<DashboardView>;
+  card(workloadId: string, options?: { refresh?: boolean }): Promise<WorkloadCard>;
+  extend(
+    workloadId: string,
+    options?: { maxPrice?: string | undefined; chain?: string | undefined }
+  ): Promise<ExtendResult>;
+  terminate(workloadId: string): Promise<TerminateResult>;
+}
+
+/** What `/api/workloads/<id>/auto-extend` needs of `AutoExtender`. */
+export interface AutoExtendPort {
+  arm(request: ArmRequest): Promise<AutoExtendPolicy>;
+  disarm(workloadId: string): AutoExtendPolicy | undefined;
 }
 
 export interface ApiRequest {
@@ -190,6 +222,14 @@ export async function handleApi(deps: ApiDeps, request: ApiRequest): Promise<Api
   if (path === '/api/leases' || path.startsWith('/api/leases/')) {
     try {
       return await handleLeases(deps, method, path, request.body);
+    } catch (error) {
+      return accountProblem(error);
+    }
+  }
+
+  if (path === '/api/workloads' || path.startsWith('/api/workloads/')) {
+    try {
+      return await handleWorkloads(deps, method, path, request.query, request.body);
     } catch (error) {
       return accountProblem(error);
     }
@@ -662,6 +702,120 @@ async function handleLeases(
 }
 
 /**
+ * The dashboard: what a lease is doing, and the three things to do about it
+ * (TOON_Network#93, spec §6.3, §6.5, §6.6).
+ *
+ * The shape of this surface is the shape of what things cost.
+ *
+ * `GET /api/workloads` is built from what the console already knows and sends
+ * nothing. `?refresh=1` asks every provider for its lease's state, which is
+ * free at the provider but not necessarily through a hop — so it is a query a
+ * caller opts into rather than something a window causes by existing.
+ *
+ * `POST …/extend` is the only route here that **spends**: one Lease Interval
+ * at the Listing's price, with a refusal billed exactly like an acceptance
+ * (ADR 0003, TOON_Network#115). It checks everything checkable first, and when
+ * a check fails it answers `sent: false` with the reasons and NOTHING is paid.
+ * It is never reached by a GET and never by an effect.
+ *
+ * `POST …/terminate` is free and irreversible. There is no refund (§6.6).
+ *
+ * `POST …/auto-extend` arms a budget: a standing instruction to spend while
+ * nobody is watching. It takes `confirm: true` and the price being agreed to,
+ * and `auto-extend.ts` says why.
+ *
+ * As everywhere else on this surface, **no answer carries a Root Secret or a
+ * Continuation Token.** The token is derived inside the vault for the length
+ * of one packet and never leaves it; `api-workloads.test.ts` is the test that
+ * says so.
+ */
+async function handleWorkloads(
+  deps: ApiDeps,
+  method: string,
+  path: string,
+  query: URLSearchParams,
+  body: unknown
+): Promise<ApiResponse> {
+  const workloads = deps.workloads;
+  if (workloads === undefined) {
+    return problem(
+      501,
+      'dashboard_unwired',
+      'This console holds leases but has no dashboard wired to act on them. That is a ' +
+        'packaging fault rather than anything about the request.'
+    );
+  }
+
+  const refresh = query.get('refresh') === '1';
+  if (path === '/api/workloads' && method === 'GET') {
+    return ok(await workloads.dashboard({ refresh }));
+  }
+
+  const parts = path.split('/').filter((part) => part !== '');
+  // ['api', 'workloads', '<id>', '<action>'?]
+  const workloadId = parts[2];
+  const action = parts[3];
+  if (workloadId === undefined || parts.length > 4) {
+    return problem(404, 'unknown_route', `No route ${method} ${path}.`);
+  }
+
+  try {
+    if (action === undefined && method === 'GET') {
+      return ok(await workloads.card(workloadId, { refresh }));
+    }
+    if (action === 'status' && method === 'POST') {
+      return ok(await workloads.card(workloadId, { refresh: true }));
+    }
+    if (action === 'extend' && method === 'POST') {
+      const fields = asRecord(body);
+      return ok(
+        await workloads.extend(workloadId, {
+          ...optional('maxPrice', string(fields, 'maxPrice')),
+          // Which settlement chain to pay on, when this lease's record does
+          // not say and the account holds channels on more than one.
+          ...optional('chain', string(fields, 'chain')),
+        })
+      );
+    }
+    if (action === 'terminate' && method === 'POST') {
+      return ok(await workloads.terminate(workloadId));
+    }
+    if (action === 'auto-extend') {
+      const budgets = deps.autoExtend;
+      if (budgets === undefined) {
+        return problem(
+          501,
+          'budgets_unwired',
+          'Automatic extension is not wired in this build, so no budget can be armed.'
+        );
+      }
+      if (method === 'POST') {
+        const fields = asRecord(body);
+        await budgets.arm({
+          workloadId,
+          budget: string(fields, 'budget') ?? '',
+          agreedPrice: string(fields, 'agreedPrice') ?? '',
+          ...optional('leadSeconds', number(fields, 'leadSeconds')),
+          confirm: fields.confirm === true,
+        });
+        return ok(await workloads.card(workloadId, { refresh: false }));
+      }
+      if (method === 'DELETE') {
+        budgets.disarm(workloadId);
+        return ok(await workloads.card(workloadId, { refresh: false }));
+      }
+    }
+  } catch (error) {
+    if (error instanceof WorkloadError) {
+      return problem(error.status, error.code, error.message);
+    }
+    throw error;
+  }
+
+  return problem(404, 'unknown_route', `No route ${method} ${path}.`);
+}
+
+/**
  * A manual spawn request, out of a JSON body.
  *
  * Read field by field rather than cast, because everything here ends up in a
@@ -844,6 +998,7 @@ function accountProblem(error: unknown): ApiResponse {
   }
   if (error instanceof FundingError) return problem(error.status, error.code, error.message);
   if (error instanceof SealingError) return problem(409, error.code, error.message);
+  if (error instanceof WorkloadError) return problem(error.status, error.code, error.message);
   if (error instanceof LeaseVaultError) {
     return {
       status: error.status,

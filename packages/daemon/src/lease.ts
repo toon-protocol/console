@@ -1,6 +1,6 @@
 import type { ChannelStore } from '@toon-protocol/client';
 
-import { channelStoreFor } from './channel-store.js';
+import { channelStoreFor, findChannelBinding } from './channel-store.js';
 import type { ChainSeedStore, PayerKeys } from './chain-seed.js';
 import type { ConnectorHealth } from './connector-health.js';
 import { continuationFor, mintRequestId, mintRootSecret } from './continuation.js';
@@ -397,6 +397,7 @@ export class LeaseStore {
         ...(ready.provider.profile.hidden ? { hidden: true } : {}),
       },
       paid_at: ready.payAt,
+      ...(ready.chain === undefined ? {} : { paid_chain: ready.chain }),
       listing: {
         name: ready.listing.name,
         version: ready.listing.version,
@@ -723,6 +724,7 @@ export class LeaseStore {
         route,
         content,
         payAt: payment.payAt,
+        ...(payment.view.chain === undefined ? {} : { chain: payment.view.chain }),
         sealTo: provider.profile.connectorSealKey,
         chainKind: payment.chainKind,
         rpcUrl: payment.rpcUrl,
@@ -806,14 +808,8 @@ export class LeaseStore {
     }
 
     const channels = channelStoreFor(this.#deps.paths, profile.id);
-    const bindings = channels.store.listBindings?.() ?? [];
     for (const settlement of settlements) {
-      const binding = bindings.find(
-        (entry) =>
-          entry.binding.supersededAt === undefined &&
-          entry.key.split('|')[1] === settlement.chain &&
-          sameConnector(entry.key.split('|')[0] ?? '', payAt)
-      );
+      const binding = findChannelBinding(channels.store, payAt, settlement.chain);
       if (!binding) continue;
       const rpc = resolveRpc(profile, settlement.kind);
       return {
@@ -826,7 +822,7 @@ export class LeaseStore {
           via,
           reason,
           chain: settlement.chain,
-          channelId: binding.binding.channelId,
+          channelId: binding.channelId,
           ...(routePrice === undefined ? {} : { routePrice }),
         },
       };
@@ -893,6 +889,8 @@ interface ReadyPlan {
   readonly route: string;
   readonly content: SpawnContent;
   readonly payAt: string;
+  /** The settlement chain this spawn pays on. An extension must use the same. */
+  readonly chain?: string | undefined;
   readonly sealTo: string;
   readonly chainKind: 'evm' | 'solana';
   readonly rpcUrl: string;
@@ -1194,12 +1192,6 @@ export function isHiddenServiceUrl(url: string): boolean {
   } catch {
     return false;
   }
-}
-
-/** `https://node.example` and `https://node.example/ilp` are the same node. */
-function sameConnector(a: string, b: string): boolean {
-  const base = (url: string) => url.replace(/\/+$/u, '').replace(/\/ilp$/u, '');
-  return base(a) === base(b);
 }
 
 function describeRefusal(outcome: Extract<PacketOutcome, { kind: 'refused' }>): string {

@@ -265,6 +265,22 @@ describe('the Workloads view', () => {
         if (path === '/api/leases' || path === '/api/leases/refresh') {
           return Promise.resolve(answer(vault));
         }
+        // The dashboard is #93's, and this file is about the spawn form. An
+        // empty one keeps the two reads honestly separate: a vault record the
+        // dashboard has not caught up with is still listed, which is what the
+        // "lists a vaulted workload" case below is checking.
+        if (path.startsWith('/api/workloads')) {
+          return Promise.resolve(
+            answer({
+              state: 'ready',
+              pubkey: 'b'.repeat(64),
+              profileId: 'devnet',
+              cards: [],
+              unreadable: 0,
+              checkedAt: '2026-09-23T10:00:00.000Z',
+            })
+          );
+        }
         if (path === '/api/leases/preflight') return Promise.resolve(answer(preflight));
         if (path === '/api/leases/spawn') {
           return Promise.resolve(answer(spawnAnswer.body, spawnAnswer.status));

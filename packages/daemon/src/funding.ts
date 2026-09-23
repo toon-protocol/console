@@ -1,6 +1,6 @@
 import { defaultRpcUrl, type ChannelStore } from '@toon-protocol/client';
 
-import { channelStoreFor } from './channel-store.js';
+import { channelStoreFor, findChannelBinding } from './channel-store.js';
 import {
   CUSTODY_WARNING,
   type ChainAddress,
@@ -837,7 +837,7 @@ export class FundingStore {
       };
     }
 
-    const binding = findBinding(input.store, input.connectorUrl, input.chain);
+    const binding = findChannelBinding(input.store, input.connectorUrl, input.chain);
     if (!binding) {
       if (running?.state === 'failed') {
         return {
@@ -1088,39 +1088,6 @@ function whatBlocksAnOpen(gas: GasView, channel: ChannelView): string | undefine
     return 'This chain could not be read, so whether an open can be paid for is unknown.';
   }
   return undefined;
-}
-
-/** The peer→channel binding this connector and chain, out of the console's store. */
-function findBinding(
-  store: ChannelStore,
-  connectorUrl: string,
-  chain: string
-): { channelId: string; depositTotal?: bigint; openedAt?: string } | undefined {
-  const bindings = store.listBindings?.() ?? [];
-  // The client keys a binding `<connector>|<chain>|<settlement contract>`. The
-  // first two fields are facts this console holds; the third is the library's
-  // to spell, so it is matched by prefix rather than reconstructed. A key shape
-  // that changes costs a `none` — "no channel recorded here" — and never a
-  // wrong channel.
-  const wanted = bindings.filter(
-    (entry) =>
-      entry.binding.supersededAt === undefined &&
-      entry.key.split('|')[1] === chain &&
-      sameConnector(entry.key.split('|')[0] ?? '', connectorUrl)
-  );
-  const found = wanted.at(-1)?.binding;
-  if (!found) return undefined;
-  return {
-    channelId: found.channelId,
-    ...(found.depositTotal === undefined ? {} : { depositTotal: found.depositTotal }),
-    ...(found.openedAt === undefined ? {} : { openedAt: found.openedAt }),
-  };
-}
-
-/** `https://node.example` and `https://node.example/ilp` are the same node. */
-function sameConnector(a: string, b: string): boolean {
-  const base = (url: string) => url.replace(/\/+$/u, '').replace(/\/ilp$/u, '');
-  return base(a) === base(b);
 }
 
 /** A deposit arrives as a decimal string of base units, or not at all. */

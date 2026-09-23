@@ -322,6 +322,113 @@ curl -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \
   http://127.0.0.1:7797/api/leases/preflight
 ```
 
+## The dashboard
+
+Once a lease exists, the **Workloads** view is one card per workload: what it is doing, how
+long the money keeps it doing that, and the three things that can be done about it
+([§6.3][spec], §6.5, §6.6, §6.7).
+
+### What it is doing
+
+The state and the expiry are read from the provider with the lease's **Continuation
+Token**, derived inside the daemon from the Root Secret for the length of one packet. Four
+answers are told apart, and the difference matters:
+
+| | What it means |
+| --- | --- |
+| **read** | The provider answered. `provisioning`, `reserved`, `running`, `stopped`, or an ending |
+| **silent** | No answer came back, or a hop refused the packet. **The lease may be running perfectly** |
+| **refused** | The provider answered a refusal — `unknown_workload`, `not_tenant`. Something definite |
+| **unread** | This console could not ask. The only one that is its own fault |
+
+A lease can end by **Expiry** (nobody bought another interval), **Termination** (its tenant
+ended it) or **Eviction** (its provider did, and must publish an Eviction Notice). The card
+says which; it never flattens the three into "gone". An ending a later spec version adds is
+quoted verbatim rather than guessed at.
+
+### Runway
+
+**How long current funds keep the workload alive**: the time already paid for, plus the
+whole Lease Intervals the channel can still buy. Either half can be missing, and when one
+is the card says which — never a zero standing in for "not known".
+
+The price counted is **the paying connector's quote for this lease's `.extend` route**, not
+the Listing's µUSDC figure. They are different numbers in different units: a channel's
+balance is in base units of whatever that connector settles in, and a connector that
+forwards adds its own fee ([TOON_Network#82][i82]: the connector decides what a packet
+costs, and nothing here recomputes one). The Listing's own price is shown beside it.
+
+### Free where it is free
+
+`status` and `terminate` are free routes (§5) — but that is the **provider's** price. A
+connector that merely forwards charges its own fee to carry them: on the local sandbox the
+hub charges 100 base units for the same `status` the provider's connector prices at zero.
+So the console reads both quotes and buys a free route where it is free, falling back to
+[ADR 0005][adr5]'s ordinary preference and **naming the price** when no zero-priced path
+exists.
+
+### Extending
+
+An extension buys one interval and **is not free**, and §6.3's refusals — `expired`,
+`not_running`, `wrong_listing_version`, `unknown_workload` — are billed at the full price
+([ADR 0003][adr3], [TOON_Network#115][i115]). So everything checkable is checked before a
+packet goes out, and when a check fails the answer is `sent: false` with nothing paid:
+
+- the Listing still exists **at this lease's version** — a retired one is
+  `wrong_listing_version`;
+- a free `status` says the lease has not ended, and is not a Reserved Warm Standby (that is
+  `.standby.extend`, at the standby price);
+- the price has not moved past what the caller agreed to;
+- there is a channel with the connector that would collect, **on the chain this lease was
+  bought on** — a connector forwarding to a provider's has to convert, and refuses a packet
+  whose amount converts to nothing at the rate it declares, at full price.
+
+`extend` takes its content **bare** — `{ "workload_id": "…" }`, no Lease Request and no
+token, because any payer may extend any lease ([ADR 0005][adr5]) — while `status` and
+`terminate` take §6.1's full request and must present the lease's own token. A Gateway
+Grant admits `status` and nothing else (§6.5.1).
+
+### Automatic extension, within a budget
+
+The one thing in this console that **spends money with nobody present**. Nine rules can
+each stop it on its own:
+
+1. **Off until armed**, per lease. There is no global switch and no default.
+2. **Arming takes an explicit confirmation** and the price being agreed to, checked against
+   the connector's live quote — so a stale tab cannot arm at a price that has moved.
+3. **The budget is an absolute cap** in the units the channel pays in. It never spends part
+   of an interval and never overruns by one.
+4. **A price that moved stops it** rather than paying it: a price change is a new Listing
+   version ([ADR 0009][adr9]), which is a different offer.
+5. **Silence buys nothing.** A provider that is not answering has said nothing about the
+   lease.
+6. **A billed refusal disarms it**, rather than spending the budget learning the same thing
+   every minute.
+7. **An extension whose fate is unknown disarms it**: a second might buy a second interval
+   nobody asked for.
+8. **It acts only inside a lead window** bounded by the Lease Interval — [ADR 0003][adr3]
+   refunds nothing, so an interval bought early cannot be handed back.
+9. **Every run is written down** — extended, waited or stopped — with the sentence that
+   decided it. The card shows the last one.
+
+A budget lives on **this machine**, not in the Lease Vault and not on a relay: only the
+machine running the daemon can carry out a standing instruction to spend, so signing in
+elsewhere arms nothing.
+
+### Terminating
+
+Free, immediate and irreversible, with no refund (§6.6). The card asks twice, and the
+ending is remembered locally — a terminated lease is swept soon afterwards, and without
+that the card would go from "Ended — Termination" to "this provider has never heard of it".
+
+```bash
+curl -H "authorization: Bearer $TOKEN" 'http://127.0.0.1:7797/api/workloads?refresh=1'
+curl -X POST -H "authorization: Bearer $TOKEN" \
+  http://127.0.0.1:7797/api/workloads/<workload id>/extend
+curl -X POST -H "authorization: Bearer $TOKEN" \
+  http://127.0.0.1:7797/api/workloads/<workload id>/terminate
+```
+
 ## Security
 
 The daemon binds `127.0.0.1` and refuses a request whose `Host` is not a loopback name. The
@@ -349,6 +456,13 @@ daemon, sealed to the account and published; the type the API answers with has n
 for it, so no route can return one by forgetting to strip it.
 `packages/daemon/src/api-leases.test.ts` and `lease-vault.test.ts` are the tests that say
 so — on a spawn that worked, a spawn that was refused, and a read of the whole vault.
+
+So is every **Continuation Token** derived from one. `LeaseVault.withContinuation` lends a
+token for the length of one packet and there is no getter beside it: a token that could be
+fetched is a token that could be logged, echoed into an answer, or held in a variable that
+outlives the request it was for, and §6.1.1 forbids all three.
+`packages/daemon/src/api-workloads.test.ts` is the test that says no dashboard answer — a
+card, an extension or a termination — carries either value.
 
 ## The site and the docs
 
@@ -416,6 +530,9 @@ published identity; nothing in this repository should suggest otherwise.
 [i92]: https://github.com/toon-protocol/TOON_Network/issues/92
 [i93]: https://github.com/toon-protocol/TOON_Network/issues/93
 [i94]: https://github.com/toon-protocol/TOON_Network/issues/94
+[i115]: https://github.com/toon-protocol/TOON_Network/issues/115
+[adr5]: https://github.com/toon-protocol/TOON_Network/blob/main/docs/adr/0005-tenant-identity-comes-from-the-request-not-payment-headers.md
+[adr9]: https://github.com/toon-protocol/TOON_Network/blob/main/docs/adr/0009-a-price-change-is-a-new-listing-version.md
 [i82]: https://github.com/toon-protocol/TOON_Network/issues/82
 [i102]: https://github.com/toon-protocol/TOON_Network/issues/102
 [i120]: https://github.com/toon-protocol/TOON_Network/issues/120

@@ -76,6 +76,35 @@ export function accountLeaseVaultPath(paths: ConsolePaths, pubkey: string): stri
 }
 
 /**
+ * The last thing each of this account's providers said about its leases
+ * (TOON_Network#93).
+ *
+ * A cache of a FREE read and nothing else: `status` costs nothing at the
+ * provider (§5), so this file buys no fidelity, only patience — a dashboard
+ * that opens with what it knew rather than with a row of question marks, and
+ * an ending that survives a restart. It holds no secret and no token; a lost
+ * or corrupt file costs one refresh.
+ */
+export function accountWorkloadsPath(paths: ConsolePaths, pubkey: string): string {
+  return join(accountDataDir(paths, pubkey), 'workloads.json');
+}
+
+/**
+ * The automatic-extension budgets this MACHINE will spend without being asked
+ * (TOON_Network#93).
+ *
+ * Deliberately not in the Lease Vault, and deliberately not on a relay. A
+ * budget is a standing instruction to spend money while nobody is watching,
+ * and only the machine running the daemon can carry one out — so the machine
+ * that would spend is the machine that holds the rule, and signing in
+ * elsewhere arms nothing. It is still keyed by ACCOUNT, because it is that
+ * account's money.
+ */
+export function accountAutoExtendPath(paths: ConsolePaths, pubkey: string): string {
+  return join(accountDataDir(paths, pubkey), 'auto-extend.json');
+}
+
+/**
  * A pubkey is 64 hex characters, but it arrives from a signer rather than
  * from this process, and a value that reaches `join` decides which file is
  * written. Anything that is not the shape of a pubkey never becomes a path.

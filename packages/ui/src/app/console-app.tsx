@@ -8,6 +8,7 @@ import { useDirectory } from '@/hooks/use-directory';
 import { useDocs } from '@/hooks/use-docs';
 import { useFunding } from '@/hooks/use-funding';
 import { useLeases } from '@/hooks/use-leases';
+import { useWorkloads } from '@/hooks/use-workloads';
 import { useTemplates } from '@/hooks/use-templates';
 
 import { AccountCard, AccountChip } from './account-view';
@@ -110,6 +111,15 @@ export function ConsoleApp() {
     active: tab === 'docs',
     ...(health === undefined ? {} : { profileId: health.profile.id }),
   });
+  // The dashboard beside it, keyed the same way. It is a SECOND read of the
+  // same leases and deliberately so: the vault is what this account owns, and
+  // this is what each provider says about it now (§6.5). It polls while the
+  // tab is open, on the free route, and spends nothing until a button is
+  // pressed (TOON_Network#93).
+  const workloads = useWorkloads({
+    active: tab === 'workloads',
+    pubkey: account.status?.account?.pubkey,
+  });
 
   return (
     <div className="min-h-dvh">
@@ -170,6 +180,7 @@ export function ConsoleApp() {
 
         {tab === 'workloads' ? (
           <WorkloadsView
+            workloads={workloads}
             leases={leases}
             {...(directory.directory === undefined ? {} : { directory: directory.directory })}
             signedIn={signedIn}
