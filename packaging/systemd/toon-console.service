@@ -17,6 +17,14 @@ ExecStart=@NODE@ @DAEMON@
 Environment=NODE_ENV=production
 Environment=TOON_CONSOLE_PORT=7797
 Environment=TOON_CONSOLE_UI_ROOT=@UI_ROOT@
+# Reaching a Hidden Provider (TOON_Network#98, spec §10). Deliberately NOT set
+# here: it is a fact about this machine, and a default pointing at a daemon
+# that may not be running would make an honest refusal look like a bug. Set it
+# with `systemctl --user edit toon-console.service` once an `anon` daemon is
+# running, e.g.:
+#   Environment=TOON_CONSOLE_SOCKS_PROXY=socks5h://127.0.0.1:9050
+# `socks5h`, never `socks5`: the trailing `h` is what makes the PROXY resolve
+# the `.anyone` name, so it never reaches this machine's resolver.
 Restart=on-failure
 RestartSec=2
 # The daemon binds loopback and reads and writes only its own XDG directories,

@@ -304,6 +304,66 @@ describe('the workload dashboard', () => {
     expect(screen.getByText(/10 more interval\(s\)/u)).toBeInTheDocument();
   });
 
+  /**
+   * A lease on a Hidden Provider (TOON_Network#98, spec §10, ADR 0008).
+   *
+   * The distinction the window has to get right is between the two kinds of
+   * address in play. A Hidden Provider's own location is never shown, because
+   * the console never learns it. The LEASE's per-lease `.anyone` address is
+   * shown in full, because it is the only way a tenant reaches its own
+   * workload — §10 says a tenant dials it exactly as it would an IP.
+   */
+  it('shows a hidden lease’s own `.anyone` address, and no host for the provider', async () => {
+    const leaseHost = `${'b'.repeat(56)}.anyone`;
+    dashboard = dashboardOf(
+      card({
+        provider: {
+          pubkey: PROVIDER,
+          ilpAddress: 'g.toon.provider-hs',
+          connectorUrl: `http://${'a'.repeat(56)}.anyone/ilp`,
+          hidden: true,
+          liveness: 'live',
+          inDirectory: true,
+        },
+        status: {
+          kind: 'read',
+          life: { phase: 'running' },
+          role: 'standalone',
+          expiresAt: 1_790_003_600,
+          access: { host: leaseHost, ssh_port: 40000 },
+          readAt: '2026-09-23T10:00:00.000Z',
+        },
+      })
+    );
+    await open();
+
+    expect(await screen.findByText('Hidden Provider')).toBeInTheDocument();
+    expect(screen.getByText('Lease address')).toBeInTheDocument();
+    expect(screen.getAllByText(new RegExp(leaseHost, 'u')).length).toBeGreaterThan(0);
+    expect(screen.queryByText('203.0.113.7')).not.toBeInTheDocument();
+  });
+
+  it('says so when a provider that calls itself hidden is not', async () => {
+    dashboard = dashboardOf(
+      card({
+        provider: {
+          pubkey: PROVIDER,
+          ilpAddress: 'g.toon.provider',
+          connectorUrl: 'https://provider.test/ilp',
+          hidden: true,
+          liveness: 'live',
+          inDirectory: true,
+          notHidden:
+            'This provider declares itself hidden, but the connector its Profile publishes ' +
+            'is a clearnet address.',
+        },
+      })
+    );
+    await open();
+
+    expect(await screen.findByText(/declares itself hidden, but/u)).toBeInTheDocument();
+  });
+
   it('says a runway cannot be computed rather than showing a zero', async () => {
     dashboard = dashboardOf(
       card({

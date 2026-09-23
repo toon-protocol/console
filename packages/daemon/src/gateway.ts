@@ -5,11 +5,12 @@ import { gatewaySub } from './continuation.js';
 import { resolveRpc } from './funding.js';
 import { hostnameFor, probeUrlFor } from './gateway-name.js';
 import {
+  HiddenTransportError,
   isHiddenServiceUrl,
-  routeCarries,
-  type PacketOutcome,
-  type ProviderPort,
-} from './lease.js';
+  proxyRpcFor,
+  type HiddenTransportPort,
+} from './hidden-transport.js';
+import { routeCarries, type PacketOutcome, type ProviderPort } from './lease.js';
 import { LeaseVaultError, type LeaseVault, type LeaseView } from './lease-vault.js';
 import type { ConsolePaths } from './paths.js';
 import { isConfigured, type NetworkProfile } from './profiles.js';
@@ -286,6 +287,12 @@ export interface GatewayStoreDeps {
    * nothing about reaching one needs a second transport.
    */
   readonly gateway: ProviderPort;
+  /**
+   * The Anyone Protocol carriage (TOON_Network#98, spec §10). A gateway whose
+   * own connector is a `.anyone` address is reached over a circuit like any
+   * other, and without one the handover says so rather than dialling.
+   */
+  readonly hidden?: HiddenTransportPort | undefined;
   readonly probe: GatewayProbe;
   readonly paths: ConsolePaths;
   readonly notes: WorkloadNoteStore;
@@ -608,13 +615,32 @@ export class GatewayStore {
       );
       return undefined;
     }
+    // A gateway's connector at a `.anyone` address is reached over a circuit
+    // or not at all, by the same rule as a Hidden Provider's (spec §10,
+    // TOON_Network#98). Resolved before the health read, because that read is
+    // itself a dial.
+    let socksProxy: string | undefined;
     if (isHiddenServiceUrl(gatewayUrl)) {
-      problems.push(
-        `${gatewayUrl} is a hidden service, and reaching one needs a running Anyone Protocol ` +
-          `daemon to proxy through. The console does not start one yet (TOON_Network#96, ` +
-          `spec §10).`
-      );
-      return undefined;
+      const carriage = this.#deps.hidden;
+      if (carriage === undefined) {
+        problems.push(
+          `${gatewayUrl} is a hidden service, reachable only over an Anyone Protocol circuit, ` +
+            `and this build has no carriage for one (spec §10).`
+        );
+        return undefined;
+      }
+      try {
+        socksProxy = (await carriage.open()).socksProxy;
+      } catch (error) {
+        problems.push(
+          error instanceof HiddenTransportError
+            ? error.message
+            : `The Anyone Protocol carriage could not be opened: ${
+                error instanceof Error ? error.message : String(error)
+              }`
+        );
+        return undefined;
+      }
     }
 
     // Every packet is signed by a payer key, free routes included.
@@ -738,6 +764,7 @@ export class GatewayStore {
       sealTo,
       gatewayUrl,
       channelStore: channels.store,
+      ...(socksProxy === undefined ? {} : { socksProxy }),
       ...(this.#deps.timeoutMs === undefined ? {} : { timeoutMs: this.#deps.timeoutMs }),
     };
 
@@ -745,12 +772,14 @@ export class GatewayStore {
     for (const settlement of settlements) {
       const binding = findChannelBinding(channels.store, chosen.url, settlement.chain);
       if (!binding) continue;
+      const rpcUrl = resolveRpc(profile, settlement.kind).url;
       return {
         ...base,
         chain: settlement.chain,
         channelId: binding.channelId,
         chainKind: settlement.kind,
-        rpcUrl: resolveRpc(profile, settlement.kind).url,
+        rpcUrl,
+        ...(socksProxy === undefined ? {} : { proxyRpc: await proxyRpcFor(rpcUrl) }),
         ...optional('available', channelAvailable(channels.store, binding)),
       } as GatewayPlan;
     }
@@ -765,10 +794,12 @@ export class GatewayStore {
           `collateral on chain and costs the chain's own gas.`
       );
     }
+    const fallbackRpc = resolveRpc(profile, first?.kind ?? 'evm').url;
     return {
       ...base,
       chainKind: first?.kind ?? 'evm',
-      rpcUrl: resolveRpc(profile, first?.kind ?? 'evm').url,
+      rpcUrl: fallbackRpc,
+      ...(socksProxy === undefined ? {} : { proxyRpc: await proxyRpcFor(fallbackRpc) }),
     } as GatewayPlan;
   }
 
@@ -981,6 +1012,8 @@ export class GatewayStore {
         rpcUrl: plan.rpcUrl,
         keys,
         channelStore: plan.channelStore,
+        ...(plan.socksProxy === undefined ? {} : { socksProxy: plan.socksProxy }),
+        ...(plan.proxyRpc === undefined ? {} : { proxyRpc: plan.proxyRpc }),
         ...(plan.timeoutMs === undefined ? {} : { timeoutMs: plan.timeoutMs }),
       })
     );
@@ -1043,6 +1076,9 @@ interface GatewayPlan {
   readonly chainKind: 'evm' | 'solana';
   readonly rpcUrl: string;
   readonly channelStore: Parameters<ProviderPort['send']>[0]['channelStore'];
+  /** Set only when the gateway's own connector is a `.anyone` address (§10). */
+  readonly socksProxy?: string | undefined;
+  readonly proxyRpc?: boolean | undefined;
   readonly timeoutMs?: number | undefined;
 }
 

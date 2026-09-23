@@ -65,6 +65,14 @@ export function WorkloadCard({ card, workloads }: { card: Card; workloads: Workl
             provider {card.provider.liveness}
           </Badge>
         )}
+        {card.provider.hidden && (
+          <Badge
+            variant="secondary"
+            title="This provider publishes no host. Every packet to it, and this lease's own address, go over an Anyone Protocol circuit (spec §10)."
+          >
+            Hidden Provider
+          </Badge>
+        )}
         {card.lease.localOnly ? (
           <Badge variant="outline" title="This lease's Root Secret is on this machine only.">
             local only
@@ -82,9 +90,18 @@ export function WorkloadCard({ card, workloads }: { card: Card; workloads: Workl
         <code>{card.provider.ilpAddress}</code>
       </p>
 
+      {card.provider.notHidden !== undefined && (
+        <p className="text-destructive text-xs" role="status">
+          {card.provider.notHidden}
+        </p>
+      )}
+
       <Life card={card} />
       <Runway runway={card.runway} />
-      <Access access={card.status.kind === 'read' ? card.status.access : card.lease.access} />
+      <Access
+        access={card.status.kind === 'read' ? card.status.access : card.lease.access}
+        hidden={card.provider.hidden}
+      />
 
       <Actions card={card} workloads={workloads} busy={busy} />
       <AutoExtend card={card} workloads={workloads} busy={busy} />
@@ -253,13 +270,28 @@ export function duration(seconds: number): string {
   return `${seconds} s`;
 }
 
-function Access({ access }: { access?: LeaseAccess | undefined }) {
+/**
+ * Where the lease answers.
+ *
+ * For a Hidden Provider this is a PER-LEASE `.anyone` address (spec §10), and
+ * showing it is not a leak — it is the whole of how a tenant reaches its own
+ * workload, and §10 says a tenant dials it exactly as it would an IP. What is
+ * never shown, here or anywhere, is a host for the PROVIDER.
+ */
+function Access({ access, hidden }: { access?: LeaseAccess | undefined; hidden?: boolean }) {
   if (!access) return null;
   const { host, ssh_port: sshPort, ports } = access;
   return (
     <dl className="grid gap-1 text-sm sm:grid-cols-[8rem_1fr]">
-      <dt className="text-muted-foreground">Host</dt>
-      <dd className="font-mono">{host}</dd>
+      <dt className="text-muted-foreground">{hidden === true ? 'Lease address' : 'Host'}</dt>
+      <dd className="font-mono break-all">
+        {host}
+        {hidden === true && (
+          <span className="text-muted-foreground ml-2 font-sans text-xs">
+            this lease&rsquo;s own address, over a circuit
+          </span>
+        )}
+      </dd>
       {sshPort !== undefined && (
         <>
           <dt className="text-muted-foreground">SSH</dt>

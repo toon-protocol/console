@@ -6,8 +6,18 @@ import {
   type NostrEvent,
   type NostrFilter,
 } from './nostr.js';
+import {
+  isHiddenServiceUrl,
+  type AnonCarriage,
+  type HiddenTransportPort,
+} from './hidden-transport.js';
 import { isConfigured, type NetworkProfile } from './profiles.js';
-import { queryRelays, type RelayOutcome, type RelayQuery } from './relay-pool.js';
+import {
+  hiddenAwareDialer,
+  queryRelays,
+  type RelayOutcome,
+  type RelayQuery,
+} from './relay-pool.js';
 
 /**
  * The Provider Directory (spec §4).
@@ -203,6 +213,15 @@ export interface DirectoryDeps {
   /** Injected in tests; the default opens real sockets. */
   readonly query?: (query: RelayQuery) => Promise<Awaited<ReturnType<typeof queryRelays>>>;
   readonly timeoutMs?: number;
+  /**
+   * The Anyone Protocol carriage (#98, spec §10).
+   *
+   * Only the SECOND pass can need it: a Hidden Provider reaches every relay
+   * through `anon`, so the Relay Set its Profile publishes is `.anyone` URLs.
+   * Without one those relays are not dialled at all — see `hiddenAwareDialer`
+   * for why a failed connection would be the wrong shape of failure.
+   */
+  readonly hidden?: HiddenTransportPort | undefined;
 }
 
 export async function readDirectory(deps: DirectoryDeps): Promise<DirectoryResult> {
@@ -236,9 +255,21 @@ export async function readDirectory(deps: DirectoryDeps): Promise<DirectoryResul
     }
   }
 
+  // Opened ONCE for the whole second pass, and only when it is needed: a
+  // directory of clearnet providers never touches `anon` at all. A carriage
+  // that will not open is not an error here — the `.anyone` relays in the set
+  // are reported as unanswered and the rest of the pass runs (§4.2).
+  const carriage = await openCarriageFor([...relaySets.keys()], deps.hidden);
+  const dial = { dial: hiddenAwareDialer(carriage) };
+
   const second = await Promise.all(
     [...relaySets].map(([url, authors]) =>
-      run({ relays: [url], filters: directoryFilters(filters, [...authors]), ...timeout })
+      run({
+        relays: [url],
+        filters: directoryFilters(filters, [...authors]),
+        ...timeout,
+        ...(isHiddenServiceUrl(url) || carriage !== undefined ? dial : {}),
+      })
     )
   );
 
@@ -264,6 +295,19 @@ export async function readDirectory(deps: DirectoryDeps): Promise<DirectoryResul
     filters,
     now,
   });
+}
+
+/** The carriage, if any relay in this set needs one and one can be had. */
+async function openCarriageFor(
+  urls: readonly string[],
+  hidden: HiddenTransportPort | undefined
+): Promise<AnonCarriage | undefined> {
+  if (hidden === undefined || !urls.some(isHiddenServiceUrl)) return undefined;
+  try {
+    return await hidden.open();
+  } catch {
+    return undefined;
+  }
 }
 
 /**

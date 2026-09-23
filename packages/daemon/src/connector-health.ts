@@ -4,6 +4,7 @@ import {
   type NodeSelfDescription,
 } from '@toon-protocol/client';
 
+import { isHiddenServiceUrl, type HiddenTransportPort } from './hidden-transport.js';
 import { isConfigured, type NetworkProfile } from './profiles.js';
 
 /**
@@ -77,9 +78,56 @@ export interface ConnectorReader {
   ): Promise<NodeSelfDescription>;
 }
 
-/** The default reader: the client's own edge client, caching per endpoint. */
-export function defaultConnectorReader(timeout = 10_000): ConnectorReader {
-  return new ConnectorEdgeClient({ timeout });
+/**
+ * How long a circuit is given to answer, against ten seconds on clearnet.
+ *
+ * An introduction-point circuit to a cold hidden service routinely takes most
+ * of a minute, and a too-short deadline turns "slow" into "unreachable" — which
+ * here would read as "this Hidden Provider is down" on a provider that is fine.
+ * The same figure the client uses for a `.anyone` connector.
+ */
+const HIDDEN_TIMEOUT_MS = 120_000;
+
+/**
+ * The default reader: the client's own edge client, caching per endpoint —
+ * and, for a `.anyone` endpoint, a second one bound to the Anyone Protocol
+ * carriage (TOON_Network#98, spec §10).
+ *
+ * This is the first thing that touches a Hidden Provider's connector, and it
+ * touches it by DIALLING it: `GET /ilp` is how the console learns what a route
+ * costs and what the connector settles in. So it is the first place a direct
+ * dial could leak one, and there is none to be had here — a `.anyone` endpoint
+ * with no carriage throws, `readConnectorHealth` turns that into `unreachable`
+ * with the reason verbatim, and every caller above already treats an
+ * unreachable connector as "do not send" (ADR 0008).
+ */
+export function defaultConnectorReader(
+  options: { timeout?: number; hidden?: HiddenTransportPort | undefined } | number = {}
+): ConnectorReader {
+  const resolved = typeof options === 'number' ? { timeout: options } : options;
+  const timeout = resolved.timeout ?? 10_000;
+  const clearnet = new ConnectorEdgeClient({ timeout });
+  const hidden = resolved.hidden;
+  if (hidden === undefined) return clearnet;
+
+  /** One edge client per proxy, so the carriage's pool is shared, not rebuilt. */
+  let overAnon: { proxy: string; client: ConnectorEdgeClient } | undefined;
+  return {
+    async describe(endpoint, describeOptions) {
+      if (!isHiddenServiceUrl(endpoint)) return clearnet.describe(endpoint, describeOptions);
+      const carriage = await hidden.open();
+      if (overAnon?.proxy !== carriage.socksProxy) {
+        overAnon = {
+          proxy: carriage.socksProxy,
+          client: new ConnectorEdgeClient({
+            fetch: carriage.fetch,
+            timeout: HIDDEN_TIMEOUT_MS,
+          }),
+        };
+      }
+      return overAnon.client.describe(endpoint, describeOptions);
+    },
+  };
 }
 
 export async function readConnectorHealth(

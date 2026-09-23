@@ -19,6 +19,7 @@ import { FundingStore } from './funding.js';
 import { GatewayStore } from './gateway.js';
 import { LiveGatewayProbe } from './gateway-probe.js';
 import { LiveChainPort } from './funding-chain.js';
+import { AnonTransport } from './hidden-transport.js';
 import { LeaseStore } from './lease.js';
 import { LiveProviderPort } from './lease-route.js';
 import { LeaseVault } from './lease-vault.js';
@@ -90,7 +91,21 @@ export async function main(): Promise<void> {
   const profiles = new ProfileStore(activeProfileFilePath(paths));
   const version = daemonVersion();
   const token = mintLaunchToken();
-  const reader = defaultConnectorReader();
+
+  // The Anyone Protocol carriage (TOON_Network#98, spec §10, ADR 0008). One
+  // per daemon, shared by everything that might touch a `.anyone` address:
+  // the connector reader below, a spawn, a status, an extension, a terminate,
+  // a channel open and the directory's second pass.
+  //
+  // `TOON_CONSOLE_SOCKS_PROXY` and nothing else. A console with none set works
+  // exactly as before on every clearnet provider and refuses — out loud — on a
+  // hidden one. It never starts an `anon` daemon and never falls back to a
+  // direct dial: see `hidden-transport.ts`.
+  const hidden = new AnonTransport({
+    socksProxy: () => process.env.TOON_CONSOLE_SOCKS_PROXY,
+  });
+
+  const reader = defaultConnectorReader({ hidden });
 
   // Probed once, here, so that the sign-in screen can say where a key would go
   // before anyone types one in (TOON_Network#88, ADR 0020).
@@ -162,7 +177,8 @@ export async function main(): Promise<void> {
     profile: () => profiles.active(),
     chainSeed,
     readHealth: (profile) => readConnectorHealth(profile, reader),
-    chains: new LiveChainPort(),
+    chains: new LiveChainPort({ hidden }),
+    hidden,
     paths,
   });
 
@@ -188,8 +204,9 @@ export async function main(): Promise<void> {
     vault,
     chainSeed,
     readHealth: (profile) => readConnectorHealth(profile, reader),
-    readDirectory: (profile) => readDirectory({ profile }),
+    readDirectory: (profile) => readDirectory({ profile, hidden }),
     provider: new LiveProviderPort(),
+    hidden,
     paths,
   });
 
@@ -215,8 +232,9 @@ export async function main(): Promise<void> {
     vault,
     chainSeed,
     readHealth: (profile) => readConnectorHealth(profile, reader),
-    readDirectory: (profile) => readDirectory({ profile }),
+    readDirectory: (profile) => readDirectory({ profile, hidden }),
     provider: new LiveProviderPort(),
+    hidden,
     paths,
     notes,
     autoExtend: () => budgets,
@@ -236,6 +254,7 @@ export async function main(): Promise<void> {
     chainSeed,
     readHealth: (profile) => readConnectorHealth(profile, reader),
     gateway: new LiveProviderPort(),
+    hidden,
     probe: new LiveGatewayProbe(),
     paths,
     notes,
@@ -293,7 +312,7 @@ export async function main(): Promise<void> {
       paths,
       startedAt: new Date(),
       readHealth: (profile, options) => readConnectorHealth(profile, reader, options),
-      readDirectory: (profile, filters) => readDirectory({ profile, filters }),
+      readDirectory: (profile, filters) => readDirectory({ profile, filters, hidden }),
       readTemplates: (profile) => readTemplates({ profile }),
       // The seam #94 left: a Template is expanded into a §6.2 content there,
       // and bought here. Both paths end at the same `buildSpawnContent` and
@@ -305,6 +324,7 @@ export async function main(): Promise<void> {
       autoExtend: budgets,
       gateway,
       desktop,
+      hidden,
     },
   }).catch((error: unknown) => {
     if (isAddressInUse(error)) {
@@ -361,6 +381,8 @@ export async function main(): Promise<void> {
     clearInterval(alerts);
     process.stdout.write(`\n${signal} — stopping\n`);
     removeLaunchRecord(recordPath);
+    // The carriage holds an undici pool and a websocket agent's sockets.
+    void hidden.close().catch(() => undefined);
     void running.close().then(
       () => process.exit(0),
       () => process.exit(1)
