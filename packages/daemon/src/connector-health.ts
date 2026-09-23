@@ -33,6 +33,21 @@ export type ConnectorHealth =
       readonly routes: readonly RouteView[];
       readonly peerCarriages: readonly string[];
       readonly edgeKeyId?: string | undefined;
+      /**
+       * The edge's own secp256k1 sealing key, as `GET /ilp` reports it.
+       *
+       * Here because a Gateway Handover has nowhere else to learn it: a
+       * provider's sealing key is pinned in its signed Provider Profile
+       * (ADR 0011), and a Workload Gateway publishes no Profile and signs
+       * nothing at all — it is chosen by a packet rather than a publication
+       * (ADR 0017). So what pins a gateway's key is the TLS name the active
+       * profile's `gatewayConnectorUrl` points at, and this is that key
+       * (TOON_Network#97).
+       *
+       * A key, not a secret: it is the PUBLIC half, and the whole network
+       * reads it from the same free document.
+       */
+      readonly edgeSealKey?: string | undefined;
       readonly supportedVersions: readonly number[];
     };
 
@@ -90,6 +105,9 @@ export async function readConnectorHealth(
       routes: described.routes.map(toRouteView),
       peerCarriages: described.peerCarriages,
       edgeKeyId: described.edgeIdentity?.keyId,
+      ...(described.edgeIdentity?.publicKey === undefined
+        ? {}
+        : { edgeSealKey: described.edgeIdentity.publicKey }),
       supportedVersions: described.supportedVersions,
     };
   } catch (error) {
@@ -97,9 +115,7 @@ export async function readConnectorHealth(
   }
 }
 
-function toSettlementView(
-  entry: NodeSelfDescription['settlements'][number]
-): SettlementView {
+function toSettlementView(entry: NodeSelfDescription['settlements'][number]): SettlementView {
   return {
     chain: entry.chain,
     kind: entry.kind,
