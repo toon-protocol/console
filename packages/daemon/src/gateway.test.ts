@@ -309,6 +309,30 @@ describe('the Workload Gateway', () => {
       expect(port.sent.at(-1)?.sealTo).toBe(GATEWAY_SEAL_KEY);
     });
 
+    /**
+     * TOON_Network#129: the same shape #126 fixed for a relay write, here for
+     * the gateway's own connector. The sandbox's `workload-gateway-connector`
+     * is dialled at the profile's `gatewayConnectorUrl`
+     * (`http://localhost:3260/ilp`) but calls ITSELF
+     * `http://127.0.0.1:3260/ilp` — the same loopback machine, a different
+     * string. A handover must find the channel by what the connector says
+     * about itself, never by the profile's string, and pay under that same
+     * identity too. `beforeEach` bound a channel under `GATEWAY_CONNECTOR`
+     * itself; this proves that binding is NOT what a handover finds once the
+     * connector reports a different self-endpoint — only the one bound under
+     * that self-endpoint is.
+     */
+    it('finds its channel by what the gateway’s connector calls itself, not by the profile’s gatewayConnectorUrl (#129)', async () => {
+      const selfEndpoint = 'http://127.0.0.1:3260';
+      giveChannel(paths, SANDBOX.id, selfEndpoint, 'evm:31337', '0xselfendpoint');
+      build({ health: gatewayHealth({ selfEndpoint }) });
+
+      const result = await gateway.handover(workloadId, { expiresIn: 3600 });
+
+      expect(result.sent).toBe(true);
+      expect(port.sent.at(-1)?.payAt).toBe(selfEndpoint);
+    });
+
     it('shows the hostname the gateway answered, and that it is the one derived', async () => {
       port.answer = handoverOk(hostname, SECONDS + 3600);
       const result = await gateway.handover(workloadId, { expiresIn: 3600 });
