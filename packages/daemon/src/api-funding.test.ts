@@ -8,6 +8,7 @@ import { handleApi, type ApiDeps, type ApiResponse } from './api.js';
 import { ChainSeedStore } from './chain-seed.js';
 import { InMemoryChainSeedCache } from './chain-seed-cache.js';
 import {
+  fakePaidWriter,
   fakeAccount,
   fakeRelayNetwork,
   fakeRelayServer,
@@ -60,6 +61,7 @@ describe('the funding routes', () => {
       signer: () => account,
       seedRelays: () => [RELAY],
       cache: new InMemoryChainSeedCache(),
+      writer: () => fakePaidWriter(relay),
       dial: fakeRelayNetwork([relay]),
       timeoutMs: 200,
     });

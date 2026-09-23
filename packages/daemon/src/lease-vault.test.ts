@@ -6,12 +6,15 @@ import { generateSecretKey } from 'nostr-tools/pure';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  brokeWriter,
   fakeAccount,
+  fakePaidWriter,
   fakeRelayNetwork,
   fakeRelayServer,
   publishRelayListEvent,
   type FakeAccount,
   type FakeRelayServer,
+  type FakeWriter,
 } from './chain-seed.testkit.js';
 import {
   LEASE_VAULT_KIND,
@@ -20,6 +23,7 @@ import {
   leaseVaultD,
   type VaultedLease,
 } from './lease-vault.js';
+import { RelayWriteError } from './relay-write.js';
 import {
   FileLeaseVaultCache,
   InMemoryLeaseVaultCache,
@@ -41,10 +45,17 @@ import { accountLeaseVaultPath, consolePaths, type ConsolePaths } from './paths.
  * **A record that no relay took is not a record.** Publishing refuses and
  * caches nothing, so the spawn that was about to be paid for is never sent.
  * That is the whole reason the vault write comes first.
+ *
+ * **Every write here is bought** (TOON_Network#120), so a refusal in these
+ * tests is a PAYMENT refused — no channel, a rejected claim — and never a
+ * socket saying `restricted`. `fakePaidWriter` is the console's writer without
+ * a connector behind it: what it takes, it puts on the relay, so the next read
+ * finds it.
  */
 
 const OWN = 'wss://own.relay.test';
-const OTHER = 'wss://other.relay.test';
+/** The network profile's relay: the one a write can be bought to. */
+const TOON = 'wss://toon.relay.test';
 
 const ROOT_SECRET = 'a'.repeat(64);
 const WORKLOAD = 'b'.repeat(64);
@@ -82,20 +93,23 @@ function leaseRecord(overrides: Partial<VaultedLease> = {}): VaultedLease {
 describe('the Lease Vault', () => {
   let home: string;
   let paths: ConsolePaths;
+  let toon: FakeRelayServer;
   let own: FakeRelayServer;
-  let other: FakeRelayServer;
   let account: FakeAccount;
+  let writer: FakeWriter;
   let vault: LeaseVault;
 
   const vaultFor = (
     signer: FakeAccount,
     relays: readonly FakeRelayServer[],
-    cache: LeaseVaultCache = new InMemoryLeaseVaultCache()
+    cache: LeaseVaultCache = new InMemoryLeaseVaultCache(),
+    paying: FakeWriter = writer
   ) =>
     new LeaseVault({
       signer: () => signer,
-      seedRelays: () => [OTHER],
+      seedRelays: () => [TOON],
       cache,
+      writer: paying,
       dial: fakeRelayNetwork(relays),
       timeoutMs: 200,
     });
@@ -103,19 +117,14 @@ describe('the Lease Vault', () => {
   beforeEach(async () => {
     home = mkdtempSync(join(tmpdir(), 'toon-console-vault-'));
     paths = consolePaths({ HOME: home } as NodeJS.ProcessEnv);
+    toon = fakeRelayServer(TOON);
     own = fakeRelayServer(OWN);
-    other = fakeRelayServer(OTHER);
     account = fakeAccount();
-    // The account writes to its OWN relay and reads from the network's.
-    await publishRelayListEvent(
-      account,
-      [own, other],
-      [
-        [OWN, 'write'],
-        [OTHER, 'read'],
-      ]
-    );
-    vault = vaultFor(account, [own, other]);
+    // The account also names a relay of its own, which is where READS look —
+    // writes go where one can be bought.
+    await publishRelayListEvent(account, [toon, own], [[OWN, 'read']]);
+    writer = fakePaidWriter(toon);
+    vault = vaultFor(account, [toon, own]);
     await vault.refresh();
   });
 
@@ -123,20 +132,25 @@ describe('the Lease Vault', () => {
     rmSync(home, { recursive: true, force: true });
   });
 
-  it('publishes one sealed record per lease to the account’s WRITE relays', async () => {
+  it('publishes one sealed record per lease, as a paid write, and says what it cost', async () => {
     const view = await vault.publish(leaseRecord());
 
     expect(view.workloadId).toBe(WORKLOAD);
-    expect(view.relays).toEqual([OWN]);
-    const held = own.events.find((event) => event.kind === LEASE_VAULT_KIND);
+    expect(view.relays).toEqual([TOON]);
+    const held = toon.events.find((event) => event.kind === LEASE_VAULT_KIND);
     expect(held).toBeDefined();
     expect(tagValue(held!, 'd')).toBe(`toon-console/lease/${WORKLOAD}`);
     // The relay holds a ciphertext. Not the secret, and not the workload's
     // image or ports either — the `d` tag is the whole of what it learns.
     expect(held!.content).not.toContain(ROOT_SECRET);
     expect(held!.content).not.toContain('traefik');
-    // The read relay is not written to: NIP-65 says which is which.
-    expect(other.events.some((event) => event.kind === LEASE_VAULT_KIND)).toBe(false);
+    // It was bought, and the price is the connector's own.
+    expect(vault.status().lastPublish).toMatchObject({
+      what: 'stage',
+      cost: '1',
+      destination: 'g.toon.relay',
+      accepted: [TOON],
+    });
   });
 
   it('never returns a Root Secret, in any view', async () => {
@@ -166,7 +180,7 @@ describe('the Lease Vault', () => {
 
     // A different machine: the same account key, an empty cache, and only the
     // network profile's relay to start looking from.
-    const fresh = vaultFor(account, [own, other], new InMemoryLeaseVaultCache());
+    const fresh = vaultFor(account, [toon, own], new InMemoryLeaseVaultCache());
     const status = await fresh.refresh();
 
     expect(status.leases).toHaveLength(1);
@@ -177,15 +191,19 @@ describe('the Lease Vault', () => {
 
   it('keeps a local-only lease off every relay, and on this disk alone', async () => {
     const cache = new FileLeaseVaultCache(paths);
-    const local = vaultFor(account, [own, other], cache);
+    const local = vaultFor(account, [toon, own], cache);
     await local.refresh();
 
     const view = await local.publish(leaseRecord({ local_only: true }));
 
+    // A PRIVACY choice, not a way round a write that could not be paid for:
+    // this vault can pay perfectly well, and nothing was bought.
+    expect(local.status().writes.ready).toBe(true);
     expect(view.localOnly).toBe(true);
     expect(view.relays).toEqual([]);
+    expect(writer.written).toEqual([]);
+    expect(toon.events.some((event) => event.kind === LEASE_VAULT_KIND)).toBe(false);
     expect(own.events.some((event) => event.kind === LEASE_VAULT_KIND)).toBe(false);
-    expect(other.events.some((event) => event.kind === LEASE_VAULT_KIND)).toBe(false);
 
     // It is on disk, sealed — the cache holds the event, never the plaintext.
     const onDisk = readFileSync(accountLeaseVaultPath(paths, account.pubkey), 'utf8');
@@ -199,33 +217,33 @@ describe('the Lease Vault', () => {
     expect(again.list()[0]?.localOnly).toBe(true);
   });
 
-  it('refuses, and caches NOTHING, when every relay charges for the write', async () => {
-    const paying = fakeRelayServer(OWN, {
-      refuse: 'restricted: writes require ILP payment',
-    });
+  it('refuses, and caches NOTHING, when the write cannot be paid for', async () => {
     const cache = new InMemoryLeaseVaultCache();
-    const broke = vaultFor(account, [paying, other], cache);
+    const broke = vaultFor(account, [toon, own], cache, brokeWriter(toon));
     await broke.refresh();
 
-    await expect(broke.publish(leaseRecord())).rejects.toMatchObject({
-      code: 'relay_payment_required',
-      status: 402,
-    });
+    const failed = await broke.publish(leaseRecord()).catch((error: unknown) => error);
+    expect(failed).toBeInstanceOf(LeaseVaultError);
+    expect(failed).toMatchObject({ code: 'relay_payment_required', status: 402 });
+    expect((failed as LeaseVaultError).message).toContain('The spawn was NOT sent');
+    expect((failed as LeaseVaultError).message).toContain('local only');
     expect(cache.read(account.pubkey).size).toBe(0);
     expect(broke.list()).toHaveLength(0);
+    expect(toon.events.some((event) => event.kind === LEASE_VAULT_KIND)).toBe(false);
   });
 
-  it('says where a record would go, and why there', () => {
-    expect(vault.status().writeTargets).toEqual([OWN]);
-    expect(vault.status().writeTargetSource).toBe('nip65');
-  });
+  it('says where a record would go, what it costs, and what stops it', async () => {
+    expect(vault.status().writes).toMatchObject({
+      relays: [TOON],
+      destination: 'g.toon.relay',
+      price: '1',
+      ready: true,
+    });
 
-  it('falls back to the network profile’s relay when the account named none', async () => {
-    const bare = fakeAccount();
-    const noList = vaultFor(bare, [own, other]);
-    await noList.refresh();
-    expect(noList.status().writeTargets).toEqual([OTHER]);
-    expect(noList.status().writeTargetSource).toBe('profile');
+    const broke = vaultFor(account, [toon, own], undefined, brokeWriter(toon));
+    const blocked = await broke.targets();
+    expect(blocked.ready).toBe(false);
+    expect(blocked.blockedBy).toContain('no payment channel');
   });
 
   it('confirms a lease in place: same `d`, now carrying its access', async () => {
@@ -237,8 +255,10 @@ describe('the Lease Vault', () => {
     });
 
     expect(confirmed.confirmed).toBe(true);
-    // NIP-01 replacement: one record, not two.
-    expect(own.events.filter((event) => event.kind === LEASE_VAULT_KIND)).toHaveLength(1);
+    // NIP-01 replacement: one record, not two — and a second paid write.
+    expect(toon.events.filter((event) => event.kind === LEASE_VAULT_KIND)).toHaveLength(1);
+    expect(writer.written).toHaveLength(2);
+    expect(vault.status().lastPublish?.what).toBe('confirm');
     expect(vault.list()[0]?.state).toBe('live');
     expect(vault.list()[0]?.access?.host).toBe('203.0.113.7');
     expect(vault.list()[0]?.expiresAt).toBe(1_790_003_600);
@@ -246,7 +266,7 @@ describe('the Lease Vault', () => {
 
   it('retracts a record so nothing is left pointing at a lease that never was', async () => {
     const cache = new InMemoryLeaseVaultCache();
-    const held = vaultFor(account, [own, other], cache);
+    const held = vaultFor(account, [toon, own], cache);
     await held.refresh();
     await held.publish(leaseRecord());
 
@@ -256,12 +276,31 @@ describe('the Lease Vault', () => {
     expect(held.list()).toHaveLength(0);
     expect(cache.read(account.pubkey).size).toBe(0);
     // A NIP-09 deletion went out beside the tombstone, for the relays that
-    // honour one.
-    expect(own.events.some((event) => event.kind === 5)).toBe(true);
+    // honour one. Two more paid writes, and the report says what they cost
+    // together.
+    expect(toon.events.some((event) => event.kind === 5)).toBe(true);
+    expect(held.status().lastPublish).toMatchObject({ what: 'retract', cost: '2' });
     // And a fresh machine reading the relay sees no lease either: whatever is
     // left under that `d` is a tombstone, which `list` does not show.
-    const fresh = vaultFor(account, [own, other], new InMemoryLeaseVaultCache());
+    const fresh = vaultFor(account, [toon, own], new InMemoryLeaseVaultCache());
     expect((await fresh.refresh()).leases).toHaveLength(0);
+  });
+
+  it('says a retraction did NOT happen when its write could not be bought', async () => {
+    const cache = new InMemoryLeaseVaultCache();
+    const paying = fakePaidWriter(toon);
+    const held = vaultFor(account, [toon, own], cache, paying);
+    await held.refresh();
+    await held.publish(leaseRecord());
+
+    paying.refuse = new RelayWriteError('no_channel', 'the channel is spent', 402);
+    const taken = await held.retract(WORKLOAD, 'the spawn was refused: no_capacity');
+
+    expect(taken.retracted).toBe(false);
+    expect(taken.reason).toContain('the channel is spent');
+    // The local copy is gone either way: what the console cannot take back, it
+    // at least stops claiming to hold.
+    expect(held.list()).toHaveLength(0);
   });
 
   it('counts a record this signer cannot open, rather than failing the read', async () => {
@@ -277,7 +316,7 @@ describe('the Lease Vault', () => {
       tags: [['d', 'toon-console/lease/' + 'f'.repeat(64)]],
       content: sealed,
     });
-    own.events = [...own.events, forged as never];
+    toon.events = [...toon.events, forged as never];
 
     const status = await vault.refresh();
     expect(status.leases).toHaveLength(1);
@@ -291,7 +330,7 @@ describe('the Lease Vault', () => {
       tags: [['d', 'toon-console/chain-seed']],
       content: await account.sealToSelf(JSON.stringify({ v: 1, mnemonic: 'not a lease' })),
     });
-    own.events = [...own.events, seedRecord as never];
+    toon.events = [...toon.events, seedRecord as never];
     await vault.publish(leaseRecord());
 
     const status = await vault.refresh();
@@ -330,9 +369,10 @@ describe('the Lease Vault', () => {
     let who: FakeAccount | undefined = account;
     const switching = new LeaseVault({
       signer: () => who,
-      seedRelays: () => [OTHER],
+      seedRelays: () => [TOON],
       cache: new InMemoryLeaseVaultCache(),
-      dial: fakeRelayNetwork([own, other]),
+      writer,
+      dial: fakeRelayNetwork([toon, own]),
       timeoutMs: 200,
     });
     await switching.refresh();

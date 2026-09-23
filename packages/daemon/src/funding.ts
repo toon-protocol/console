@@ -6,6 +6,7 @@ import {
   type ChainAddress,
   type ChainSeedStatus,
   type ChainSeedStore,
+  type HeldSeedView,
   type PayerKeys,
 } from './chain-seed.js';
 import type { ConnectorHealth, SettlementView } from './connector-health.js';
@@ -247,6 +248,17 @@ export interface FundingStatus {
    * view refuses to be quiet about it.
    */
   readonly supersededSeeds: number;
+  /**
+   * Set while the Chain Seed behind these addresses is **not yet recoverable**
+   * (TOON_Network#120).
+   *
+   * It is on this view and not only on the Account tab because this is the
+   * screen that invites a deposit, and depositing into an address whose seed
+   * one disk holds is the mistake the state exists to prevent. The seed is
+   * published with a paid write once a channel exists — which is the very
+   * thing this view is for — so the two belong on one screen.
+   */
+  readonly heldSeed?: HeldSeedView | undefined;
   readonly chains: readonly ChainFundingView[];
   readonly quote?: QuoteView | undefined;
   readonly faucet?: FaucetView | undefined;
@@ -424,6 +436,7 @@ export class FundingStore {
           : { acknowledgedAt: seed.warning.acknowledgedAt }),
       },
       supersededSeeds: seed.supersededSeeds,
+      ...(seed.held === undefined ? {} : { heldSeed: seed.held }),
       checkedAt: this.#at().toISOString(),
     };
 
@@ -461,7 +474,11 @@ export class FundingStore {
       };
     }
 
-    if (seed.state !== 'ready' || !seed.addresses) {
+    // A seed that is only HELD still has real addresses, and funding one of
+    // them is the next step in #120's ordering: the channel opened with that
+    // money is what pays for the seed's own publication. So this view works
+    // for both, and says which it is.
+    if ((seed.state !== 'ready' && seed.state !== 'not_yet_recoverable') || !seed.addresses) {
       return {
         ...base,
         state: 'no_seed',

@@ -71,6 +71,7 @@ export function FundingView({ funding }: { funding: FundingState }) {
   return (
     <div className="space-y-4">
       {funding.error && <Problem funding={funding} />}
+      {status.heldSeed && <HeldSeed held={status.heldSeed} />}
       {status.supersededSeeds > 0 && <SupersededSeeds count={status.supersededSeeds} />}
       <GasGate status={status} />
       {status.chains.map((chain) => (
@@ -185,6 +186,37 @@ function GasBadge({ chain }: { chain: ChainFundingView }) {
 }
 
 /** ADR 0020's second ruling, on screen: surfaced, never merged, never quiet. */
+/**
+ * The seed behind these addresses is not yet recoverable (TOON_Network#120).
+ *
+ * It belongs on THIS screen, above the addresses, because this is the screen
+ * that invites a deposit — and depositing into an address whose seed one disk
+ * holds is the mistake the state exists to prevent. The way out runs through
+ * here too: the channel opened with this money is what pays for the seed's own
+ * publication.
+ */
+function HeldSeed({ held }: { held: NonNullable<FundingStatus['heldSeed']> }) {
+  return (
+    <div
+      role="alert"
+      className="border-destructive/40 bg-destructive/10 space-y-2 rounded-lg border px-4 py-3 text-sm"
+      data-testid="held-seed"
+    >
+      <p className="font-semibold">This account’s Chain Seed is not yet recoverable</p>
+      <p>{held.text}</p>
+      <ol className="list-decimal space-y-1 pl-5 text-xs">
+        {held.steps.map((step) => (
+          <li key={step}>{step}</li>
+        ))}
+      </ol>
+      <p className="text-xs">
+        The addresses below are real and may be funded — that is the next step. Publish the
+        seed from the Account tab as soon as this account has a channel.
+      </p>
+    </div>
+  );
+}
+
 function SupersededSeeds({ count }: { count: number }) {
   return (
     <div

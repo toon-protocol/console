@@ -13,13 +13,14 @@ import {
   type RelayList,
   type RelayMode,
 } from './relay-list.js';
+import { queryRelays, type RelayDialer } from './relay-pool.js';
 import {
-  isPersisted,
-  publishToRelays,
-  queryRelays,
-  type PublishOutcome,
-  type RelayDialer,
-} from './relay-pool.js';
+  RelayWriteError,
+  type RelayWriteOutcome,
+  type RelayWriteReceipt,
+  type RelayWriteTargets,
+  type RelayWriter,
+} from './relay-write.js';
 import { SealingError, type AccountSigning } from './signer.js';
 import type { ChainSeedCache, CachedChainSeed } from './chain-seed-cache.js';
 
@@ -49,14 +50,22 @@ import type { ChainSeedCache, CachedChainSeed } from './chain-seed-cache.js';
  * — recovery is through the Nostr key, which is the ADR's whole design, and a
  * "reveal" button would be a second, weaker custody story bolted onto it.
  *
- * **Nothing is cached until a relay has it.** The local cache holds the
- * SEALED event, exactly as published, and it is written only after some relay
- * has answered `OK … true`. A seed that existed only in `~/.local/share`
- * while the console said "recoverable on any machine" would be ADR 0020's
- * rejected option wearing its name, and the failure would surface on the day
- * the disk died. So a publish that no relay accepted throws, and the minted
- * words are dropped unused. Nothing is lost by that: no address derived from
- * them has ever been shown, let alone funded.
+ * **A seed that no relay holds is NOT YET RECOVERABLE, and says so.** This is
+ * the ordering TOON_Network#120 settled, and it replaces #89's rule that a
+ * record which was never published is never cached. A Chain Seed cannot pay
+ * for its own publication: a relay write is a paid TOON packet, paying takes a
+ * payment channel, and the payer key the channel is opened with is derived
+ * FROM the seed. So the order is: mint and hold it here, in a state that says
+ * plainly it is not yet recoverable; fund a payer address and open a channel
+ * (TOON_Network#90); publish the sealed record as a paid write; and only then
+ * call the seed recoverable anywhere the account can sign.
+ *
+ * Between the first step and the third the seed exists on one disk. The
+ * console keeps saying so — `state` is `not_yet_recoverable`, `held` carries
+ * the sentence and the steps, and there is no `record`, because there is no
+ * published record to describe. What #89 was right about is kept: the local
+ * copy is never allowed to *pass* for a published one, which is why the
+ * distinction is a named state rather than an absent field.
  *
  * **A second seed is worse than no seed.** Minting over an existing record
  * would strand whatever the first one's addresses hold, and no one would
@@ -82,6 +91,29 @@ export const CUSTODY_WARNING =
   'what they hold. Losing the Nostr key loses the funds with it: nothing in TOON Network, and ' +
   'no one running it, can recover them for you.';
 
+/**
+ * What a held seed is, said once and said the same way everywhere.
+ *
+ * The words matter and the ticket chose them: **not yet recoverable**. Not
+ * "pending", not "draft", not "unsynced" — each of those reads like a detail
+ * of the console's bookkeeping, and this is a statement about whether the
+ * money survives this machine.
+ */
+export const NOT_YET_RECOVERABLE =
+  'This Chain Seed is NOT YET RECOVERABLE. It is sealed on this machine and on nothing else: ' +
+  'no relay holds it, so if this disk is lost before the record is published, everything these ' +
+  'addresses hold is lost with it — including anything deposited in the meantime. Publishing ' +
+  'the record is a paid TOON packet, and a seed cannot pay for its own publication, because ' +
+  'the payer key that pays is derived from the seed itself.';
+
+/** The way out of it, in the order it has to happen (TOON_Network#120). */
+export const RECOVERABILITY_STEPS: readonly string[] = [
+  'Send the chain’s own coin — ETH, SOL — to the payer address below, so a transaction can be paid for.',
+  'Fund that address with the settlement token, from this network’s faucet on devnet.',
+  'Open a payment channel with this network’s connector, on the Funds tab.',
+  'Publish the Chain Seed record. It is one paid write, at the price the connector quotes.',
+];
+
 export type ChainSeedState =
   /** No account is signed in, so there is nothing to unseal anything with. */
   | 'signed_out'
@@ -89,7 +121,13 @@ export type ChainSeedState =
   | 'unknown'
   /** Looked for and not found: this account has no Chain Seed anywhere. */
   | 'absent'
-  /** Found and opened. The addresses are real. */
+  /**
+   * Minted or imported, sealed, and on this disk ALONE. The addresses are
+   * real and may be funded; the seed behind them is not recoverable anywhere
+   * else until the sealed record is published as a paid write (#120).
+   */
+  | 'not_yet_recoverable'
+  /** Published and opened. The addresses are real and the seed follows the account. */
   | 'ready'
   /** A record exists that this signer will not open. */
   | 'unreadable';
@@ -136,21 +174,50 @@ export interface SeedRecordView {
   readonly relays: readonly string[];
 }
 
+/**
+ * NIP-65, which since #120 says where a seed is LOOKED FOR and no longer where
+ * it is written. A write goes on the one relay the console can buy a paid
+ * packet to — see `ChainSeedStatus.writes` — and reads still ask every relay
+ * this account named, because reading is free.
+ */
 export interface RelayListView {
   readonly state: 'unknown' | 'none' | 'present';
   readonly read: readonly string[];
   readonly write: readonly string[];
   readonly publishedAt?: string | undefined;
-  /** Where a seed would be published right now, and why there. */
-  readonly writeTargets: readonly string[];
-  readonly writeTargetSource: 'nip65' | 'profile' | 'none';
+}
+
+/**
+ * A seed that exists on one disk, in the console's own words.
+ *
+ * It is a VIEW and not a flag because the console has to keep saying it, in
+ * full, until the paid write lands: an account funding an address whose seed
+ * nothing else holds is one lost laptop away from losing the money, and the
+ * only defence is that nobody can miss which state they are in.
+ */
+export interface HeldSeedView {
+  /** When this console minted or imported it. */
+  readonly since: string;
+  readonly origin: SeedOrigin;
+  /** The sentence, verbatim. The UI renders this rather than writing its own. */
+  readonly text: string;
+  /** What has to happen before it is recoverable, in order. */
+  readonly steps: readonly string[];
+  /** Why the last attempt to publish it did not land, when one was made. */
+  readonly lastAttempt?: string | undefined;
 }
 
 export interface PublishReport {
   readonly at: string;
   readonly what: 'chain-seed' | 'relay-list';
-  readonly relays: readonly PublishOutcome[];
+  readonly relays: readonly RelayWriteOutcome[];
   readonly accepted: readonly string[];
+  /** What this write cost, in base units of the settlement token. */
+  readonly cost?: string | undefined;
+  /** The paid route it was bought on, and where it was paid for. */
+  readonly destination?: string | undefined;
+  readonly payAt?: string | undefined;
+  readonly chain?: string | undefined;
 }
 
 export interface ChainSeedStatus {
@@ -158,8 +225,13 @@ export interface ChainSeedStatus {
   readonly pubkey?: string | undefined;
   readonly addresses?: ChainAddresses | undefined;
   readonly origin?: SeedOrigin | undefined;
+  /** The PUBLISHED record. Absent while a seed is only held (#120). */
   readonly record?: SeedRecordView | undefined;
+  /** Set exactly when `state` is `not_yet_recoverable`. */
+  readonly held?: HeldSeedView | undefined;
   readonly relayList: RelayListView;
+  /** Where a paid write would go right now, what it costs, and what stops it. */
+  readonly writes: RelayWriteTargets;
   readonly warning: { readonly text: string; readonly acknowledgedAt?: string | undefined };
   /** Older records seen that held a DIFFERENT seed. Never quietly zero. */
   readonly supersededSeeds: number;
@@ -171,13 +243,13 @@ export interface ChainSeedStatus {
 export class ChainSeedError extends Error {
   readonly code: string;
   readonly status: number;
-  /** Per-relay detail, when the fault was a publish. */
-  readonly relays?: readonly PublishOutcome[];
+  /** Per-relay detail, when the fault was a paid write. */
+  readonly relays?: readonly RelayWriteOutcome[];
   constructor(
     code: string,
     message: string,
     status = 400,
-    relays?: readonly PublishOutcome[]
+    relays?: readonly RelayWriteOutcome[]
   ) {
     super(message);
     this.name = 'ChainSeedError';
@@ -200,7 +272,13 @@ export interface ChainSeedDeps {
   /** The active network profile's relays: the seed for NIP-65 discovery. */
   readonly seedRelays: () => readonly string[];
   readonly cache: ChainSeedCache;
-  /** One seam for both directions, so the real read and write run in tests. */
+  /**
+   * The console's one writer (#120). A thunk because the writer borrows this
+   * store's payer keys, so the two know about each other and one of them has
+   * to be told late.
+   */
+  readonly writer: () => RelayWriter;
+  /** The read seam, so the real NIP-01 read runs in tests without a socket. */
   readonly dial?: RelayDialer | undefined;
   readonly timeoutMs?: number | undefined;
   readonly now?: (() => Date) | undefined;
@@ -222,6 +300,10 @@ interface OpenSeed {
   readonly event: NostrEvent;
   readonly source: 'cache' | 'relays';
   readonly relays: readonly string[];
+  /** `false` while this seed is held on one disk and nowhere else (#120). */
+  readonly published: boolean;
+  /** When this console sealed it, for the held view's `since`. */
+  readonly heldSince?: string | undefined;
 }
 
 export class ChainSeedStore {
@@ -234,6 +316,10 @@ export class ChainSeedStore {
   #supersededSeeds = 0;
   #lastPublish: PublishReport | undefined;
   #reason: string | undefined;
+  /** The last answer from the writer, so `status()` can stay synchronous. */
+  #writes: RelayWriteTargets = UNREAD_TARGETS;
+  /** Why the last publish of a held seed did not land. */
+  #lastAttempt: string | undefined;
 
   constructor(deps: ChainSeedDeps) {
     this.#deps = deps;
@@ -249,7 +335,8 @@ export class ChainSeedStore {
     if (!signer) {
       return {
         state: 'signed_out',
-        relayList: relayListView(undefined, []),
+        relayList: relayListView(undefined),
+        writes: this.#writes,
         warning: { text: CUSTODY_WARNING },
         supersededSeeds: 0,
         checkedAt,
@@ -261,7 +348,10 @@ export class ChainSeedStore {
       state: this.#state(),
       pubkey: signer.pubkey,
       ...(open ? { addresses: open.addresses, origin: open.origin } : {}),
-      ...(open
+      // A `record` describes a PUBLISHED record. A held seed has none, and
+      // giving it one — with a `publishedAt` taken from an event nothing has
+      // seen — is exactly the confusion this state exists to prevent.
+      ...(open?.published
         ? {
             record: {
               eventId: open.event.id,
@@ -271,7 +361,19 @@ export class ChainSeedStore {
             },
           }
         : {}),
-      relayList: relayListView(this.#relayList, this.#deps.seedRelays()),
+      ...(open && !open.published
+        ? {
+            held: {
+              since: open.heldSince ?? new Date(open.event.created_at * 1000).toISOString(),
+              origin: open.origin,
+              text: NOT_YET_RECOVERABLE,
+              steps: RECOVERABILITY_STEPS,
+              ...(this.#lastAttempt === undefined ? {} : { lastAttempt: this.#lastAttempt }),
+            },
+          }
+        : {}),
+      relayList: relayListView(this.#relayList),
+      writes: this.#writes,
       warning: {
         text: CUSTODY_WARNING,
         ...(acknowledgedAt === undefined ? {} : { acknowledgedAt }),
@@ -317,11 +419,19 @@ export class ChainSeedStore {
 
     const cached = this.#deps.cache.read(signer.pubkey);
     this.#relayList = await this.#readRelayList(signer.pubkey, cached, hints);
+    this.#writes = await this.#deps.writer().targets();
 
     const fromRelays = await this.#readRecords(signer.pubkey, hints);
     const candidates = [
       ...(cached?.event
-        ? [{ event: cached.event, source: 'cache' as const, relays: [] }]
+        ? [
+            {
+              event: cached.event,
+              source: 'cache' as const,
+              relays: [],
+              published: cached.published !== false,
+            },
+          ]
         : []),
       ...fromRelays,
     ];
@@ -340,10 +450,17 @@ export class ChainSeedStore {
     }
 
     // NIP-01's replacement rule decides which record is current, not whichever
-    // relay answered first and not the cache by virtue of being local.
-    const current = candidates.reduce((held, candidate) =>
-      supersedes(candidate.event, held.event) ? candidate : held
-    );
+    // relay answered first and not the cache by virtue of being local. One
+    // exception, and it is how a held seed stops being held: when the cache
+    // and a relay hold the SAME event, the relay's copy is the one that proves
+    // it was published — by this console or by another machine of the same
+    // account.
+    const current = candidates.reduce((held, candidate) => {
+      if (candidate.event.id === held.event.id) {
+        return candidate.published && !held.published ? candidate : held;
+      }
+      return supersedes(candidate.event, held.event) ? candidate : held;
+    });
 
     const opened = await this.#openSeed(signer, current.event).catch((error: unknown) => {
       if (error instanceof SealingError) {
@@ -360,6 +477,13 @@ export class ChainSeedStore {
       event: current.event,
       source: current.source,
       relays: current.relays,
+      // A record a relay answered with IS published, whatever the cache
+      // thought: that is the only way a held seed's state can be cleared by
+      // somebody else's console, and it is the right way.
+      published: current.published,
+      ...(current.published
+        ? {}
+        : { heldSince: new Date(current.event.created_at * 1000).toISOString() }),
     };
     this.#supersededSeeds = await this.#countOtherSeeds(signer, candidates, {
       event: current.event,
@@ -369,17 +493,29 @@ export class ChainSeedStore {
     // Only now: a record that opened is one worth keeping a copy of, and one
     // that did not would overwrite a cache that still works.
     if (current.source === 'relays') {
-      this.#deps.cache.writeEvent(signer.pubkey, current.event, current.relays);
+      this.#deps.cache.writeEvent(signer.pubkey, {
+        event: current.event,
+        relays: current.relays,
+        published: true,
+      });
     }
     return this.status();
   }
 
-  /** Mint a random BIP-39 Chain Seed, seal it, publish it. */
+  /**
+   * Mint a random BIP-39 Chain Seed, seal it, and HOLD it.
+   *
+   * It is not published here and it cannot be: publishing is a paid packet,
+   * paying takes a channel, and the channel is opened with a key derived from
+   * these very words (TOON_Network#120). What comes back says
+   * `not_yet_recoverable` and carries the addresses to fund, which is the only
+   * order these steps can happen in.
+   */
   async mint(): Promise<ChainSeedStatus> {
     const signer = this.#require();
     this.#requireAcknowledged(signer.pubkey);
     await this.#refuseIfSeedExists(signer, 'Minting a second one would strand it.');
-    return this.#sealAndPublish(signer, generateMnemonic(), 'minted');
+    return this.#sealAndHold(signer, generateMnemonic(), 'minted');
   }
 
   /**
@@ -409,7 +545,69 @@ export class ChainSeedStore {
     // Importing the phrase the account already has is not a mistake; it is
     // somebody checking. Say so rather than publishing it a second time.
     if (existing === 'same') return this.status();
-    return this.#sealAndPublish(signer, mnemonic, 'imported');
+    return this.#sealAndHold(signer, mnemonic, 'imported');
+  }
+
+  /**
+   * Publish the held record: one paid write, and the end of the temporary
+   * state.
+   *
+   * The third step of #120's ordering, and the only thing that clears
+   * `not_yet_recoverable`. It publishes what was sealed at mint time — the
+   * same bytes, not a re-seal — so the record a relay ends up holding is the
+   * one this console has been describing all along.
+   *
+   * A write that does not land leaves everything exactly as it was: still
+   * held, still saying so, with the reason attached. Nothing is re-minted and
+   * nothing is dropped, because the words are already the ones the account's
+   * addresses were derived from and may already hold money.
+   */
+  async publish(): Promise<ChainSeedStatus> {
+    const signer = this.#require();
+    const open = this.#open;
+    if (!open) {
+      throw new ChainSeedError(
+        this.#state() === 'unreadable' ? 'seed_unreadable' : 'no_seed',
+        this.#state() === 'unreadable'
+          ? `This account has a Chain Seed record that this signer did not open, so there is ` +
+              `nothing here to publish. ${this.#reason ?? ''}`.trim()
+          : 'This account has no Chain Seed yet, so there is nothing to publish. Mint or ' +
+              'import one first.',
+        409
+      );
+    }
+    if (open.published) return this.status();
+
+    try {
+      const receipt = await this.#deps.writer().write({
+        event: open.event,
+        what: 'This account’s Chain Seed record',
+      });
+      this.#lastPublish = reportOf('chain-seed', receipt);
+      this.#lastAttempt = undefined;
+      this.#deps.cache.writeEvent(signer.pubkey, {
+        event: open.event,
+        relays: receipt.relays,
+        published: true,
+      });
+      this.#deps.cache.rememberRelays(signer.pubkey, receipt.relays);
+      this.#open = { ...open, source: 'relays', relays: receipt.relays, published: true };
+      this.#writes = await this.#deps.writer().targets();
+      return this.status();
+    } catch (error) {
+      if (error instanceof RelayWriteError) {
+        this.#lastAttempt = error.message;
+        this.#writes = await this.#deps.writer().targets();
+        throw new ChainSeedError(
+          error.code,
+          `${error.message} The Chain Seed is still NOT YET RECOVERABLE: it is sealed on this ` +
+            `machine and on no relay, and nothing about it has changed.`,
+          error.status,
+          error.writes
+        );
+      }
+      throw error;
+    }
   }
 
   /**
@@ -460,50 +658,50 @@ export class ChainSeedStore {
   }
 
   /**
-   * Publish a NIP-65 relay list for an account that has none.
+   * Publish a NIP-65 relay list for this account: one more paid write.
    *
-   * The offer ADR 0020's ticket asks for, and the way out of the seam below:
-   * an account with no list has nowhere of its own to put a sealed seed, and
-   * the only relay the console knows about is the network profile's — which
-   * charges for writes. Naming a relay here gives the seed somewhere to go.
-   *
-   * The list goes to the relays it names. There is no indexer constant here,
-   * for the same reason there is no chain id in `profiles.ts`: a relay the
-   * console picked would be a relay the account never chose.
+   * What it is FOR changed with #120. It was the way out of a seam — an
+   * account with no list had nowhere free to put a sealed seed — and that seam
+   * is closed: records go to the TOON relay, paid for. What a list still does
+   * is tell every other Nostr client where this account is to be found, and
+   * tell this console where to look on a machine that has never seen it. So it
+   * is offered rather than required, and it goes where every write goes, which
+   * is not necessarily a relay it names: the list is a statement ABOUT relays,
+   * not a thing that has to live on each of them.
    */
   async publishRelayList(
     entries: readonly { url: string; mode?: RelayMode }[]
   ): Promise<ChainSeedStatus> {
     const signer = this.#require();
     const template = relayListTemplate(entries, this.#seconds());
-    const signed = await signer.sign(template);
-    const targets = template.tags.flatMap((tag) => (tag[0] === 'r' && tag[1] ? [tag[1]] : []));
-    const result = await publishToRelays({
-      event: signed,
-      relays: targets,
-      ...(this.#deps.dial === undefined ? {} : { dial: this.#deps.dial }),
-      ...(this.#deps.timeoutMs === undefined ? {} : { timeoutMs: this.#deps.timeoutMs }),
-    });
-    this.#lastPublish = {
-      at: this.#at().toISOString(),
-      what: 'relay-list',
-      relays: result.relays,
-      accepted: result.accepted,
-    };
-    if (result.accepted.length === 0) {
-      throw new ChainSeedError(
-        'relay_list_not_published',
-        `No relay accepted this account's relay list. ${describeRefusals(result.relays)}`,
-        502,
-        result.relays
-      );
+    const signed = (await signer.sign(template)) as unknown as NostrEvent;
+    try {
+      const receipt = await this.#deps.writer().write({
+        event: signed,
+        what: 'This account’s NIP-65 relay list',
+      });
+      this.#lastPublish = reportOf('relay-list', receipt);
+      // Remember where it went, and where it says to look: the next read on a
+      // fresh machine seeds from the profile's relay, and an account's own
+      // relays are worth asking too.
+      this.#deps.cache.rememberRelays(signer.pubkey, [
+        ...receipt.relays,
+        ...template.tags.flatMap((tag) => (tag[0] === 'r' && tag[1] ? [tag[1]] : [])),
+      ]);
+      return await this.refresh();
+    } catch (error) {
+      if (error instanceof RelayWriteError) {
+        throw new ChainSeedError(
+          error.code === 'write_refused' || error.code === 'write_unconfirmed'
+            ? 'relay_list_not_published'
+            : error.code,
+          error.message,
+          error.status,
+          error.writes
+        );
+      }
+      throw error;
     }
-    // Remember where it went. A list published to a relay nothing else names
-    // would otherwise be unreadable to the very console that just wrote it:
-    // the next read seeds from the network profile's relay, which has never
-    // heard of it.
-    this.#deps.cache.rememberRelays(signer.pubkey, result.accepted);
-    return this.refresh();
   }
 
   /** Forget this session's opened seed — a sign-out, not a deletion. */
@@ -518,105 +716,55 @@ export class ChainSeedStore {
   }
 
   #state(): ChainSeedState {
-    if (this.#open) return 'ready';
+    if (this.#open) return this.#open.published ? 'ready' : 'not_yet_recoverable';
     if (this.#reason !== undefined) return 'unreadable';
     return this.#looked ? 'absent' : 'unknown';
   }
 
   /**
-   * Seal, sign, publish, and only then cache.
+   * Seal, sign, and hold — the first step of #120's ordering.
    *
-   * The ordering is the safety property. Between `sealToSelf` and the first
-   * `OK … true` the mnemonic exists in exactly one place — this call frame —
-   * and if no relay takes it, it is dropped there. That is the right outcome:
-   * a seed no relay holds is not a Chain Seed, and pretending otherwise is how
-   * an account funds an address it can never recover.
+   * The mnemonic exists in this call frame and in the ciphertext, and nowhere
+   * else: what is cached is the sealed event, marked `published: false`, which
+   * is what makes the state a named one rather than a silent copy. The
+   * addresses are derived and returned because funding one of them is the very
+   * next step, and there is no way round that — the payer key that will pay
+   * for the publication is derived from these words.
    */
-  async #sealAndPublish(
+  async #sealAndHold(
     signer: ChainSeedSigner,
     mnemonic: string,
     origin: SeedOrigin
   ): Promise<ChainSeedStatus> {
-    const targets = this.#writeTargets();
-    if (targets.relays.length === 0) {
-      throw new ChainSeedError(
-        'no_relay',
-        'There is nowhere to publish this Chain Seed. This account has published no NIP-65 ' +
-          'relay list, and the active network profile names no relay either. Publish a relay ' +
-          'list first, naming at least one relay this account can write to.',
-        409
-      );
-    }
-
-    const sealed: SealedSeed = {
-      v: 1,
-      mnemonic,
-      origin,
-      created_at: this.#at().toISOString(),
-    };
+    const sealedAt = this.#at().toISOString();
+    const sealed: SealedSeed = { v: 1, mnemonic, origin, created_at: sealedAt };
     const content = await signer.sealToSelf(JSON.stringify(sealed));
-    const signedEvent = await signer.sign({
+    const signedEvent = (await signer.sign({
       kind: CHAIN_SEED_KIND,
       created_at: this.#seconds(),
       // `d` is public and says only that this account keeps a console record.
       // The relay learns that much and nothing else (ADR 0020).
       tags: [['d', CHAIN_SEED_D]],
       content,
-    });
-
-    const result = await publishToRelays({
-      event: signedEvent,
-      relays: targets.relays,
-      ...(this.#deps.dial === undefined ? {} : { dial: this.#deps.dial }),
-      ...(this.#deps.timeoutMs === undefined ? {} : { timeoutMs: this.#deps.timeoutMs }),
-    });
-    this.#lastPublish = {
-      at: this.#at().toISOString(),
-      what: 'chain-seed',
-      relays: result.relays,
-      accepted: result.accepted,
-    };
-
-    if (result.accepted.length === 0) {
-      throw notPersisted(result.relays, targets.source);
-    }
+    })) as unknown as NostrEvent;
 
     const addresses = deriveAddresses(mnemonic);
-    this.#deps.cache.writeEvent(
-      signer.pubkey,
-      signedEvent as unknown as NostrEvent,
-      result.accepted
-    );
+    this.#deps.cache.writeEvent(signer.pubkey, { event: signedEvent, published: false });
     this.#open = {
       addresses,
       origin,
-      event: signedEvent as unknown as NostrEvent,
-      source: 'relays',
-      relays: result.accepted,
+      event: signedEvent,
+      source: 'cache',
+      relays: [],
+      published: false,
+      heldSince: sealedAt,
     };
     this.#looked = true;
     this.#reason = undefined;
+    this.#lastAttempt = undefined;
     this.#supersededSeeds = 0;
+    this.#writes = await this.#deps.writer().targets();
     return this.status();
-  }
-
-  /**
-   * Where a seed goes: the account's NIP-65 WRITE relays, or the network
-   * profile's relay when it has named none.
-   *
-   * The second case is the awkward one, and it is handled by being honest
-   * about it rather than by picking a relay. The profile's relay is a TOON
-   * relay; a TOON relay prices its writes at 1 µUSDC and refuses an unpaid
-   * one outright. Until this account has a channel (TOON_Network#90) the write
-   * will be refused, and `notPersisted` says exactly that and what to do.
-   */
-  #writeTargets(): { relays: readonly string[]; source: 'nip65' | 'profile' | 'none' } {
-    const write = this.#relayList?.write ?? [];
-    if (write.length > 0) return { relays: write, source: 'nip65' };
-    const seeds = this.#deps.seedRelays().filter((url) => url.length > 0);
-    return seeds.length > 0
-      ? { relays: seeds, source: 'profile' }
-      : { relays: [], source: 'none' };
   }
 
   async #readRelayList(
@@ -637,7 +785,7 @@ export class ChainSeedStore {
   async #readRecords(
     pubkey: string,
     hints: readonly string[]
-  ): Promise<{ event: NostrEvent; source: 'relays'; relays: string[] }[]> {
+  ): Promise<{ event: NostrEvent; source: 'relays'; relays: string[]; published: true }[]> {
     const relays = [
       ...new Set([
         ...hints,
@@ -667,7 +815,12 @@ export class ChainSeedStore {
           event.pubkey === pubkey &&
           tagValue(event, 'd') === CHAIN_SEED_D
       )
-      .map((event) => ({ event, source: 'relays' as const, relays: answered }));
+      .map((event) => ({
+        event,
+        source: 'relays' as const,
+        relays: answered,
+        published: true as const,
+      }));
   }
 
   /**
@@ -867,76 +1020,32 @@ export function normalizeMnemonic(words: string): string {
   return words.trim().toLowerCase().split(/\s+/u).join(' ');
 }
 
-function relayListView(list: RelayList | undefined, seeds: readonly string[]): RelayListView {
-  const write = list?.write ?? [];
-  const usable = seeds.filter((url) => url.length > 0);
-  const targets = write.length > 0 ? write : usable;
-  const source = write.length > 0 ? 'nip65' : usable.length > 0 ? 'profile' : 'none';
+function relayListView(list: RelayList | undefined): RelayListView {
   return {
     state: list === undefined ? 'unknown' : list.entries.length > 0 ? 'present' : 'none',
     read: list?.read ?? [],
-    write,
+    write: list?.write ?? [],
     ...(list?.publishedAt === undefined ? {} : { publishedAt: list.publishedAt }),
-    writeTargets: targets,
-    writeTargetSource: source,
   };
 }
 
-/**
- * The paid-relay seam, spelled out for a person rather than swallowed.
- *
- * A TOON relay answers an unpaid websocket write with
- * `restricted: writes require ILP payment` — its writes cost 1 µUSDC, settled
- * through a payment channel, and this ticket opens none (TOON_Network#90
- * does). When that relay is the ONLY one available, because the account has
- * published no NIP-65 list, minting cannot persist anything. The console says
- * so, names the relay and its words, and gives the two ways out. It does not
- * cache the seed and call it done.
- */
-function notPersisted(
-  relays: readonly PublishOutcome[],
-  source: 'nip65' | 'profile' | 'none'
-): ChainSeedError {
-  const paid = relays.filter(looksLikePaidWrite);
-  if (paid.length > 0 && paid.length === relays.length) {
-    const where =
-      source === 'profile'
-        ? 'This account has published no NIP-65 relay list, so the only relay the console had ' +
-          'to try was the network profile’s — and that one charges for writes.'
-        : 'Every relay this account writes to charges for writes.';
-    return new ChainSeedError(
-      'relay_payment_required',
-      `The Chain Seed was NOT published, and nothing was kept locally — a seed only one disk ` +
-        `holds is not recoverable, so the console would rather fail here than pretend. ` +
-        `${where} ${describeRefusals(relays)} A paid write costs 1 µUSDC from a payment ` +
-        `channel, and this console cannot open one yet. Publish a relay list naming a relay ` +
-        `this account can write to for free, and mint again.`,
-      402,
-      relays
-    );
-  }
-  return new ChainSeedError(
-    'not_persisted',
-    `The Chain Seed was NOT published, and nothing was kept locally. ${describeRefusals(
-      relays
-    )} Nothing was minted twice: try again once a relay answers.`,
-    502,
-    relays
-  );
+/** One paid write, as the status reports it. The cost is never recomputed. */
+function reportOf(what: PublishReport['what'], receipt: RelayWriteReceipt): PublishReport {
+  return {
+    at: receipt.at,
+    what,
+    relays: receipt.writes,
+    accepted: receipt.relays,
+    ...(receipt.cost === undefined ? {} : { cost: receipt.cost }),
+    destination: receipt.destination,
+    payAt: receipt.payAt,
+    chain: receipt.chain,
+  };
 }
 
-/** A refusal that is really a price. */
-export function looksLikePaidWrite(outcome: PublishOutcome): boolean {
-  if (outcome.state !== 'rejected') return false;
-  return /pay|paid|payment|invoice|ilp|usdc|sats?\b|price/iu.test(outcome.reason ?? '');
-}
-
-function describeRefusals(relays: readonly PublishOutcome[]): string {
-  if (relays.length === 0) return 'No relay was tried.';
-  return relays
-    .filter((outcome) => !isPersisted(outcome))
-    .map(
-      (outcome) => `${outcome.url} ${outcome.state}: ${outcome.reason ?? 'no reason given'}.`
-    )
-    .join(' ');
-}
+/** Before the writer has been asked anything. Never mistaken for "ready". */
+const UNREAD_TARGETS: RelayWriteTargets = {
+  relays: [],
+  ready: false,
+  blockedBy: 'Nothing has asked this network’s connector what a relay write costs yet.',
+};

@@ -202,13 +202,16 @@ function Vault({ leases }: { leases: LeasesState }) {
           </Button>
         </CardTitle>
         <CardDescription>
-          Each lease&rsquo;s Root Secret is sealed to this account and kept on{' '}
-          {vault?.writeTargets.length
-            ? vault.writeTargets.join(', ')
-            : 'no relay this console can find'}
-          {vault?.writeTargetSource === 'profile' &&
-            ' — this network&rsquo;s own relay, because this account has published no NIP-65 list'}
+          Each lease&rsquo;s Root Secret is sealed to this account and written to{' '}
+          {vault?.writes.relays.length
+            ? vault.writes.relays.join(', ')
+            : 'no relay this console can write to'}{' '}
+          as a paid packet
+          {vault?.writes.ready && vault.writes.price
+            ? ` — ${vault.writes.price} base units of the settlement token per write`
+            : ''}
           . Sign in anywhere and they come back.
+          {vault && !vault.writes.ready ? ` ${vault.writes.blockedBy ?? ''}` : ''}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -563,10 +566,11 @@ function Preflight({
       )}
       <p className="text-muted-foreground text-xs">
         {localOnly
-          ? 'The Root Secret will be sealed and kept on this machine only. Nothing is published.'
-          : preflight.vault.relays.length > 0
-            ? `The Root Secret will be sealed to this account and published to ${preflight.vault.relays.join(', ')} BEFORE the spawn is sent.`
-            : 'There is nowhere to publish the Root Secret. Publish a NIP-65 relay list from the Account tab, or mark this lease local only.'}
+          ? 'The Root Secret will be sealed and kept on this machine only. Nothing is published, and nothing is paid for it — that is the privacy choice, not a workaround.'
+          : preflight.vault.writes.ready
+            ? `The Root Secret will be sealed to this account and written to ${preflight.vault.writes.relays.join(', ')} BEFORE the spawn is sent — one paid packet on ${preflight.vault.writes.destination}, ${preflight.vault.writes.price} base units, on top of the lease’s own price.`
+            : (preflight.vault.writes.blockedBy ??
+              'The Root Secret cannot be written anywhere right now.')}
       </p>
       {preflight.problems.length > 0 && (
         <ul className="text-destructive list-disc space-y-1 pl-5">

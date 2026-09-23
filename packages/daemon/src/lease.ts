@@ -15,6 +15,7 @@ import {
 } from './lease-vault.js';
 import type { ConsolePaths } from './paths.js';
 import { isConfigured, type NetworkProfile } from './profiles.js';
+import type { RelayWriteTargets } from './relay-write.js';
 import {
   buildSpawnContent,
   DIGEST,
@@ -254,11 +255,17 @@ export interface PreflightView {
         readonly routePrice?: string | undefined;
       }
     | undefined;
-  /** Where the Root Secret would be written, before a packet goes out. */
+  /**
+   * Where the Root Secret would be written, what that write costs, and what
+   * stops it — before a packet goes out.
+   *
+   * The vault write is itself a paid packet now (TOON_Network#120), so a spawn
+   * has two prices: the Listing's interval and one relay write. Both are shown
+   * here, and both are the connector's or the provider's own figures.
+   */
   readonly vault: {
     readonly localOnly: boolean;
-    readonly relays: readonly string[];
-    readonly source: 'nip65' | 'profile' | 'none';
+    readonly writes: RelayWriteTargets;
   };
 }
 
@@ -573,12 +580,20 @@ export class LeaseStore {
     // would REALLY go, and that answer needs the account's NIP-65 list to have
     // been read at least once.
     const targets = await this.#deps.vault.targets();
-    const vault = {
-      localOnly: selection.localOnly,
-      relays: targets.relays,
-      source: targets.source,
-    };
+    const vault = { localOnly: selection.localOnly, writes: targets };
     const unready = (): Plan => ({ ready: undefined, view: { ok: false, problems, vault } });
+
+    // The vault record is a paid write of its own (#120), and it goes out
+    // BEFORE the spawn. A spawn that would fail at that write is stopped here,
+    // where it costs nothing to learn — not after a Root Secret has been
+    // minted, and never after an interval has been paid for.
+    if (!selection.localOnly && !targets.ready) {
+      problems.push(
+        `The Root Secret cannot be vaulted, so this spawn would not be sent: ` +
+          `${targets.blockedBy ?? 'no relay write can be bought right now.'} Mark this lease ` +
+          `"local only" if you would rather one machine held its secret.`
+      );
+    }
 
     if (!isConfigured(profile)) {
       problems.push(`${profile.label} names no connector, so nothing can be paid on it.`);
@@ -590,7 +605,12 @@ export class LeaseStore {
     // in a form, rather than a spawn failing after the vault record is already
     // published.
     const seed = await this.#seed();
-    if (seed.state !== 'ready') {
+    // `not_yet_recoverable` is a seed too: its payer keys are real and the
+    // channel this spawn pays from was opened with one of them (#120). What is
+    // at risk while it is held is the MONEY, not this lease — the vault record
+    // is sealed to the account's Nostr key and comes back anywhere — and the
+    // Funds tab is where that is said, in full.
+    if (seed.state !== 'ready' && seed.state !== 'not_yet_recoverable') {
       problems.push(
         seed.state === 'signed_out'
           ? 'No account is signed in, so there is no key to pay with and none to seal a Root ' +

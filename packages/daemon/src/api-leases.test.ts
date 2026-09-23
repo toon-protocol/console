@@ -8,6 +8,7 @@ import { handleApi, type ApiDeps, type ApiResponse } from './api.js';
 import { ChainSeedStore } from './chain-seed.js';
 import { InMemoryChainSeedCache } from './chain-seed-cache.js';
 import {
+  fakePaidWriter,
   fakeAccount,
   fakeRelayNetwork,
   fakeRelayServer,
@@ -70,6 +71,7 @@ describe('the lease routes', () => {
       signer: () => account,
       seedRelays: () => [RELAY],
       cache: new InMemoryChainSeedCache(),
+      writer: () => fakePaidWriter(relay),
       dial: fakeRelayNetwork([relay]),
       timeoutMs: 200,
     });
@@ -83,6 +85,7 @@ describe('the lease routes', () => {
       paths,
       dial: fakeRelayNetwork([relay]),
       relays: [RELAY],
+      relayServer: relay,
       provider: port,
     });
     giveChannel(paths, SANDBOX.id, PROVIDER_CONNECTOR);
@@ -113,7 +116,12 @@ describe('the lease routes', () => {
   it('answers the whole vault on GET', async () => {
     const answer = await call('GET', '/api/leases');
     expect(answer.status).toBe(200);
-    expect((answer.body as LeaseVaultStatus).writeTargets).toEqual([RELAY]);
+    expect((answer.body as LeaseVaultStatus).writes).toMatchObject({
+      relays: [RELAY],
+      destination: 'g.toon.relay',
+      price: '1',
+      ready: true,
+    });
   });
 
   it('spawns, and lists the workload afterwards', async () => {

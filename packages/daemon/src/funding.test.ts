@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ChainSeedStore } from './chain-seed.js';
 import { InMemoryChainSeedCache } from './chain-seed-cache.js';
 import {
+  fakePaidWriter,
   fakeAccount,
   fakeRelayNetwork,
   fakeRelayServer,
@@ -56,6 +57,7 @@ describe('funding', () => {
       signer: () => signedIn,
       seedRelays: () => [RELAY],
       cache: new InMemoryChainSeedCache(),
+      writer: () => fakePaidWriter(relay),
       dial: fakeRelayNetwork([relay]),
       timeoutMs: 200,
     });
@@ -68,9 +70,16 @@ describe('funding', () => {
 
   const store = (): FundingStore => fundingStoreFor({ chainSeed: seed, paths, chains });
 
+  /**
+   * A seed this account really has: minted, and then PUBLISHED with a paid
+   * write, which is the ordering #120 settled. A seed that was only minted is
+   * a different state — `not_yet_recoverable` — and `heldSeed` below is the
+   * test of it.
+   */
   const withSeed = async () => {
     seed.acknowledgeWarning();
     await seed.mint();
+    await seed.publish();
   };
 
   /** Enough of a wallet to be allowed to open. */
@@ -101,6 +110,24 @@ describe('funding', () => {
       expect(status.chains).toEqual([]);
     });
 
+    it('funds a seed that is NOT YET RECOVERABLE, and keeps saying which it is', async () => {
+      // #120's ordering runs through this view: the seed is minted and held,
+      // the addresses are real, and funding one of them is what pays for the
+      // publication that makes it recoverable. So the view works — and says,
+      // beside every address it shows, that one disk holds the seed.
+      seed.acknowledgeWarning();
+      await seed.mint();
+
+      const status = await store().status();
+      expect(status.state).toBe('ready');
+      expect(status.chains).toHaveLength(2);
+      expect(status.heldSeed?.text).toContain('NOT YET RECOVERABLE');
+      expect(status.heldSeed?.steps.length).toBeGreaterThan(0);
+
+      await seed.publish();
+      expect((await store().status()).heldSeed).toBeUndefined();
+    });
+
     it('LOOKS for a seed before saying there is none', async () => {
       // A fresh daemon has not asked the account's relays anything yet. The
       // seed is on the relay; nobody had looked. Reporting "no Chain Seed,
@@ -110,6 +137,7 @@ describe('funding', () => {
         signer: () => signedIn,
         seedRelays: () => [RELAY],
         cache: new InMemoryChainSeedCache(),
+        writer: () => fakePaidWriter(relay),
         dial: fakeRelayNetwork([relay]),
         timeoutMs: 200,
       });
@@ -509,6 +537,7 @@ describe('funding', () => {
         signer: () => signedIn,
         seedRelays: () => [RELAY],
         cache: new InMemoryChainSeedCache(),
+        writer: () => fakePaidWriter(relay),
         dial: fakeRelayNetwork([relay]),
         timeoutMs: 200,
       });

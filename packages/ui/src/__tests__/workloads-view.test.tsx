@@ -129,8 +129,15 @@ const emptyVault: LeaseVaultStatus = {
   state: 'ready',
   pubkey: 'b'.repeat(64),
   leases: [],
-  writeTargets: ['wss://own.relay.test'],
-  writeTargetSource: 'nip65',
+  writes: {
+    relays: ['wss://own.relay.test'],
+    destination: 'g.toon.relay',
+    payAt: 'https://connector.test/ilp',
+    price: '1',
+    chain: 'evm:84532',
+    channelId: '0xchannel',
+    ready: true,
+  },
   unreadable: 0,
   checkedAt: '2026-09-23T10:00:00.000Z',
 };
@@ -202,7 +209,18 @@ const goodPreflight: PreflightView = {
     channelId: '0xchannel',
     routePrice: '1000',
   },
-  vault: { localOnly: false, relays: ['wss://own.relay.test'], source: 'nip65' },
+  vault: {
+    localOnly: false,
+    writes: {
+      relays: ['wss://own.relay.test'],
+      destination: 'g.toon.relay',
+      payAt: 'https://connector.test/ilp',
+      price: '1',
+      chain: 'evm:84532',
+      channelId: '0xchannel',
+      ready: true,
+    },
+  },
 };
 
 function answer(body: unknown, status = 200): Response {
@@ -294,7 +312,9 @@ describe('the Workloads view', () => {
   it('says which relays a Root Secret will go to before anything is spawned', async () => {
     await openWorkloads();
     expect(
-      await screen.findByText(/sealed to this account and kept on wss:\/\/own\.relay\.test/u)
+      await screen.findByText(
+        /sealed to this account and written to wss:\/\/own\.relay\.test/u
+      )
     ).toBeInTheDocument();
   });
 

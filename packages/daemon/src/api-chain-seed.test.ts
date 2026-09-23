@@ -9,10 +9,12 @@ import { handleApi, type ApiDeps, type ApiResponse } from './api.js';
 import { CHAIN_SEED_KIND, ChainSeedStore, type ChainSeedStatus } from './chain-seed.js';
 import { InMemoryChainSeedCache } from './chain-seed-cache.js';
 import {
+  brokeWriter,
+  fakePaidWriter,
   fakeRelayNetwork,
   fakeRelayServer,
-  publishRelayListEvent,
   type FakeRelayServer,
+  type FakeWriter,
 } from './chain-seed.testkit.js';
 import { generateAccountKey, toNsec } from './account-key.js';
 import { PassphraseFileKeystore, keystoreFilePath } from './keystore-file.js';
@@ -29,8 +31,12 @@ import { SignerIndex, signerIndexPath } from './signer-index.js';
  *
  * The rule this file exists to pin is the one in `api.ts`'s header, sharpened:
  * a mnemonic goes IN on `/api/chain-seed/import` and must never come back out
- * — not in a success, not in an error, not in the per-relay detail attached to
- * a failed publish.
+ * — not in a success, not in an error, not in the per-write detail attached to
+ * a publish that was refused.
+ *
+ * The second rule is #120's ordering, seen from the outside: a mint answers
+ * `not_yet_recoverable`, and only `POST /api/chain-seed/publish` — one paid
+ * write — turns that into `ready`.
  */
 
 const PASSPHRASE = 'a passphrase for the test';
@@ -38,7 +44,6 @@ const VECTOR = 'abandon '.repeat(11) + 'about';
 const VECTOR_EVM = '0x9858EfFD232B4033E47d90003D41EC34EcaEda94';
 const OWN = 'wss://relay.own.test';
 const PROFILE_RELAY = 'wss://relay.toon.test';
-const PAID = 'restricted: writes require ILP payment';
 
 describe('the chain seed routes', () => {
   let home: string;
@@ -46,6 +51,7 @@ describe('the chain seed routes', () => {
   let deps: ApiDeps;
   let own: FakeRelayServer;
   let toon: FakeRelayServer;
+  let writer: FakeWriter;
   let session: AccountSession;
 
   const call = (method: string, path: string, body?: unknown): Promise<ApiResponse> =>
@@ -58,7 +64,8 @@ describe('the chain seed routes', () => {
     home = mkdtempSync(join(tmpdir(), 'toon-console-seed-api-'));
     paths = consolePaths({ HOME: home } as NodeJS.ProcessEnv);
     own = fakeRelayServer(OWN);
-    toon = fakeRelayServer(PROFILE_RELAY, { refuse: PAID });
+    toon = fakeRelayServer(PROFILE_RELAY);
+    writer = fakePaidWriter(toon);
     session = new AccountSession({
       keystore: new PassphraseFileKeystore(keystoreFilePath(paths)),
       signers: new SignerIndex(signerIndexPath(paths)),
@@ -71,6 +78,7 @@ describe('the chain seed routes', () => {
         signer: () => session.signingPort(),
         seedRelays: () => [PROFILE_RELAY],
         cache: new InMemoryChainSeedCache(),
+        writer: () => writer,
         dial: fakeRelayNetwork([own, toon]),
         timeoutMs: 200,
       }),
@@ -79,6 +87,7 @@ describe('the chain seed routes', () => {
           signer: () => undefined,
           seedRelays: () => [],
           cache: new InMemoryChainSeedCache(),
+          writer: () => writer,
         }),
         paths,
         chains: fakeChainPort(),
@@ -122,22 +131,28 @@ describe('the chain seed routes', () => {
     expect(minted.body).toMatchObject({ error: 'not_signed_in' });
   });
 
-  it('mints through the signed-in account and shows its addresses', async () => {
+  it('mints, holds, and publishes on a route of its own', async () => {
     const pubkey = await signIn();
-    await publishRelayListEvent(session.signingPort()!, [own, toon], [OWN]);
 
     expect((await call('POST', '/api/chain-seed/acknowledge')).status).toBe(200);
     const minted = (await call('POST', '/api/chain-seed/mint')).body as ChainSeedStatus;
 
-    expect(minted.state).toBe('ready');
+    expect(minted.state).toBe('not_yet_recoverable');
+    expect(minted.held?.text).toContain('NOT YET RECOVERABLE');
     expect(minted.pubkey).toBe(pubkey);
     expect(minted.addresses?.evm.address).toMatch(/^0x/u);
-    expect(own.events.some((event) => event.kind === CHAIN_SEED_KIND)).toBe(true);
+    expect(minted.record).toBeUndefined();
+    expect(toon.events).toEqual([]);
+
+    const published = (await call('POST', '/api/chain-seed/publish')).body as ChainSeedStatus;
+    expect(published.state).toBe('ready');
+    expect(published.held).toBeUndefined();
+    expect(published.lastPublish?.cost).toBe('1');
+    expect(toon.events.some((event) => event.kind === CHAIN_SEED_KIND)).toBe(true);
   });
 
   it('imports a mnemonic and never echoes it back', async () => {
     await signIn();
-    await publishRelayListEvent(session.signingPort()!, [own, toon], [OWN]);
     await call('POST', '/api/chain-seed/acknowledge');
 
     const imported = await call('POST', '/api/chain-seed/import', { mnemonic: VECTOR });
@@ -149,7 +164,6 @@ describe('the chain seed routes', () => {
 
   it('keeps a bad mnemonic out of the answer that rejects it', async () => {
     await signIn();
-    await publishRelayListEvent(session.signingPort()!, [own, toon], [OWN]);
     await call('POST', '/api/chain-seed/acknowledge');
 
     const bad = await call('POST', '/api/chain-seed/import', {
@@ -160,22 +174,28 @@ describe('the chain seed routes', () => {
     expect(JSON.stringify(bad.body)).not.toMatch(/horse/u);
   });
 
-  it('answers the paid-relay refusal with 402 and the relay’s own words', async () => {
+  it('answers 402 when the write cannot be paid for, and keeps the seed held', async () => {
+    writer = brokeWriter(toon);
     await signIn();
     await call('POST', '/api/chain-seed/acknowledge');
 
-    const refused = await call('POST', '/api/chain-seed/import', { mnemonic: VECTOR });
+    const imported = await call('POST', '/api/chain-seed/import', { mnemonic: VECTOR });
+    expect((imported.body as ChainSeedStatus).state).toBe('not_yet_recoverable');
+
+    const refused = await call('POST', '/api/chain-seed/publish');
     expect(refused.status).toBe(402);
-    expect(refused.body).toMatchObject({ error: 'relay_payment_required' });
-    const body = refused.body as { message: string; relays: { reason?: string }[] };
-    expect(body.message).toContain(PROFILE_RELAY);
-    expect(body.relays[0]?.reason).toBe(PAID);
+    expect(refused.body).toMatchObject({ error: 'no_channel' });
+    const body = refused.body as { message: string };
+    expect(body.message).toContain('NOT YET RECOVERABLE');
     expect(JSON.stringify(refused.body)).not.toMatch(/abandon/u);
+
+    // Still held, still saying so, and still on no relay.
+    expect((await status()).state).toBe('not_yet_recoverable');
+    expect(toon.events).toEqual([]);
   });
 
   it('refuses to mint before the warning has been read', async () => {
     await signIn();
-    await publishRelayListEvent(session.signingPort()!, [own, toon], [OWN]);
     const refused = await call('POST', '/api/chain-seed/mint');
     expect(refused.status).toBe(409);
     expect(refused.body).toMatchObject({ error: 'warning_not_acknowledged' });
@@ -194,6 +214,9 @@ describe('the chain seed routes', () => {
     const published = await call('POST', '/api/account/relays', { relays: [{ url: OWN }] });
     expect(published.status).toBe(200);
     expect((published.body as ChainSeedStatus).relayList.write).toEqual([OWN]);
+    // It was bought like every other write, and it went where one can be.
+    expect((published.body as ChainSeedStatus).lastPublish?.cost).toBe('1');
+    expect(toon.events.some((event) => event.kind === 10002)).toBe(true);
   });
 
   it('has no route it does not have', async () => {

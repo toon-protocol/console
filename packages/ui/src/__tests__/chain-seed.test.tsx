@@ -7,21 +7,37 @@ import type { ChainSeedStatus, SessionStatus } from '@/lib/daemon';
 import { adoptLaunchToken, forgetLaunchToken } from '@/lib/launch-token';
 
 /**
- * The Chain Seed card, from the window's side (TOON_Network#89, ADR 0020).
+ * The Chain Seed card, from the window's side (TOON_Network#89, ADR 0020,
+ * TOON_Network#120).
  *
- * Two things are under test and the second is the important one. The first is
- * that a person is warned once, can mint or import, and then sees where their
- * money goes. The second is that the words they type reach `/api/chain-seed/
- * import` and NOTHING else: not `localStorage`, not `sessionStorage`, not the
- * URL, and not any other request. `bodies` records every request so the test
- * can look.
+ * Three things are under test. A person is warned once, can mint or import,
+ * and then sees where their money goes. The words they type reach
+ * `/api/chain-seed/import` and NOTHING else: not `localStorage`, not
+ * `sessionStorage`, not the URL, and not any other request — `bodies` records
+ * every request so the test can look. And a seed that has been minted but not
+ * published shows as **not yet recoverable**, with no published record beside
+ * it to be confused with one.
  */
 
 const VECTOR = 'abandon '.repeat(11) + 'about';
 const NPUB = 'npub1zutzeysacnf9rru6zqwmxd54mud0k44tst6l70ja5mhv8jjumytsd2x7nu';
 const PUBKEY = '17162c921dc4d2518f9a101db33695df1afb56ab82f5ff3e5da6eec3ca5cd917';
 const WARNING = 'Whoever holds this account’s Nostr key holds its funds.';
-const PAID = 'restricted: writes require ILP payment';
+const NOT_RECOVERABLE =
+  'This Chain Seed is NOT YET RECOVERABLE. It is sealed on this machine and on nothing else.';
+const BLOCKED =
+  'This account holds no payment channel with the connector at https://connector.test/ilp.';
+
+/** A network where one relay write can be bought, at the price it quoted. */
+const PAYABLE = {
+  relays: ['wss://relay.toon.test'],
+  destination: 'g.toon.relay',
+  payAt: 'https://connector.test/ilp',
+  price: '1',
+  chain: 'evm:84532',
+  channelId: '0xchannel',
+  ready: true,
+};
 
 const signedIn: SessionStatus = {
   signedIn: true,
@@ -48,9 +64,8 @@ const noSeed = (
     state: relays.length > 0 ? 'present' : 'none',
     read: relays,
     write: relays,
-    writeTargets: relays.length > 0 ? relays : ['wss://relay.toon.test'],
-    writeTargetSource: relays.length > 0 ? 'nip65' : 'profile',
   },
+  writes: PAYABLE,
   warning: {
     text: WARNING,
     ...(acknowledged ? { acknowledgedAt: '2026-09-22T00:00:00.000Z' } : {}),
@@ -78,6 +93,20 @@ const ready: ChainSeedStatus = {
   },
 };
 
+/** Minted, sealed, on this disk and nowhere else (TOON_Network#120). */
+const held: ChainSeedStatus = {
+  ...noSeed(true),
+  state: 'not_yet_recoverable',
+  origin: 'minted',
+  addresses: ready.addresses!,
+  held: {
+    since: '2026-09-23T00:00:00.000Z',
+    origin: 'minted',
+    text: NOT_RECOVERABLE,
+    steps: ['Send the chain’s own coin to the payer address below.', 'Open a channel.'],
+  },
+};
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -87,6 +116,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 interface Stub {
   seed: ChainSeedStatus;
+  /** Every POST this window made: the URL, and the body if it carried one. */
   bodies: { url: string; body: unknown }[];
 }
 
@@ -98,7 +128,12 @@ function stubDaemon(
     'fetch',
     vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (init?.body) stub.bodies.push({ url, body: JSON.parse(String(init.body)) });
+      if (init?.method === 'POST') {
+        stub.bodies.push({
+          url,
+          body: init.body === undefined ? undefined : JSON.parse(String(init.body)),
+        });
+      }
       if (url.startsWith('/api/chain-seed') || url === '/api/account/relays') {
         if (init?.method === 'POST') {
           const answer = onPost?.(url, init.body ? JSON.parse(String(init.body)) : undefined);
@@ -212,25 +247,49 @@ describe('the Chain Seed card', () => {
     expect(window.location.href).not.toContain('abandon');
   });
 
-  it('says what the relay said when a paid relay refused the write', async () => {
-    stub.seed = noSeed(true, []);
-    stubDaemon(stub, () =>
-      jsonResponse(
-        {
-          error: 'relay_payment_required',
-          message: 'The Chain Seed was NOT published, and nothing was kept locally.',
-          relays: [{ url: 'wss://relay.toon.test', state: 'rejected', reason: PAID }],
-        },
-        402
-      )
-    );
+  it('shows a minted seed as NOT YET RECOVERABLE, with no record beside it', async () => {
+    stub.seed = noSeed(true);
+    stubDaemon(stub, () => held);
     await openAccount();
 
     await userEvent.click(await screen.findByRole('button', { name: 'Mint a Chain Seed' }));
 
-    const alert = await screen.findByText(/NOT published/u);
-    expect(alert).toBeInTheDocument();
-    expect(screen.getByText(new RegExp(PAID, 'u'))).toBeInTheDocument();
+    // The state, in the words the ticket chose, above the addresses it is
+    // about to invite deposits to.
+    expect((await screen.findAllByText(/not yet recoverable/iu)).length).toBeGreaterThan(1);
+    expect(screen.getByText(held.held!.text)).toBeInTheDocument();
+    expect(screen.getByText(held.addresses!.evm.address)).toBeInTheDocument();
+    // Nothing that could be read as a published record.
+    expect(screen.queryByText(/Published 2026/u)).toBeNull();
+    expect(screen.queryByText(/Read from wss/u)).toBeNull();
+  });
+
+  it('publishes the held seed with one paid write, and says what it costs', async () => {
+    stub.seed = held;
+    stubDaemon(stub, (url) => (url === '/api/chain-seed/publish' ? ready : stub.seed));
+    await openAccount();
+
+    expect((await screen.findAllByText(/1 base units/u)).length).toBeGreaterThan(0);
+    await userEvent.click(
+      screen.getByRole('button', { name: /Publish it — one paid write/u })
+    );
+
+    await waitFor(() => expect(screen.queryAllByText(/not yet recoverable/iu)).toEqual([]));
+    expect(stub.bodies.some((sent) => sent.url === '/api/chain-seed/publish')).toBe(true);
+  });
+
+  it('says why a write could not be bought, and keeps saying the seed is held', async () => {
+    stub.seed = {
+      ...held,
+      writes: { relays: ['wss://relay.toon.test'], ready: false, blockedBy: BLOCKED },
+      held: { ...held.held!, lastAttempt: BLOCKED },
+    };
+    stubDaemon(stub);
+    await openAccount();
+
+    expect((await screen.findAllByText(/not yet recoverable/iu)).length).toBeGreaterThan(1);
+    expect(screen.getAllByText(/no payment channel/u).length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: /Publish it/u })).toBeDisabled();
   });
 
   it('offers a relay list when the account has published none', async () => {
@@ -243,7 +302,7 @@ describe('the Chain Seed card', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Publish' }));
 
     await waitFor(() =>
-      expect(screen.getByText(/writes to wss:\/\/own\.test/u)).toBeInTheDocument()
+      expect(screen.getByText(/names wss:\/\/own\.test to write to/u)).toBeInTheDocument()
     );
     expect(stub.bodies.find((sent) => sent.url === '/api/account/relays')?.body).toEqual({
       relays: [{ url: 'wss://own.test' }],
@@ -253,13 +312,8 @@ describe('the Chain Seed card', () => {
   it('is not there at all when nobody is signed in', async () => {
     stub.seed = {
       state: 'signed_out',
-      relayList: {
-        state: 'unknown',
-        read: [],
-        write: [],
-        writeTargets: [],
-        writeTargetSource: 'none',
-      },
+      relayList: { state: 'unknown', read: [], write: [] },
+      writes: { relays: [], ready: false },
       warning: { text: WARNING },
       supersededSeeds: 0,
       checkedAt: '2026-09-22T00:00:00.000Z',

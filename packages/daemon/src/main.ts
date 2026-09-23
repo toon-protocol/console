@@ -12,6 +12,8 @@ import { LiveChainPort } from './funding-chain.js';
 import { LeaseStore } from './lease.js';
 import { LiveProviderPort } from './lease-route.js';
 import { LeaseVault } from './lease-vault.js';
+import { PaidRelayWriter } from './relay-write.js';
+import { LiveRelayWritePort } from './relay-write-route.js';
 import { FileLeaseVaultCache } from './lease-vault-cache.js';
 import { openKeystore } from './keystore-open.js';
 import {
@@ -67,13 +69,32 @@ export async function main(): Promise<void> {
   // The Chain Seed follows whoever is signed in: the store holds no key of its
   // own, asks the session for one each time, and drops everything when the
   // account changes (TOON_Network#89, ADR 0020).
+  //
+  // The seed and the writer need each other, and the cycle is the ticket's
+  // subject rather than an accident of wiring: a relay write is paid for with
+  // a key derived from the Chain Seed, and the Chain Seed's own record is one
+  // of the things written (TOON_Network#120). The seed is given the writer as
+  // a thunk, so whichever is constructed second is the one that exists by the
+  // time either is used.
   const seedCache = new FileChainSeedCache(paths);
-  const chainSeed = new ChainSeedStore({
+  const chainSeed: ChainSeedStore = new ChainSeedStore({
     signer: () => session.signingPort(),
     // The profile's relay is a SEED for discovery, not where a seed is kept:
     // the account's own NIP-65 write relays are, when it has named any.
     seedRelays: () => [profiles.active().relayUrl].filter((url) => url.length > 0),
     cache: seedCache,
+    writer: () => writer,
+  });
+
+  // The one writer. Every event this console puts on a relay is bought here,
+  // as a paid TOON packet on the route the connector publishes, over the
+  // carriage that route pins (TOON_Network#120).
+  const writer: PaidRelayWriter = new PaidRelayWriter({
+    profile: () => profiles.active(),
+    readHealth: (profile) => readConnectorHealth(profile, reader),
+    payerKeys: (use) => chainSeed.usePayerKeys(use),
+    paths,
+    port: new LiveRelayWritePort(),
   });
 
   /**
@@ -118,6 +139,7 @@ export async function main(): Promise<void> {
     signer: () => session.signingPort(),
     seedRelays: accountRelays,
     cache: new FileLeaseVaultCache(paths),
+    writer,
   });
 
   // Spawning: the first route this console pays somebody else for

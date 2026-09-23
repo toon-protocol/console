@@ -7,12 +7,21 @@ import { accountChainSeedPath, type ConsolePaths } from './paths.js';
 /**
  * The local copy of an account's sealed Chain Seed record.
  *
- * A **cache**, in the strict sense: everything in it can be fetched again from
- * the account's relays, and the console is correct — only slower — with the
- * file deleted. That is what the recovery criterion tests, and it is why this
- * file is allowed to exist at all. ADR 0020 rejected a seed kept only on one
- * machine; a machine-local copy of something the relays also hold is the
- * opposite of that.
+ * A **cache**, in the strict sense, once `published` is true: everything in it
+ * can be fetched again from the account's relays, and the console is correct —
+ * only slower — with the file deleted. That is what the recovery criterion
+ * tests, and it is why this file is allowed to exist at all. ADR 0020 rejected
+ * a seed kept only on one machine; a machine-local copy of something the
+ * relays also hold is the opposite of that.
+ *
+ * There is now one window in which it is NOT a cache, and the whole point of
+ * `published` is that the window is named and visible. A seed cannot pay for
+ * its own publication — the payer keys are derived FROM it, and the write is a
+ * paid packet — so it is minted, held here with `published: false`, and only
+ * published once the account has funded a payer address and opened a channel
+ * (TOON_Network#120). Until that write lands this file is the only copy there
+ * is, and `chain-seed.ts` says so in those words rather than letting the state
+ * pass for the real thing.
  *
  * **What is stored is the SEALED event, byte for byte as published.** Never a
  * mnemonic, never a derived key, never even an address — an address is not
@@ -30,16 +39,35 @@ import { accountChainSeedPath, type ConsolePaths } from './paths.js';
  */
 
 export interface CachedChainSeed {
-  /** The sealed kind-30078, as published. Absent until one has been. */
+  /** The sealed kind-30078, as signed. Absent until one has been minted. */
   readonly event?: NostrEvent | undefined;
   /** Relays last known to hold it, to ask again on the next read. */
   readonly relays?: readonly string[] | undefined;
+  /**
+   * `false` while this seed is **not yet recoverable**: sealed and signed on
+   * this machine, and on no relay (TOON_Network#120).
+   *
+   * The one field that stops a temporary state from becoming a silent lie. A
+   * held record and a published one are the same bytes, so without this the
+   * console could not tell "recoverable anywhere this account can sign" from
+   * "one disk holds everything" — and the difference only ever surfaces on the
+   * day the disk dies. Absent means published, which is what every record
+   * written before this field existed was.
+   */
+  readonly published?: boolean | undefined;
   readonly warningAcknowledgedAt?: string | undefined;
+}
+
+export interface CachedSeedWrite {
+  readonly event: NostrEvent;
+  readonly relays?: readonly string[] | undefined;
+  /** Whether a relay took it. A caller must say; there is no safe default. */
+  readonly published: boolean;
 }
 
 export interface ChainSeedCache {
   read(pubkey: string): CachedChainSeed | undefined;
-  writeEvent(pubkey: string, event: NostrEvent, relays?: readonly string[]): void;
+  writeEvent(pubkey: string, entry: CachedSeedWrite): void;
   /**
    * Relays this account has been seen on, kept so the next read knows where to
    * look. Not a secret and not authoritative — the account's NIP-65 list is —
@@ -55,6 +83,7 @@ interface CacheFile {
   readonly pubkey: string;
   readonly event?: NostrEvent;
   readonly relays?: string[];
+  readonly published?: boolean;
   readonly warningAcknowledgedAt?: string;
 }
 
@@ -69,7 +98,7 @@ export class FileChainSeedCache implements ChainSeedCache {
     const file = this.#load(pubkey);
     if (!file) return undefined;
     return {
-      ...(file.event ? { event: file.event } : {}),
+      ...(file.event ? { event: file.event, published: file.published !== false } : {}),
       ...(file.relays ? { relays: file.relays } : {}),
       ...(file.warningAcknowledgedAt === undefined
         ? {}
@@ -77,14 +106,15 @@ export class FileChainSeedCache implements ChainSeedCache {
     };
   }
 
-  writeEvent(pubkey: string, event: NostrEvent, relays: readonly string[] = []): void {
+  writeEvent(pubkey: string, entry: CachedSeedWrite): void {
     const held = this.#load(pubkey);
     this.#save(pubkey, {
       ...(held ?? {}),
       v: 1,
       pubkey,
-      event,
-      relays: merge(held?.relays, relays),
+      event: entry.event,
+      published: entry.published,
+      relays: merge(held?.relays, entry.relays ?? []),
     });
   }
 
@@ -159,9 +189,14 @@ export class InMemoryChainSeedCache implements ChainSeedCache {
     return this.#held.get(pubkey);
   }
 
-  writeEvent(pubkey: string, event: NostrEvent, relays: readonly string[] = []): void {
+  writeEvent(pubkey: string, entry: CachedSeedWrite): void {
     const held = this.#held.get(pubkey);
-    this.#held.set(pubkey, { ...held, event, relays: merge(held?.relays, relays) });
+    this.#held.set(pubkey, {
+      ...held,
+      event: entry.event,
+      published: entry.published,
+      relays: merge(held?.relays, entry.relays ?? []),
+    });
   }
 
   rememberRelays(pubkey: string, relays: readonly string[]): void {
