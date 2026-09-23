@@ -93,6 +93,9 @@ systemctl --user daemon-reload
 systemctl --user try-restart toon-console.service
 ```
 
+(Re-running `toon-console-install` does the same thing: it restarts the service rather than
+starting it, precisely so that running it after an upgrade leaves the new build running.)
+
 On Omarchy the `post-update.d` hook does exactly that on the next `omarchy update`, and
 re-applies the template, the hooks and the menu entries if the package changed them. It
 re-themes only if the template it wrote actually changed, and it never starts a console you

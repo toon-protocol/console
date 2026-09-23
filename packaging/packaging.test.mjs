@@ -543,7 +543,10 @@ test('a packaged install enables the package unit and writes only under $HOME', 
 
     // The service is enabled from the package's unit; no second unit is
     // written where it would shadow it.
-    assert.match(systemctl(), /enable --now toon-console\.service/);
+    assert.match(systemctl(), /enable toon-console\.service/);
+    // ...and restarted, because after an upgrade the daemon that is running is
+    // the build that was replaced.
+    assert.match(systemctl(), /restart toon-console\.service/);
     assert.ok(!existsSync(join(config, 'systemd', 'user', 'toon-console.service')));
     // The launcher is the package's, so nothing is copied onto PATH...
     assert.ok(!existsSync(join(home, '.local', 'bin', 'toon-console')));

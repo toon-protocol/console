@@ -312,7 +312,15 @@ fi
 
 command -v systemctl >/dev/null 2>&1 || die "systemctl not found; this console is a systemd --user service"
 systemctl --user daemon-reload
-systemctl --user enable --now toon-console.service
+systemctl --user enable toon-console.service
+# `restart` rather than `start`: running this after an upgrade or a rebuild is
+# how the new build gets to be the one that is running, and `start` on a live
+# daemon does nothing at all. It starts one that is not running too, which is
+# the whole of what `start` would have done. The start limit is cleared first,
+# or a unit that hit it refuses to start even once its cause is fixed -- the
+# same reason the launcher clears it.
+systemctl --user reset-failed toon-console.service >/dev/null 2>&1 || true
+systemctl --user restart toon-console.service
 
 if [[ $LAYOUT == checkout ]]; then
   if [[ $INSTALL_WEBAPP == true ]] && command -v omarchy-webapp-install >/dev/null 2>&1; then
