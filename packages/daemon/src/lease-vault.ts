@@ -1,4 +1,4 @@
-import { continuationFor } from './continuation.js';
+import { continuationFor, mintRootSecret } from './continuation.js';
 import type { LeaseVaultCache } from './lease-vault-cache.js';
 import { supersedes, tagValue, type NostrEvent } from './nostr.js';
 import { NO_RELAY_LIST, readRelayListOf, type RelayList } from './relay-list.js';
@@ -56,6 +56,15 @@ import { HEX_32, type SpawnImage, type SpawnPort } from './spawn-content.js';
  * no secret in them; the secret goes in through `publish` and comes out only
  * inside `#unseal`, which is private. There is no API route to a Root Secret,
  * and there must never be one.
+ *
+ * **A Rotation is recorded before it is asked for, and holds both roots until
+ * it is done** (TOON_Network#96, spec §6.8, ADR 0018, ADR 0021). The new Root
+ * Secret is minted and written into this record before the first `rotate`
+ * request leaves, and the old one stays beside it until every member has
+ * confirmed — because the members that have not are still read with it. Which
+ * of the two a member is read with is decided per member, in `rootFor` below,
+ * so a partially rotated Standby Set is a valid state here exactly as it is at
+ * the providers (§6.8).
  *
  * **One record per WORKLOAD, not per member.** ADR 0021 says one event per
  * lease, and a lease's Root Secret is minted per lease (spec §6.1.1) — but a
@@ -162,12 +171,56 @@ export interface VaultedMember {
  * the whole object is one NIP-44 ciphertext — and the `d` tag says only that
  * this account keeps a console lease record.
  */
+/**
+ * A **Rotation** under way, as the record carries it (spec §6.8, ADR 0018).
+ *
+ * The record holds **both** Root Secrets from the moment a rotation starts
+ * until every member has confirmed, and that is not belt and braces: it is the
+ * only arrangement in which no member is unreadable at any instant. A member
+ * that has confirmed is read with the new root and a member that has not is
+ * read with the old one, so a set rotated at some members and not others — a
+ * valid state (§6.8) — is a set every member of which this account can still
+ * read, extend and stop.
+ *
+ * The order is ADR 0021's: this is written **before** the first `rotate`
+ * leaves. A crash between a member accepting `next` and this being written
+ * would otherwise lose the only secret that now reads that member.
+ */
+export interface VaultedRotation {
+  /** The NEW Root Secret. 64 lowercase hex. It never leaves this module. */
+  readonly root_secret: string;
+  /** The members the rotation was started for, in `standby_set`'s order. */
+  readonly members: readonly string[];
+  /** Those that have confirmed `next`. Always a subset of `members`. */
+  readonly confirmed: readonly string[];
+  readonly started_at: string;
+}
+
 export interface VaultedLease {
   readonly v: 1;
   readonly state: LeaseVaultState;
   readonly workload_id: string;
-  /** THE secret. 64 lowercase hex. It never leaves this module unsealed. */
+  /**
+   * THE secret. 64 lowercase hex. It never leaves this module unsealed.
+   *
+   * While a Rotation is under way this stays the OLD root, because the members
+   * that have not confirmed are still read with it. It becomes the new one in
+   * the same write that drops `rotation`, once every member has confirmed
+   * (§6.8).
+   */
   readonly root_secret: string;
+  /**
+   * A Rotation part-way through, or absent because none is (§6.8, ADR 0021).
+   *
+   * Its presence is what makes a partially rotated set resumable from any
+   * machine this account signs in on: the new root is on the account's own
+   * relays from before the first request, so a console that died mid-rotation
+   * — or a different machine entirely — finishes what it started rather than
+   * starting again with a third root secret.
+   */
+  readonly rotation?: VaultedRotation | undefined;
+  /** When the last Rotation finished. A moment, not a secret. */
+  readonly rotated_at?: string | undefined;
   /** Every member of the Standby Set, primary first. One member is standalone. */
   readonly standby_set: readonly string[];
   /**
@@ -271,10 +324,28 @@ export interface LeaseMemberView {
 }
 
 /**
+ * A Rotation under way, as everything outside this module sees it (§6.8).
+ *
+ * Which members have confirmed and which have not, and no secret: the two
+ * Root Secrets it is about stay inside this module, exactly as the one a
+ * lease normally has does.
+ */
+export interface LeaseRotationView {
+  /** The members the rotation was started for, primary first. */
+  readonly members: readonly string[];
+  /** Those holding a token of the NEW root already. */
+  readonly confirmed: readonly string[];
+  /** Those still holding a token of the old one. Rotating again finishes them. */
+  readonly pending: readonly string[];
+  readonly startedAt: string;
+}
+
+/**
  * One lease, as everything outside this module sees it.
  *
  * Note what is missing and always will be: `root_secret`. The type has no such
- * field, so no route can return one by forgetting to strip it.
+ * field, so no route can return one by forgetting to strip it — and that holds
+ * for a rotation's second root as much as for the first.
  */
 export interface LeaseView {
   readonly workloadId: string;
@@ -297,6 +368,10 @@ export interface LeaseView {
   readonly role?: string | undefined;
   readonly expiresAt?: number | undefined;
   readonly access?: LeaseAccess | undefined;
+  /** Set while a Rotation is part-way through this lease's Standby Set (§6.8). */
+  readonly rotation?: LeaseRotationView | undefined;
+  /** When the last Rotation finished, when one has. */
+  readonly rotatedAt?: string | undefined;
   readonly retractedBecause?: string | undefined;
   /** Where this console got the record it is showing. */
   readonly source: 'cache' | 'relays';
@@ -538,7 +613,16 @@ export class LeaseVault {
     // is a retry that reused one, or a caller that fixed it. Either way the
     // answer is no, and it is given before anything is paid.
     const held = this.#open.get(d);
-    if (held !== undefined && held.record.root_secret !== record.root_secret) {
+    if (
+      held !== undefined &&
+      held.record.root_secret !== record.root_secret &&
+      // The ONE legitimate way a lease's Root Secret changes: a Rotation
+      // finishing (§6.8). The new value is the one this same record has been
+      // carrying as `rotation.root_secret` since before the first `rotate`
+      // left, so it is not another lease wearing this workload id — it is this
+      // lease, now held by the root every member has confirmed.
+      record.root_secret !== held.record.rotation?.root_secret
+    ) {
       throw new LeaseVaultError(
         'lease_exists',
         `This account already holds a lease record for workload ${record.workload_id}. ` +
@@ -756,8 +840,12 @@ export class LeaseVault {
     if (!held.published) return { retracted: true };
 
     try {
+      // `rotation` is dropped rather than spread through: it holds a SECOND
+      // root secret, and a tombstone that carried one would publish the very
+      // thing zeroing `root_secret` exists to avoid (§6.8).
+      const { rotation: _dropped, ...rest } = held.record;
       const tombstone: VaultedLease = {
-        ...held.record,
+        ...rest,
         state: 'retracted',
         root_secret: ZERO_SECRET,
         retracted_because: because,
@@ -838,6 +926,15 @@ export class LeaseVault {
    * token that provider does not hold, and presenting it is `not_tenant` — on
    * `extend`, after being billed.
    *
+   * **While a Rotation is under way, WHICH root this derives from is decided
+   * per member** (§6.8): the new one for a member that has confirmed `next`,
+   * the old one for a member that has not. So a partially rotated set stays
+   * readable at every member, and everything built on this borrow follows the
+   * rotation without knowing about it — a Gateway Handover after a rotation
+   * derives its grants from the new tokens because `gateway.ts` derives inside
+   * this call (TOON_Network#97), and a `status` on a member that has not
+   * rotated yet still presents the token it holds.
+   *
    * @throws {LeaseVaultError} when no account is signed in, when this account
    *   holds no such lease, or when that provider is not in its Standby Set.
    */
@@ -868,7 +965,196 @@ export class LeaseVault {
         400
       );
     }
-    return use(continuationFor(held.record.root_secret, providerPubkey));
+    return use(continuationFor(rootFor(held.record, providerPubkey), providerPubkey));
+  }
+
+  /* ------------------------------------------------------------------------ */
+  /* Rotation (spec §6.8, ADR 0018, ADR 0021)                                 */
+  /* ------------------------------------------------------------------------ */
+
+  /**
+   * Mint this rotation's fresh Root Secret and record it **before** anything
+   * is sent — or pick up the one a previous run left.
+   *
+   * §6.8 recommends a fresh root for every rotation rather than a fresh token,
+   * so that the rotation retires the old ROOT as well: if that is what leaked,
+   * it derives nothing that works afterwards. The provider cannot tell how
+   * `next` was made and does not check, which is exactly why this is the
+   * tenant tooling's job.
+   *
+   * The write is the ordering ADR 0021 fixes: the record carries both roots
+   * from before the first `rotate` leaves, so a crash between a member
+   * accepting `next` and this console hearing so cannot lose the only secret
+   * that now reads that member. If the write does not land, this throws and
+   * **nothing is sent** — the same trade a spawn makes, for the same reason.
+   *
+   * A record that already carries a rotation is **resumed, never restarted**:
+   * the same new root, the members already confirmed left alone. A third root
+   * secret would strand every member the second one reached.
+   *
+   * @throws {LeaseVaultError} when there is no such lease, when the record's
+   *   rotation is for a different set of members, or when the write failed.
+   */
+  async beginRotation(
+    workloadId: string,
+    options: { mint?: () => string; members?: readonly string[] } = {}
+  ): Promise<LeaseView> {
+    this.#require();
+    const held = this.#holding(workloadId);
+    const set = membersIn(held.record);
+    const under = held.record.rotation;
+    if (under !== undefined) {
+      // A rotation under way is the RECORD's, and it is finished naming the
+      // members it started with. A member left out would be read, once the
+      // rest confirm, with a root secret this record no longer holds.
+      if (!under.members.every((member) => set.includes(member))) {
+        throw new LeaseVaultError(
+          'rotation_mismatch',
+          `This lease's vault record carries a Rotation naming a member that is not in its ` +
+            `Standby Set. Membership never changes for a lease (spec §7), so this record ` +
+            `disagrees with itself and finishing the rotation could strand a member.`,
+          409
+        );
+      }
+      // Resumed, not restarted: the same `rotation.root_secret`.
+      return toView(held);
+    }
+    const members = options.members ?? set;
+    if (members.length === 0 || !members.every((member) => set.includes(member))) {
+      throw new LeaseVaultError(
+        'rotation_mismatch',
+        `A rotation covers members of this lease's own Standby Set, and at least one of them ` +
+          `(spec §6.8, §7).`
+      );
+    }
+    const next = (options.mint ?? mintRootSecret)();
+    if (!HEX_32.test(next) || next === held.record.root_secret) {
+      throw new LeaseVaultError(
+        'invalid_root_secret',
+        'A rotation needs a fresh 32-byte root secret, as 64 lowercase hex characters, and ' +
+          'not the one this lease already holds (spec §6.1.1, §6.8).'
+      );
+    }
+    return this.publish({
+      ...held.record,
+      rotation: {
+        root_secret: next,
+        members,
+        confirmed: [],
+        started_at: this.#at().toISOString(),
+      },
+    });
+  }
+
+  /**
+   * Write down that one member now holds a token of the new root — and, when
+   * it is the last one, that the old root is retired.
+   *
+   * Recorded member by member rather than once at the end, because a run that
+   * stops here resumes after it: a member already confirmed must not be
+   * rotated a second time, which would present a token it no longer holds
+   * (`not_tenant`).
+   *
+   * **Best effort, and recoverable when it fails.** The relay's copy still
+   * carries BOTH roots, so a confirmation that could not be published loses no
+   * secret and strands nothing: a later run reads the member as pending, sends
+   * a `rotate` it refuses `not_tenant`, asks `status` with `next` and learns
+   * from the acceptance that the rotation took effect (§6.8). What a failure
+   * costs is one more free round trip, which is why it is reported rather than
+   * thrown.
+   *
+   * @throws {LeaseVaultError} when there is no such lease, no rotation under
+   *   way, or that member is not in it.
+   */
+  async confirmRotation(
+    workloadId: string,
+    providerPubkey: string
+  ): Promise<{ confirmed: boolean; finished: boolean; reason?: string }> {
+    this.#require();
+    const held = this.#holding(workloadId);
+    const rotation = held.record.rotation;
+    if (rotation === undefined) {
+      throw new LeaseVaultError(
+        'no_rotation',
+        `This lease's vault record carries no Rotation, so there is nothing to confirm. A ` +
+          `rotation records its new Root Secret before its first request (ADR 0021).`,
+        409
+      );
+    }
+    if (!rotation.members.includes(providerPubkey)) {
+      throw new LeaseVaultError(
+        'not_a_member',
+        `${providerPubkey.slice(0, 12)}… is not a member of the Rotation this record carries.`
+      );
+    }
+    const confirmed = rotation.members.filter(
+      (member) => member === providerPubkey || rotation.confirmed.includes(member)
+    );
+    const finished = confirmed.length === rotation.members.length;
+    // Every member holds a token of the new root, so the old one reads nothing
+    // anywhere: it is dropped rather than kept, which is the whole of what
+    // "the rotation retires the old root secret" means (§6.8).
+    const { rotation: _under, ...rest } = held.record;
+    const record: VaultedLease = finished
+      ? { ...rest, root_secret: rotation.root_secret, rotated_at: this.#at().toISOString() }
+      : { ...held.record, rotation: { ...rotation, confirmed } };
+    try {
+      await this.publish(record);
+      return { confirmed: true, finished };
+    } catch (error) {
+      // The in-memory view moves on regardless: that member DOES hold a token
+      // of the new root, whatever the relay did about saying so, and reading
+      // it with the old one from here would be `not_tenant`.
+      this.#open.set(leaseVaultD(workloadId), { ...held, record });
+      return {
+        confirmed: false,
+        finished,
+        reason: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  /**
+   * Borrow the two tokens one `rotate` request carries: the one this member
+   * holds now, and the one it is being asked to hold (§6.8).
+   *
+   * Both derive inside this module and neither survives the call, exactly as
+   * `withContinuation`'s single token does. They are borrowed together
+   * because a rotate request is the one message that names both, and handing
+   * them out separately would mean a caller holding a Root Secret's output
+   * across two calls.
+   *
+   * @throws {LeaseVaultError} when there is no such lease, no rotation under
+   *   way, or that member is not in it.
+   */
+  async withRotation<T>(
+    workloadId: string,
+    providerPubkey: string,
+    use: (tokens: { current: string; next: string }) => Promise<T>
+  ): Promise<T> {
+    this.#require();
+    const held = this.#holding(workloadId);
+    const rotation = held.record.rotation;
+    if (rotation === undefined) {
+      throw new LeaseVaultError(
+        'no_rotation',
+        `This lease's vault record carries no Rotation, so there is no \`next\` to name. The ` +
+          `new Root Secret is recorded before the first request, never derived on the way ` +
+          `out (ADR 0021).`,
+        409
+      );
+    }
+    if (!rotation.members.includes(providerPubkey)) {
+      throw new LeaseVaultError(
+        'not_a_member',
+        `${providerPubkey.slice(0, 12)}… is not a member of the Rotation this record carries, ` +
+          `so this lease holds no token for it to rotate (spec §6.1.1).`
+      );
+    }
+    return use({
+      current: continuationFor(rootFor(held.record, providerPubkey), providerPubkey),
+      next: continuationFor(rotation.root_secret, providerPubkey),
+    });
   }
 
   /** Forget this session's leases — a sign-out, not a deletion. */
@@ -959,6 +1245,20 @@ export class LeaseVault {
       );
     }
     return record as VaultedLease;
+  }
+
+  /** The open record for a lease this account still holds, or a refusal. */
+  #holding(workloadId: string): OpenLease {
+    const held = this.#open.get(leaseVaultD(workloadId));
+    if (!held || held.record.state === 'retracted') {
+      throw new LeaseVaultError(
+        'unknown_lease',
+        `This account holds no vault record for workload ${workloadId}, so it holds no Root ` +
+          `Secret for it. Read the vault from this account's relays first.`,
+        404
+      );
+    }
+    return held;
   }
 
   #require(): AccountSigning {
@@ -1100,6 +1400,35 @@ function membersOf(record: VaultedLease): readonly LeaseMemberView[] {
   });
 }
 
+/**
+ * WHICH Root Secret reads this member right now (§6.8).
+ *
+ * The new one once that member has confirmed `next`, the old one until then.
+ * One function, used by every borrow, so that a partially rotated set cannot
+ * be read one way here and another way there.
+ */
+function rootFor(record: VaultedLease, providerPubkey: string): string {
+  const rotation = record.rotation;
+  return rotation !== undefined && rotation.confirmed.includes(providerPubkey)
+    ? rotation.root_secret
+    : record.root_secret;
+}
+
+/** The Standby Set a record names: its own list, or the one provider it has. */
+function membersIn(record: VaultedLease): readonly string[] {
+  return record.standby_set.length > 0 ? record.standby_set : [record.provider.pubkey];
+}
+
+/** A rotation's progress, with neither root secret in it (§6.8). */
+function rotationView(rotation: VaultedRotation): LeaseRotationView {
+  return {
+    members: rotation.members,
+    confirmed: rotation.members.filter((member) => rotation.confirmed.includes(member)),
+    pending: rotation.members.filter((member) => !rotation.confirmed.includes(member)),
+    startedAt: rotation.started_at,
+  };
+}
+
 /** §7: index 0 is the primary; a set of one is a standalone lease (§6.2). */
 export function roleAt(index: number, members: number): LeaseMemberView['role'] {
   if (members <= 1) return 'standalone';
@@ -1127,6 +1456,8 @@ function toView(held: OpenLease): LeaseView {
     ...(record.role === undefined ? {} : { role: record.role }),
     ...(record.expires_at === undefined ? {} : { expiresAt: record.expires_at }),
     ...(record.access === undefined ? {} : { access: record.access }),
+    ...(record.rotation === undefined ? {} : { rotation: rotationView(record.rotation) }),
+    ...(record.rotated_at === undefined ? {} : { rotatedAt: record.rotated_at }),
     ...(record.retracted_because === undefined
       ? {}
       : { retractedBecause: record.retracted_because }),

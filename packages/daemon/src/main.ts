@@ -42,6 +42,7 @@ import { readTakeover } from './takeover.js';
 import { readTemplates } from './templates.js';
 import { daemonVersion } from './version.js';
 import { AutoExtender, FileAutoExtendStore } from './auto-extend.js';
+import { RotationStore } from './rotation.js';
 import { WorkloadStore } from './workload.js';
 import { FileWorkloadNoteStore } from './workload-cache.js';
 
@@ -265,6 +266,16 @@ export async function main(): Promise<void> {
     notes,
   });
 
+  // Rotation (TOON_Network#96, spec §6.8, ADR 0018). It borrows the
+  // dashboard's planning and sending — a `rotate` is the same kind of packet
+  // on the same kind of free route, and a Hidden Provider's rides the same
+  // circuit — and it takes the vault, which is where both Root Secrets live
+  // and the only place either of them is ever derived from.
+  //
+  // It is given the UNDECORATED dashboard on purpose: `notifying` announces
+  // Takeovers, evictions and short runways, and a rotation is none of those.
+  const rotation = new RotationStore({ vault, ops: workloads.memberOps() });
+
   // Budgets: the one thing here that spends with nobody present. It is armed
   // per lease, never by default, and `auto-extend.ts` lists the nine rules
   // that can each stop it on its own.
@@ -328,6 +339,7 @@ export async function main(): Promise<void> {
       workloads: watchedWorkloads,
       autoExtend: budgets,
       gateway,
+      rotation,
       desktop,
       hidden,
     },

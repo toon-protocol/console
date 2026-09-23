@@ -38,6 +38,7 @@ import type { ConsolePaths } from './paths.js';
 import { isConfigured, type NetworkProfile } from './profiles.js';
 import { UnknownProfileError, type ProfileStore } from './profile-store.js';
 import { RelayListError, type RelayMode } from './relay-list.js';
+import { RotationError, type RotationResult, type RotationView } from './rotation.js';
 import { RelayWriteError } from './relay-write.js';
 import { RemoteSignerError } from './remote-signer.js';
 import { SealingError } from './signer.js';
@@ -127,6 +128,13 @@ export interface ApiDeps {
    */
   readonly gateway?: GatewayPort | undefined;
   /**
+   * Rotation (TOON_Network#96, spec §6.8). Absent in a build that wired the
+   * dashboard without it, and the routes say so rather than pretending — a
+   * console that answered "rotated" without having sent anything would be the
+   * worst answer on this whole surface.
+   */
+  readonly rotation?: RotationPort | undefined;
+  /**
    * The desktop around the window: the current Omarchy theme, and whatever the
    * Omarchy menu last asked to be opened (TOON_Network#99). Absent only in a
    * build that did not wire it, and the route says so rather than pretending.
@@ -182,6 +190,12 @@ export interface GatewayPort {
   view(workloadId: string, options?: { probe?: boolean }): Promise<GatewayView>;
   handover(workloadId: string, request?: HandoverRequest): Promise<HandoverResult>;
   withdraw(workloadId: string): Promise<WithdrawalResult>;
+}
+
+/** What `/api/workloads/<id>/rotation` and `…/rotate` need of `RotationStore`. */
+export interface RotationPort {
+  view(workloadId: string): Promise<RotationView>;
+  rotate(workloadId: string): Promise<RotationResult>;
 }
 
 /** What `/api/workloads/<id>/auto-extend` needs of `AutoExtender`. */
@@ -872,6 +886,13 @@ async function handleLeases(
  *
  * `POST …/terminate` is free and irreversible. There is no refund (§6.6).
  *
+ * `POST …/rotate` is free at the provider and is a **revocation**: it replaces
+ * the lease's Continuation Token at every member of its Standby Set, after
+ * which the old token and every Gateway Grant derived from it stop working
+ * (§6.8, ADR 0018). It costs one paid relay write per member confirmed, plus
+ * one to record the new Root Secret before anything is sent. `handleRotation`
+ * below owns it.
+ *
  * `POST …/auto-extend` arms a budget: a standing instruction to spend while
  * nobody is watching. It takes `confirm: true` and the price being agreed to,
  * and `auto-extend.ts` says why.
@@ -915,6 +936,14 @@ async function handleWorkloads(
   // `dashboard_unwired` are two different packaging faults.
   if (action === 'gateway') {
     return handleGateway(deps, method, path, query, body, workloadId, verb);
+  }
+
+  // Rotation is reached before the dashboard too, and for a sharper reason
+  // than the gateway's: a token is rotated because it is believed to have
+  // leaked, and a console that made that wait on anything else it happens to
+  // be missing would be making somebody wait for nothing.
+  if (action === 'rotation' || action === 'rotate') {
+    return handleRotation(deps, method, path, workloadId, action);
   }
 
   const workloads = deps.workloads;
@@ -981,6 +1010,67 @@ async function handleWorkloads(
     throw error;
   }
 
+  return problem(404, 'unknown_route', `No route ${method} ${path}.`);
+}
+
+/**
+ * Rotation: cutting off a leaked Continuation Token (TOON_Network#96, §6.8).
+ *
+ * Two routes, and the split between them is what they cost.
+ *
+ * `GET …/rotation` says how far a rotation has got and what the next one
+ * would cost. It asks connectors what they carry — free — and sends no lease
+ * packet at all.
+ *
+ * `POST …/rotate` mints a fresh Root Secret, records it on the account's own
+ * relays **before** anything is sent (one paid write, ADR 0021), and then
+ * sends one free `rotate` per member of the Standby Set. It is the one route
+ * here that is also a **revocation**: every Gateway Grant derived from the old
+ * token stops working at each member it reaches. Sending it again finishes a
+ * rotation that was left part-way through — it never starts a second one with
+ * a third root secret.
+ *
+ * As everywhere on this surface, **no answer carries a Root Secret or a
+ * Continuation Token**, and a rotation has two roots to not carry.
+ * `api-rotation.test.ts` is the test that says so.
+ */
+async function handleRotation(
+  deps: ApiDeps,
+  method: string,
+  path: string,
+  workloadId: string,
+  action: 'rotation' | 'rotate'
+): Promise<ApiResponse> {
+  // The method is weighed BEFORE the wiring, so a route this surface does not
+  // have is 404 in every build — `GET …/rotate` never becomes "not wired".
+  const reading = action === 'rotation' && method === 'GET';
+  const rotating = action === 'rotate' && method === 'POST';
+  if (!reading && !rotating) {
+    return problem(404, 'unknown_route', `No route ${method} ${path}.`);
+  }
+  const rotation = deps.rotation;
+  if (rotation === undefined) {
+    return problem(
+      501,
+      'rotation_unwired',
+      'This console holds leases but has no rotation wired, so it cannot replace a lease’s ' +
+        'Continuation Token. That is a packaging fault rather than anything about the request.'
+    );
+  }
+  try {
+    if (reading) {
+      return ok(await rotation.view(workloadId));
+    }
+    return ok(await rotation.rotate(workloadId));
+  } catch (error) {
+    if (error instanceof RotationError) {
+      return problem(error.status, error.code, error.message);
+    }
+    if (error instanceof LeaseVaultError) {
+      return problem(error.status, error.code, error.message);
+    }
+    throw error;
+  }
   return problem(404, 'unknown_route', `No route ${method} ${path}.`);
 }
 
