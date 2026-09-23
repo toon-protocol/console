@@ -8,6 +8,7 @@ import { useDesktop } from '@/hooks/use-desktop';
 import { useDirectory } from '@/hooks/use-directory';
 import { useDocs } from '@/hooks/use-docs';
 import { useFunding } from '@/hooks/use-funding';
+import { useGasStation } from '@/hooks/use-gas-station';
 import { useLeases } from '@/hooks/use-leases';
 import { useWorkloads } from '@/hooks/use-workloads';
 import { useTemplates } from '@/hooks/use-templates';
@@ -123,6 +124,15 @@ export function ConsoleApp() {
     pubkey: account.status?.account?.pubkey,
     ...(health === undefined ? {} : { profileId: health.profile.id }),
   });
+  // Buying the next chain's gas (TOON_Network#119). It sits on the same tab
+  // and is keyed the same way; `revision` re-reads it when a channel lands,
+  // because a channel that just opened is a channel that can now pay for one.
+  const gas = useGasStation({
+    active: tab === 'funds',
+    pubkey: account.status?.account?.pubkey,
+    ...(health === undefined ? {} : { profileId: health.profile.id }),
+    revision: funding.status?.chains.map((chain) => chain.channel.phase).join('|'),
+  });
   // Keyed to the ACCOUNT alone. A lease belongs to whoever holds its Root
   // Secret, and the vault holds leases from every network this account has
   // spawned on — each record says which (ADR 0021).
@@ -214,7 +224,7 @@ export function ConsoleApp() {
             onFindProviders={() => setTab('directory')}
           />
         ) : tab === 'funds' ? (
-          <FundingView funding={funding} />
+          <FundingView funding={funding} gas={gas} />
         ) : tab === 'docs' ? (
           <DocsView docs={docs} />
         ) : tab === 'account' ? (

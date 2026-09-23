@@ -36,6 +36,7 @@ const network: NetworkProfile = {
   relayUrl: SEED,
   gatewayDomain: 'gw.test',
   gatewayConnectorUrl: 'http://gateway.test/ilp',
+  gasConnectorUrl: 'http://gas.test/ilp',
   rpc: {},
   origin: 'built-in',
 };

@@ -666,6 +666,102 @@ export interface FundingStatus {
   checkedAt: string;
 }
 
+/* -------------------------------------------------------------------------- */
+/* Buying the next chain's gas (TOON_Network#119)                             */
+/* -------------------------------------------------------------------------- */
+
+export type GasBuyVerdict =
+  | 'buyable'
+  | 'not_blocked'
+  | 'unsupported'
+  | 'no_station'
+  | 'station_unreachable'
+  | 'no_route'
+  | 'no_channel'
+  | 'unaffordable';
+
+export interface GasPayer {
+  /** The chain whose channel signs the claim. Never the chain being bought for. */
+  chain: string;
+  channelId: string;
+  available?: string;
+  payAt: string;
+  via: 'station-connector' | 'forwarded';
+}
+
+export interface GasBuyChain {
+  chain: string;
+  kind: 'evm' | 'solana';
+  /** Where bought gas would land: this account's own address on that chain. */
+  recipient: string;
+  verdict: GasBuyVerdict;
+  reason: string;
+  payer?: GasPayer;
+  destination?: string;
+  price?: string;
+  lamports?: string;
+}
+
+export interface GasStationView {
+  connectorUrl: string;
+  selfEndpoint?: string;
+  doors: string[];
+  reachable: boolean;
+  reason?: string;
+}
+
+export interface GasStationStatus {
+  state: 'signed_out' | 'unconfigured' | 'no_station' | 'ready';
+  station?: GasStationView;
+  chains: GasBuyChain[];
+  /** Present exactly when this account holds no channel anywhere. */
+  firstChannel?: string;
+  reason?: string;
+  checkedAt: string;
+}
+
+/** One packet, and what it cost — refusals included, because they are billed. */
+export interface GasAttempt {
+  destination: string;
+  phase: 'quote' | 'execute';
+  outcome: 'receipt' | 'refused' | 'unknown';
+  code?: string;
+  message?: string;
+  cost?: string;
+}
+
+export interface GasQuote {
+  chain: string;
+  quoteId: string;
+  feePayer: string;
+  recipient: string;
+  lamports: string;
+  maxLamports: string;
+  recentBlockhash: string;
+  /** ms epoch: quote TTL and blockhash validity, merged into one deadline. */
+  expiresAt: number;
+  destination: string;
+  payAt: string;
+  price: string;
+  cost?: string;
+  attempts: GasAttempt[];
+}
+
+export interface GasPurchase {
+  chain: string;
+  state: 'delivered' | 'refused' | 'unknown';
+  signature?: string;
+  slot?: string;
+  lamports?: string;
+  recipient: string;
+  /** The station's own closed vocabulary. Branch on this, never on `detail`. */
+  reason?: string;
+  detail?: string;
+  attempts: GasAttempt[];
+  cost?: string;
+  at: string;
+}
+
 /**
  * Leases: spawning a workload and the Lease Vault (TOON_Network#92, ADR 0021).
  *
@@ -1526,6 +1622,28 @@ export const daemon = {
   openChannel: (request: { chain: string; deposit?: string; connector?: string }) =>
     post<FundingStatus>('/api/funding/channel', request),
   faucetDrip: (chain: string) => post<FundingStatus>('/api/funding/faucet', { chain }),
+
+  /**
+   * What could be bought, for which chain, from which channel, at what price
+   * (TOON_Network#119). A read: it sends no packet and spends nothing.
+   */
+  gasStation: () => call<GasStationStatus>('/api/funding/gas'),
+  /**
+   * Buy a QUOTE. **This spends money**: a quote is a paid packet, and learning
+   * the station's fee payer for the first time is a second one. What comes
+   * back is the station's own figures — what it will move, its ceiling, and
+   * the deadline it merged with its blockhash's validity — plus what each
+   * packet cost.
+   */
+  quoteGas: (request: { chain: string; lamports?: string }) =>
+    post<GasQuote>('/api/funding/gas/quote', request),
+  /**
+   * Pay the station to co-sign and broadcast. **This spends money**, and it
+   * pays for the quote that was SHOWN — hence `quoteId` — so the figure on the
+   * screen is provably the figure agreed to.
+   */
+  buyGas: (request: { chain: string; quoteId: string }) =>
+    post<GasPurchase>('/api/funding/gas/buy', request),
 
   leases: () => call<LeaseVaultStatus>('/api/leases'),
   /** Re-read the vault from the account's relays. Free: a relay read costs nothing. */

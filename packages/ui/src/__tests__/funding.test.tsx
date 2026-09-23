@@ -4,7 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ConsoleApp } from '@/app/console-app';
 import { formatAmount } from '@/app/funding-view';
-import type { ChainFundingView, FundingStatus, SessionStatus } from '@/lib/daemon';
+import type {
+  ChainFundingView,
+  FundingStatus,
+  GasStationStatus,
+  SessionStatus,
+} from '@/lib/daemon';
 import { adoptLaunchToken, forgetLaunchToken } from '@/lib/launch-token';
 
 /**
@@ -127,15 +132,36 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 interface Stub {
   funding: FundingStatus;
+  /** The gas view is its own route and its own answer (TOON_Network#119). */
+  gas?: GasStationStatus;
   posts: { url: string; body: unknown }[];
   gets: string[];
 }
+
+/** No gas station on this profile: the view explains, and offers nothing. */
+const noStation: GasStationStatus = {
+  state: 'no_station',
+  chains: [],
+  reason: 'Devnet names no gas station in this test.',
+  checkedAt: '2026-09-22T00:00:00.000Z',
+};
 
 function stubDaemon(stub: Stub, onPost?: (url: string, body: unknown) => FundingStatus) {
   vi.stubGlobal(
     'fetch',
     vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      if (url.startsWith('/api/funding/gas')) {
+        if (init?.method === 'POST') {
+          stub.posts.push({
+            url,
+            body: init.body ? JSON.parse(String(init.body)) : undefined,
+          });
+        } else {
+          stub.gets.push(url);
+        }
+        return Promise.resolve(jsonResponse(stub.gas ?? noStation));
+      }
       if (url.startsWith('/api/funding')) {
         if (init?.method === 'POST') {
           const body = init.body ? JSON.parse(String(init.body)) : undefined;

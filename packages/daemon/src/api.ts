@@ -13,6 +13,7 @@ import {
   type DirectoryResult,
 } from './directory.js';
 import { FundingError, type FundingStore } from './funding.js';
+import { GasStationError, type GasStationStore } from './gas-station.js';
 import {
   GatewayError,
   type GatewayView,
@@ -90,6 +91,12 @@ export interface ApiDeps {
   readonly session: AccountSession;
   readonly chainSeed: ChainSeedStore;
   readonly funding: FundingStore;
+  /**
+   * Buying the next chain's gas through a gas station (TOON_Network#119).
+   * Absent in a build that wired funding without it, and the routes say so
+   * rather than pretending.
+   */
+  readonly gasStation?: GasStationStore | undefined;
   readonly vault: LeaseVault;
   readonly leases: LeaseStore;
   readonly readHealth: (
@@ -319,7 +326,14 @@ export async function handleApi(deps: ApiDeps, request: ApiRequest): Promise<Api
 
   if (path === '/api/funding' || path.startsWith('/api/funding/')) {
     try {
-      return await handleFunding(deps.funding, method, path, request.query, request.body);
+      return await handleFunding(
+        deps.funding,
+        deps.gasStation,
+        method,
+        path,
+        request.query,
+        request.body
+      );
     } catch (error) {
       return accountProblem(error);
     }
@@ -581,12 +595,17 @@ async function handleChainSeed(
  */
 async function handleFunding(
   funding: FundingStore,
+  gasStation: GasStationStore | undefined,
   method: string,
   path: string,
   query: URLSearchParams,
   body: unknown
 ): Promise<ApiResponse> {
   const at = (route: string, verb: string) => path === route && method === verb;
+
+  if (path === '/api/funding/gas' || path.startsWith('/api/funding/gas/')) {
+    return await handleGas(gasStation, method, path, body);
+  }
 
   if (at('/api/funding', 'GET')) {
     return ok(
@@ -639,6 +658,84 @@ async function handleFunding(
     } catch (error) {
       if (error instanceof FundingError)
         return problem(error.status, error.code, error.message);
+      throw error;
+    }
+  }
+
+  return problem(404, 'unknown_route', `No route ${method} ${path}.`);
+}
+
+/**
+ * Buying the next chain's gas (TOON_Network#119).
+ *
+ * Three routes, and the split between them is the acceptance criterion rather
+ * than a REST habit. `GET` says what could be bought, for which chain, from
+ * which channel and at what price — a read, so a window can poll it beside the
+ * funding view. `POST /quote` buys a QUOTE: the station's own figures, shown
+ * before anything is committed to. `POST /buy` pays for the execute, and it
+ * pays for the quote it was SHOWN — it takes that quote's id, so the figure on
+ * the screen is provably the figure that was agreed to, and a stale tab cannot
+ * buy at a price nobody saw.
+ *
+ * **Both POSTs spend money, and both can spend it and come back empty.** A
+ * refused paid request is still billed (ADR 0003, TOON_Network#115), so every
+ * answer here — including every error — carries the packets it paid for and
+ * what each cost. A refusal that hid its cost would be the silent loss #119
+ * forbids.
+ */
+async function handleGas(
+  gasStation: GasStationStore | undefined,
+  method: string,
+  path: string,
+  body: unknown
+): Promise<ApiResponse> {
+  const at = (route: string, verb: string) => path === route && method === verb;
+  if (!gasStation) {
+    return problem(
+      501,
+      'not_wired',
+      'This build has no gas station wired, so it can explain the gas problem and not buy a ' +
+        'way out of it.'
+    );
+  }
+
+  if (at('/api/funding/gas', 'GET')) return ok(await gasStation.status());
+
+  if (at('/api/funding/gas/quote', 'POST') || at('/api/funding/gas/buy', 'POST')) {
+    const chain = string(asRecord(body), 'chain');
+    if (!chain) {
+      return problem(
+        400,
+        'invalid_request',
+        'Body must name the `chain` to buy gas FOR, exactly as the connector published it in ' +
+          '`GET /ilp`. It is the blocked chain, never the one whose channel pays.'
+      );
+    }
+    try {
+      if (path === '/api/funding/gas/quote') {
+        return ok(
+          await gasStation.quote({
+            chain,
+            ...optional('lamports', string(asRecord(body), 'lamports')),
+          })
+        );
+      }
+      const quoteId = string(asRecord(body), 'quoteId');
+      if (!quoteId) {
+        return problem(
+          400,
+          'invalid_request',
+          'Body must name the `quoteId` of the quote that was shown. A purchase pays for the ' +
+            'quote it displayed, so that the figure on the screen is the one agreed to.'
+        );
+      }
+      return ok(await gasStation.buy({ chain, quoteId }));
+    } catch (error) {
+      if (error instanceof GasStationError) {
+        return problem(error.status, error.code, error.message, {
+          attempts: error.attempts,
+        });
+      }
       throw error;
     }
   }
@@ -1571,6 +1668,18 @@ function readProfileId(body: unknown): string | undefined {
   return typeof id === 'string' && id.length > 0 ? id : undefined;
 }
 
-function problem(status: number, code: string, message: string): ApiResponse {
-  return { status, body: { error: code, message } };
+/**
+ * A refusal, and — where there is one — the account of what it cost.
+ *
+ * `detail` exists for exactly one reason: a paid route bills for a refusal
+ * (ADR 0003, TOON_Network#115), so an error that carried only a sentence would
+ * be an error that hid money. Nothing derived from a key ever goes in it.
+ */
+function problem(
+  status: number,
+  code: string,
+  message: string,
+  detail?: Record<string, unknown>
+): ApiResponse {
+  return { status, body: { error: code, message, ...(detail ?? {}) } };
 }
