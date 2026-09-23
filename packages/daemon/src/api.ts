@@ -3,6 +3,7 @@ import { SessionError, type AccountSession } from './account-session.js';
 import { ChainSeedError, type ChainSeedStore } from './chain-seed.js';
 import { channelStoreFor } from './channel-store.js';
 import type { ConnectorHealth } from './connector-health.js';
+import { DocsNotFound, type DocsStore } from './docs.js';
 import {
   ANY_GPU,
   ARCHITECTURES,
@@ -80,6 +81,12 @@ export interface ApiDeps {
   ) => Promise<DirectoryResult>;
   readonly readTemplates: (profile: NetworkProfile) => Promise<TemplateGalleryResult>;
   /**
+   * The documentation (TOON_Network#102). Optional, and the route says so
+   * rather than 500-ing: a daemon whose `docs/` was not installed is a working
+   * console with no Help tab, not a broken one.
+   */
+  readonly docs?: DocsStore | undefined;
+  /**
    * The paid half of a spawn, which TOON_Network#92 owns. Absent until it is
    * wired, and `POST /api/templates/spawn` says so rather than pretending.
    */
@@ -144,6 +151,10 @@ export async function handleApi(deps: ApiDeps, request: ApiRequest): Promise<Api
 
   if (path === '/api/templates' || path.startsWith('/api/templates/')) {
     return handleTemplates(deps, method, path, request.body);
+  }
+
+  if (path === '/api/docs' || path.startsWith('/api/docs/')) {
+    return handleDocs(deps, method, path, request.query);
   }
 
   if (path === '/api/account' && method === 'GET') {
@@ -467,6 +478,53 @@ async function handleFunding(
  * answers `501` AND the expansion, so that the half that exists is visible and
  * testable before the half that pays does.
  */
+/**
+ * The docs (TOON_Network#102), which are the one part of this API that costs
+ * nothing and needs nobody: no token-spending, no account, no channel. A relay
+ * READ is free, and the page that explains how to get an account is one of the
+ * pages being read.
+ *
+ * `GET /api/docs` is the reading order and the summaries; `GET /api/docs/<d>`
+ * is one page with its Markdown. Both answers carry the same `fallback`
+ * sentence when the bundle is what is being shown, because "this is the
+ * version that shipped with your console" belongs above the text a person is
+ * reading, not in a log.
+ */
+async function handleDocs(
+  deps: ApiDeps,
+  method: string,
+  path: string,
+  query: URLSearchParams
+): Promise<ApiResponse> {
+  if (method !== 'GET') {
+    return problem(
+      405,
+      'method_not_allowed',
+      `Documentation is read-only: ${method} ${path}.`
+    );
+  }
+  const docs = deps.docs;
+  if (docs === undefined) {
+    return problem(
+      503,
+      'no_docs',
+      'This console has no documentation installed. Set TOON_CONSOLE_DOCS_DIR to where the ' +
+        'Markdown pages are, or read them at the site.'
+    );
+  }
+  const refresh = query.get('refresh') !== null;
+  if (path === '/api/docs') {
+    return ok(await docs.index({ refresh }));
+  }
+  const d = path.slice('/api/docs/'.length);
+  try {
+    return ok(await docs.page(decodeURIComponent(d), { refresh }));
+  } catch (error) {
+    if (error instanceof DocsNotFound) return problem(404, error.code, error.message);
+    throw error;
+  }
+}
+
 async function handleTemplates(
   deps: ApiDeps,
   method: string,

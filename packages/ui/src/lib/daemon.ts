@@ -762,6 +762,45 @@ export interface SpawnRequestBody {
   chain?: string;
 }
 
+/**
+ * The documentation (TOON_Network#102), as the daemon assembled it.
+ *
+ * A mirror of `packages/daemon/src/docs.ts`, for the same reason as every
+ * other type in this file. The interesting field is `source`: a page is
+ * either the NIP-23 article the relays hold or the Markdown this console
+ * shipped with, and which one it is belongs above the text a person reads.
+ */
+export interface DocSummary {
+  d: string;
+  title: string;
+  summary: string;
+  order: number;
+  publishedAt: string;
+  tags: string[];
+  source: 'relays' | 'bundled';
+  /** `30023:<pubkey>:<d>`, on a published page. */
+  address?: string;
+  updatedAt?: string;
+}
+
+export interface DocArticle extends DocSummary {
+  markdown: string;
+}
+
+export interface DocsIndex {
+  author?: { npub: string; pubkey: string };
+  relays: string[];
+  read: { url: string; state: string; events: number; reason?: string }[];
+  /** Why the bundled copy is showing, when it is. A sentence for a banner. */
+  fallback?: string;
+  docs: DocSummary[];
+  readAt: string;
+}
+
+export interface DocsPage extends DocsIndex {
+  doc: DocArticle;
+}
+
 export class DaemonError extends Error {
   readonly status: number;
   /** The daemon's machine-readable code, e.g. `passphrase_required`. */
@@ -839,6 +878,15 @@ export const daemon = {
    */
   expandTemplate: (template: string, settings: TemplateSettings) =>
     post<ExpandedTemplate>('/api/templates/expand', { template, ...settings }),
+
+  /**
+   * The docs. Free, and behind no account: a relay READ is not priced by the
+   * spec, and the page explaining how to get an account is one of these.
+   */
+  docs: (options: { refresh?: boolean } = {}) =>
+    call<DocsIndex>(`/api/docs${options.refresh ? '?refresh=1' : ''}`),
+  doc: (d: string, options: { refresh?: boolean } = {}) =>
+    call<DocsPage>(`/api/docs/${encodeURIComponent(d)}${options.refresh ? '?refresh=1' : ''}`),
 
   account: () => call<SessionStatus>('/api/account'),
   addLocalSigner: (request: LocalSignerRequest) =>
