@@ -1,0 +1,54 @@
+# The public TOON Network site (TOON_Network#102).
+#
+# One static build, served by Caddy on the relay Linode. It is NOT deployed
+# from this repository: the fleet is GitOps and a box refuses a dirty tree, so
+# this file is the block a human copies into the relay host's Caddy
+# configuration in the `infra` repository, through a pull request like any
+# other change. `deploy/README.md` says exactly what to run.
+#
+# Moving the site onto TOON Network itself — as a workload behind a Workload
+# Gateway — is #102's stated follow-up and is deliberately not attempted here.
+#
+# Three decisions worth the lines they take.
+#
+# `try_files {path} /index.html` is not optional. The site routes `/docs/<slug>`
+# with the History API so that a documentation page is a thing people can link
+# to, and without this, `https://toonprotocol.dev/docs/funding` is a 404 from
+# Caddy before the app ever loads.
+#
+# `/site-config.json` is served with no cache. It carries the documentation
+# npub and the relay list, which is the whole point of it being a runtime file
+# rather than something baked into the build: a key that could only be changed
+# by rebuilding would have to be changed by whoever holds the key.
+#
+# The `connect-src` in the CSP has to allow `wss:`. The site reads the
+# published NIP-23 articles straight from relays in the browser — a relay READ
+# is free and unauthenticated, unlike a relay WRITE, which is a paid TOON
+# packet and is never sent from this bundle.
+
+toonprotocol.dev, www.toonprotocol.dev {
+	root * /srv/toon-site
+
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Frame-Options "DENY"
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' wss: https:; frame-ancestors 'none'; base-uri 'self'; form-action 'none'"
+		-Server
+	}
+
+	# The build's own assets are content-hashed by Vite, so they may be cached
+	# forever. Everything else may not: `index.html` names this build's assets,
+	# and `site-config.json` is edited in place.
+	@immutable path /assets/*
+	header @immutable Cache-Control "public, max-age=31536000, immutable"
+
+	@mutable path /index.html /site-config.json
+	header @mutable Cache-Control "no-cache"
+
+	try_files {path} /index.html
+	file_server
+}

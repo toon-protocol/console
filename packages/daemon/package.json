@@ -7,12 +7,14 @@
   "type": "module",
   "main": "dist/main.js",
   "bin": {
-    "toon-console-daemon": "dist/main.js"
+    "toon-console-daemon": "dist/main.js",
+    "toon-docs-publish": "dist/main-docs-publish.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/main.js",
     "dev": "node --watch dist/main.js",
+    "docs:publish": "node dist/main-docs-publish.js",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json"
   },

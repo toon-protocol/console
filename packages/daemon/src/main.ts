@@ -7,6 +7,7 @@ import { ChainSeedStore } from './chain-seed.js';
 import { FileChainSeedCache } from './chain-seed-cache.js';
 import { defaultConnectorReader, readConnectorHealth } from './connector-health.js';
 import { readDirectory } from './directory.js';
+import { DocsStore } from './docs.js';
 import { FundingStore } from './funding.js';
 import { LiveChainPort } from './funding-chain.js';
 import { LeaseStore } from './lease.js';
@@ -170,6 +171,16 @@ export async function main(): Promise<void> {
     paths,
   });
 
+  // The docs (TOON_Network#102). It reads the published NIP-23 articles from
+  // whichever relay the active profile names — free, no account, no channel —
+  // and falls back to the Markdown this console shipped with. WHOSE articles
+  // is configuration and never a constant: an npub in this source would be an
+  // npub nobody could rotate.
+  const docs = new DocsStore({
+    relays: () => [profiles.active().relayUrl].filter((url) => url.length > 0),
+    npub: () => process.env.TOON_CONSOLE_DOCS_NPUB,
+  });
+
   // The dashboard: the module a person lives in after a spawn
   // (TOON_Network#93). It shares the provider port with the spawn above —
   // `status`, `extend` and `terminate` are the same kind of packet on the same
@@ -218,6 +229,7 @@ export async function main(): Promise<void> {
       funding,
       vault,
       leases,
+      docs,
       version,
       paths,
       startedAt: new Date(),

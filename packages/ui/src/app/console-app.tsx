@@ -5,6 +5,7 @@ import { useAccount } from '@/hooks/use-account';
 import { useChainSeed } from '@/hooks/use-chain-seed';
 import { useConsole } from '@/hooks/use-console';
 import { useDirectory } from '@/hooks/use-directory';
+import { useDocs } from '@/hooks/use-docs';
 import { useFunding } from '@/hooks/use-funding';
 import { useLeases } from '@/hooks/use-leases';
 import { useWorkloads } from '@/hooks/use-workloads';
@@ -13,6 +14,7 @@ import { useTemplates } from '@/hooks/use-templates';
 import { AccountCard, AccountChip } from './account-view';
 import { ChainSeedCard } from './chain-seed-view';
 import { DirectoryView } from './directory-view';
+import { DocsView } from './docs-view';
 import { FundingView } from './funding-view';
 import { HealthView } from './health-view';
 import { ProfileSwitcher } from './profile-switcher';
@@ -23,10 +25,10 @@ import { WorkloadsView } from './workloads-view';
 /**
  * The shell.
  *
- * Six views now — health (#87), the Provider Directory (#91), Templates (#94),
- * Workloads (#92), the Account (#88, with its Chain Seed from #89) and Funds
- * (#90) — behind the header that will carry the runway and the extend and
- * terminate controls (#93).
+ * Seven views now — health (#87), the Provider Directory (#91), Templates
+ * (#94), Workloads (#92), the Account (#88, with its Chain Seed from #89),
+ * Funds (#90) and Help (#102) — behind the header that will carry the runway
+ * and the extend and terminate controls (#93).
  *
  * Workloads is where the console first SPENDS: it holds the Lease Vault and
  * the spawn form. It is also the one view that needs the Provider Directory
@@ -55,7 +57,7 @@ import { WorkloadsView } from './workloads-view';
  * daemon holds, so the daemon is the only thing that knows.
  */
 
-type Tab = 'health' | 'directory' | 'templates' | 'workloads' | 'account' | 'funds';
+type Tab = 'health' | 'directory' | 'templates' | 'workloads' | 'account' | 'funds' | 'docs';
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'health', label: 'Health' },
@@ -64,6 +66,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'workloads', label: 'Workloads' },
   { id: 'funds', label: 'Funds' },
   { id: 'account', label: 'Account' },
+  { id: 'docs', label: 'Help' },
 ];
 
 export function ConsoleApp() {
@@ -99,6 +102,14 @@ export function ConsoleApp() {
   const leases = useLeases({
     active: tab === 'workloads',
     pubkey: account.status?.account?.pubkey,
+  });
+  // Keyed to the PROFILE and not the account: the docs are published to a
+  // network's relays and reading them is free, so the Help tab works before
+  // anyone has signed in — which matters, because one of these pages is the
+  // one that explains what signing in is for (TOON_Network#102).
+  const docs = useDocs({
+    active: tab === 'docs',
+    ...(health === undefined ? {} : { profileId: health.profile.id }),
   });
   // The dashboard beside it, keyed the same way. It is a SECOND read of the
   // same leases and deliberately so: the vault is what this account owns, and
@@ -177,6 +188,8 @@ export function ConsoleApp() {
           />
         ) : tab === 'funds' ? (
           <FundingView funding={funding} />
+        ) : tab === 'docs' ? (
+          <DocsView docs={docs} />
         ) : tab === 'account' ? (
           account.status &&
           (signedIn ? (

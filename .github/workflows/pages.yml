@@ -1,0 +1,69 @@
+# Publish the public site (TOON_Network#102) to GitHub Pages.
+#
+# This is a place to READ the landing page and the docs, and to send someone a
+# link. It is not where the site lives in the end: #102 serves it from Caddy on
+# the relay box, and its own follow-up moves it onto TOON Network behind a
+# Workload Gateway. Pages costs nothing and needs no box, so it is worth having
+# while those are being arranged.
+#
+# Two details this build cannot be without:
+#
+#   SITE_BASE  Pages serves a project at `/<repo>/`, not at the root of a
+#              domain. `vite.config.ts` takes the prefix from here and
+#              `site-app.tsx` reads it back out of `BASE_URL`, so the links and
+#              the assets agree. A custom domain later means `SITE_BASE: /`.
+#
+#   404.html   The site routes with the History API, so `/docs/concepts` is a
+#              path the server must answer with the app. Caddy is told to do
+#              that; Pages cannot be, and serves `404.html` instead — so the
+#              app is copied there and every deep link works.
+name: Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'packages/site/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time, and a newer commit wins. `cancel-in-progress: false`
+# would queue an old build behind a new one and publish it second.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run build -w @toon-protocol/console-site
+        env:
+          SITE_BASE: /${{ github.event.repository.name }}/
+      - run: cp packages/site/dist/index.html packages/site/dist/404.html
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: packages/site/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

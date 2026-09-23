@@ -20,6 +20,9 @@ and that account can **spawn a workload** and keep its Root Secret in the **Leas
 | --- | --- |
 | `packages/daemon` | Node/TypeScript daemon: the local JSON API, the loopback server, the network profiles |
 | `packages/ui` | React 19 + Vite + Tailwind 4 + shadcn, built to `dist/` and served by the daemon |
+| `packages/site` | The public landing page and docs site: React 19 + Vite, one static build |
+| `docs` | The documentation, as Markdown. The source of the site, the Help tab and the published articles |
+| `deploy` | The Caddy site block, and the runbook a human follows to deploy and publish |
 | `packaging` | The `systemd --user` unit, the launcher, and the install/uninstall scripts |
 
 ## Running it from a checkout
@@ -461,12 +464,50 @@ outlives the request it was for, and §6.1.1 forbids all three.
 `packages/daemon/src/api-workloads.test.ts` is the test that says no dashboard answer — a
 card, an extension or a termination — carries either value.
 
+## The site and the docs
+
+The pages in `docs/` are the source, and three things read them ([#102][i102]):
+
+- the **public site** (`packages/site`), served by Caddy at a devnet domain name;
+- the console's **Help tab**, served by the daemon at `/api/docs`;
+- the **published articles**, one [NIP-23][nip23] long-form event (kind 30023) per page,
+  signed by TOON Network's documentation npub, readable in any Nostr client.
+
+The site and the console both render the published articles and fall back to the bundled
+Markdown when no relay answers, saying which of the two is on screen. Which npub to read is
+configuration, never a constant: `TOON_CONSOLE_DOCS_NPUB` for the daemon, `docsNpub` in the
+site's runtime `site-config.json`. With neither set, both show the bundle and say so.
+
+Publishing is a command a human runs, and it **spends money**. Kind 30023 is addressable,
+so re-publishing an edited page *replaces* its article rather than adding a second copy —
+the `d` tag is the page's slug and never changes:
+
+```bash
+npm run build -w @toon-protocol/console-daemon
+node packages/daemon/dist/main-docs-publish.js --dry-run   # the plan, spending nothing
+node packages/daemon/dist/main-docs-publish.js             # one paid relay write per page
+node packages/daemon/dist/main-docs-publish.js --verify    # each `d` replaced, not duplicated
+```
+
+Every write goes through `PaidRelayWriter` — the console's one paid-write path
+([#120][i120]) — as a sealed TOON packet against an open payment channel. There is no
+plain-websocket write anywhere in this repository, and the publisher never opens a channel:
+it refuses with somewhere to go rather than locking collateral because a script ran.
+
+[`deploy/README.md`](deploy/README.md) is the whole runbook: building, copying to the relay
+Linode, the Caddy block, minting the documentation key and funding the publisher. Nothing in
+CI deploys, and nothing in this repository touches a box's settlement key.
+
+```bash
+npm run dev:site          # the public site, against the bundled Markdown
+```
+
 ## Development
 
 ```bash
 npm run lint         # eslint 9, flat config
-npm run typecheck    # tsc, both packages
-npm test             # vitest, both packages
+npm run typecheck    # tsc, every package
+npm test             # vitest, every package
 npm run test:packaging  # node --test, guards on the install bundle
 ```
 
@@ -493,3 +534,6 @@ published identity; nothing in this repository should suggest otherwise.
 [adr5]: https://github.com/toon-protocol/TOON_Network/blob/main/docs/adr/0005-tenant-identity-comes-from-the-request-not-payment-headers.md
 [adr9]: https://github.com/toon-protocol/TOON_Network/blob/main/docs/adr/0009-a-price-change-is-a-new-listing-version.md
 [i82]: https://github.com/toon-protocol/TOON_Network/issues/82
+[i102]: https://github.com/toon-protocol/TOON_Network/issues/102
+[i120]: https://github.com/toon-protocol/TOON_Network/issues/120
+[nip23]: https://github.com/nostr-protocol/nips/blob/master/23.md
