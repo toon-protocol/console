@@ -1,16 +1,24 @@
 @import 'tailwindcss';
 
 /*
- * Tokens, not a palette.
+ * Tokens, and no palette (TOON_Network#99, ADR 0019).
  *
- * ADR 0019 says the console takes its colours from the current Omarchy theme.
- * That wiring — a `~/.config/omarchy/themed/` template and a `theme-set` hook
- * — is TOON_Network#99, not this ticket. What this ticket owes it is a surface
- * with no colour literal in a component: every component below reads a
- * variable, so #99 has one file to rewrite and nothing to hunt for.
+ * This file names the colours the console uses and says nothing about what
+ * they are. Their values arrive from the desktop: Omarchy renders
+ * `packaging/omarchy/toon-console.css.tpl` against the current theme every
+ * time the theme is set, the daemon reads the result
+ * (`packages/daemon/src/theme.ts`), and the window gets it as a `:root` rule —
+ * in the shell the daemon serves, so the first paint is already themed, and
+ * again over `/api/desktop` whenever the theme changes under an open window.
  *
- * Until then the variables carry a neutral zinc scale, which is the shadcn
- * default and deliberately not a brand.
+ * So there is deliberately no `:root` block of hex values below, and no
+ * `.dark` class either: a theme is dark or light because the desktop's is, and
+ * the one default palette this repository has lives in the daemon, where it is
+ * named as the fallback for a machine with no Omarchy to follow.
+ *
+ * Adding a colour here means adding its name to `THEME_VARIABLES` in
+ * `theme.ts` and a line to the template. A hex literal in this package is a
+ * bug, and `packages/ui/src/__tests__/theme.test.ts` is the test that says so.
  */
 
 @theme inline {
@@ -44,52 +52,6 @@
 :root {
   --radius: 0.5rem;
   --font-mono-stack: ui-monospace, 'CaskaydiaMono Nerd Font', 'JetBrains Mono', monospace;
-
-  --background: #fafafa;
-  --foreground: #18181b;
-  --card: #ffffff;
-  --card-foreground: #18181b;
-  --muted: #f4f4f5;
-  --muted-foreground: #71717a;
-  --accent: #f4f4f5;
-  --accent-foreground: #18181b;
-  --primary: #18181b;
-  --primary-foreground: #fafafa;
-  --secondary: #f4f4f5;
-  --secondary-foreground: #18181b;
-  --destructive: #dc2626;
-  --destructive-foreground: #fafafa;
-  --success: #16a34a;
-  --success-foreground: #fafafa;
-  --warning: #d97706;
-  --warning-foreground: #fafafa;
-  --border: #e4e4e7;
-  --input: #e4e4e7;
-  --ring: #a1a1aa;
-}
-
-.dark {
-  --background: #09090b;
-  --foreground: #fafafa;
-  --card: #111113;
-  --card-foreground: #fafafa;
-  --muted: #1c1c1f;
-  --muted-foreground: #a1a1aa;
-  --accent: #27272a;
-  --accent-foreground: #fafafa;
-  --primary: #fafafa;
-  --primary-foreground: #18181b;
-  --secondary: #27272a;
-  --secondary-foreground: #fafafa;
-  --destructive: #ef4444;
-  --destructive-foreground: #fafafa;
-  --success: #22c55e;
-  --success-foreground: #09090b;
-  --warning: #f59e0b;
-  --warning-foreground: #09090b;
-  --border: #27272a;
-  --input: #27272a;
-  --ring: #52525b;
 }
 
 @layer base {

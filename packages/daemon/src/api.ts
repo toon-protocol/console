@@ -2,6 +2,7 @@ import { KeyMaterialError } from './account-key.js';
 import { SessionError, type AccountSession } from './account-session.js';
 import { ChainSeedError, type ChainSeedStore } from './chain-seed.js';
 import { channelStoreFor } from './channel-store.js';
+import { isMenuView, MENU_VIEWS, type DesktopView, type MenuView } from './desktop.js';
 import type { ConnectorHealth } from './connector-health.js';
 import { DocsNotFound, type DocsStore } from './docs.js';
 import {
@@ -106,8 +107,32 @@ export interface ApiDeps {
   readonly workloads?: WorkloadPort | undefined;
   /** The budgets. A dashboard reads perfectly well without them armed. */
   readonly autoExtend?: AutoExtendPort | undefined;
+  /**
+   * The desktop around the window: the current Omarchy theme, and whatever the
+   * Omarchy menu last asked to be opened (TOON_Network#99). Absent only in a
+   * build that did not wire it, and the route says so rather than pretending.
+   */
+  readonly desktop?: DesktopPort | undefined;
   readonly now?: (() => Date) | undefined;
 }
+
+/** What `/api/desktop` needs of `DesktopState`, and no more. */
+export interface DesktopPort {
+  current(): DesktopView;
+  refreshTheme(): DesktopView;
+  requestView(view: MenuView): DesktopView;
+  wait(since: number | undefined, timeoutMs: number): Promise<DesktopView>;
+}
+
+/**
+ * How long a `wait=1` poll is held before it answers anyway.
+ *
+ * Long enough that an idle window reconnects a couple of times an hour, short
+ * enough that a proxy, a suspend or a sleeping laptop never leaves the window
+ * holding a socket nothing will ever answer.
+ */
+const DESKTOP_WAIT_MS = 25_000;
+const DESKTOP_WAIT_MAX_MS = 60_000;
 
 /** What `/api/workloads/*` needs of `WorkloadStore`, and no more. */
 export interface WorkloadPort {
@@ -168,6 +193,10 @@ export async function handleApi(deps: ApiDeps, request: ApiRequest): Promise<Api
       throw error;
     }
     return { status: 200, body: profilesBody(deps) };
+  }
+
+  if (path === '/api/desktop' || path.startsWith('/api/desktop/')) {
+    return handleDesktop(deps, method, path, request.query, request.body);
   }
 
   if (path === '/api/directory' && method === 'GET') {
@@ -248,6 +277,73 @@ export async function handleApi(deps: ApiDeps, request: ApiRequest): Promise<Api
   }
 
   return problem(404, 'not_found', `No route ${method} ${path}.`);
+}
+
+/* -------------------------------------------------------------------------- */
+/* The desktop                                                                */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * `/api/desktop` — the window's one channel to the desktop around it
+ * (TOON_Network#99).
+ *
+ * `GET` answers with the current theme and whatever the Omarchy menu last
+ * asked for. With `?wait=1&since=<seq>` it does not answer until something
+ * changes, so a theme switch reaches an open window in the time one round trip
+ * takes. `desktop.ts` explains why this is a long poll and not an EventSource.
+ *
+ * The two POSTs are what the desktop uses to reach in: the `theme-set` hook
+ * says the theme moved, and a menu entry says which view to open. Both are
+ * behind the per-launch token like everything else here — the hook and the
+ * launcher read it out of the launch record, which lives in the runtime
+ * directory and is readable by this user alone.
+ */
+async function handleDesktop(
+  deps: ApiDeps,
+  method: string,
+  path: string,
+  query: URLSearchParams,
+  body: unknown
+): Promise<ApiResponse> {
+  const desktop = deps.desktop;
+  if (desktop === undefined) {
+    return problem(
+      501,
+      'desktop_unwired',
+      'This build has no desktop wiring, so it has no theme to report. That is a ' +
+        'packaging fault rather than anything about the request.'
+    );
+  }
+
+  if (path === '/api/desktop' && method === 'GET') {
+    if (query.get('wait') !== '1') return ok(desktop.current());
+    const since = Number(query.get('since'));
+    const timeout = Math.min(
+      Math.max(Number(query.get('timeout') ?? DESKTOP_WAIT_MS) || DESKTOP_WAIT_MS, 1_000),
+      DESKTOP_WAIT_MAX_MS
+    );
+    return ok(await desktop.wait(Number.isFinite(since) ? since : undefined, timeout));
+  }
+
+  // The `theme-set` hook. It says only "look again": what the colours now are
+  // is read off the rendered file, never taken from the caller.
+  if (path === '/api/desktop/theme' && method === 'POST') {
+    return ok(desktop.refreshTheme());
+  }
+
+  if (path === '/api/desktop/view' && method === 'POST') {
+    const view = asRecord(body).view;
+    if (!isMenuView(view)) {
+      return problem(
+        400,
+        'invalid_request',
+        `Body must be \`{ "view": "<one of ${MENU_VIEWS.join(', ')}>" }\`.`
+      );
+    }
+    return ok(desktop.requestView(view));
+  }
+
+  return problem(404, 'unknown_route', `No route ${method} ${path}.`);
 }
 
 /**

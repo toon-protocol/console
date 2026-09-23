@@ -1004,10 +1004,55 @@ function post<T>(path: string, body?: unknown): Promise<T> {
   });
 }
 
+/**
+ * The desktop around the window (TOON_Network#99).
+ *
+ * A mirror of `packages/daemon/src/desktop.ts`, for the same reason as every
+ * other type in this file.
+ */
+export type MenuView = 'workloads' | 'new-workload' | 'funds';
+
+export interface ThemeReading {
+  source: 'omarchy' | 'default';
+  name: string;
+  mode: 'dark' | 'light';
+  revision: string;
+  /** A `:root { … }` rule the daemon built. Goes straight into a `<style>`. */
+  css: string;
+  /** Why the default theme is in use, when it is. */
+  reason?: string;
+  readAt: string;
+}
+
+export interface DesktopView {
+  seq: number;
+  theme: ThemeReading;
+  open?: MenuView;
+  openedAt?: string;
+  at: string;
+}
+
 export const daemon = {
   health: (options: { refresh?: boolean } = {}) =>
     call<Health>(`/api/health${options.refresh ? '?refresh=1' : ''}`),
   profiles: () => call<Profiles>('/api/profiles'),
+
+  /**
+   * The desktop: this machine's theme, and whatever the Omarchy menu last
+   * asked to be opened (TOON_Network#99).
+   *
+   * With `wait`, the daemon holds the request open until something changes or
+   * about twenty-five seconds pass — so a theme switch reaches an open window
+   * at once and an idle one costs nothing. `since` is the last `seq` seen, and
+   * a window that is behind is answered immediately rather than waiting.
+   */
+  desktop: (options: { since?: number; wait?: boolean } = {}) => {
+    const query = new URLSearchParams();
+    if (options.wait) query.set('wait', '1');
+    if (options.since !== undefined) query.set('since', String(options.since));
+    const text = query.toString();
+    return call<DesktopView>(`/api/desktop${text === '' ? '' : `?${text}`}`);
+  },
   setProfile: (id: string) =>
     call<Profiles>('/api/profiles/active', { method: 'POST', body: JSON.stringify({ id }) }),
   directory: (filters: DirectoryFilters = {}) =>

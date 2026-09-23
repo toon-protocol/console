@@ -3,12 +3,18 @@
 # Undo toon-console-install. Nothing under the console's data or config
 # directories is touched: removing the app must not throw away channel state
 # or, later, an account's cached Lease Vault.
+#
+# The Omarchy files go too (TOON_Network#99): the themed template, the
+# theme-set hook and the three menu entries. The menu file itself is the
+# person's, so only the lines between this package's markers are taken out and
+# everything else in it — including their comments — is left byte for byte.
 
 set -euo pipefail
 
 BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 APP_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+OMARCHY_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy"
 
 if command -v systemctl >/dev/null 2>&1; then
   systemctl --user disable --now toon-console.service 2>/dev/null || true
@@ -17,9 +23,36 @@ fi
 rm -f "$UNIT_DIR/toon-console.service" "$BIN_DIR/toon-console"
 rm -f "$APP_DIR/TOON Console.desktop" "$APP_DIR/toon-console.desktop"
 
+rm -f "$OMARCHY_DIR/themed/toon-console.css.tpl"
+rm -f "$OMARCHY_DIR/hooks/theme-set.d/toon-console"
+
+MENU_FILE="$OMARCHY_DIR/extensions/omarchy-menu.jsonc"
+if [[ -f $MENU_FILE ]]; then
+  MENU_FILE="$MENU_FILE" node -e '
+    const { readFileSync, writeFileSync } = require("node:fs");
+    const file = process.env.MENU_FILE;
+    const start = "  // >>> toon-console (managed by toon-console-install; edits here are lost)";
+    const end = "  // <<< toon-console";
+    const text = readFileSync(file, "utf8");
+    // A plain deletion, because the installer put the block in at the top
+    // with every entry comma-terminated and touched nothing else.
+    const held = new RegExp(`${escape(start)}[\\s\\S]*?${escape(end)}\n`, "g");
+    const next = text.replace(held, "");
+    if (next !== text) writeFileSync(file, next);
+
+    function escape(value) {
+      return value.replace(/[.*+?^${}()|[\]\\\/]/g, "\\$&");
+    }
+  '
+fi
+
+# The rendered colours themselves, which Omarchy wrote from the template above.
+# The theme it belongs to is untouched; this is one generated file.
+rm -f "$HOME/.local/state/omarchy/current/theme/toon-console.css"
+
 if command -v systemctl >/dev/null 2>&1; then
   systemctl --user daemon-reload || true
 fi
 
-echo "Removed the console's service and launcher."
+echo "Removed the console's service, launcher and Omarchy files."
 echo "Its data is untouched: ${XDG_DATA_HOME:-$HOME/.local/share}/toon-console"
