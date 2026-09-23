@@ -19,6 +19,30 @@
 /** Where a profile's endpoints came from. */
 export type ProfileOrigin = 'built-in' | 'user';
 
+/**
+ * The chain nodes this profile's balances and transactions go through.
+ *
+ * An RPC URL is an **endpoint**, not a chain fact: it says where to ask, and
+ * nothing about what the answer will be. It has to live here because a
+ * connector's `GET /ilp` deliberately does not publish one — the connector is
+ * the authority on its own settlement terms, not on which node a buyer should
+ * read the chain from — and because the local sandbox's chains are on this
+ * machine's loopback, where no preset could ever point.
+ *
+ * Absent means "whatever `@toon-protocol/client` defaults to", which is that
+ * package's own devnet preset. That is deliberate: it keeps the public
+ * devnet's RPC endpoints in the library that already publishes them rather
+ * than copying them into a second place that could drift.
+ *
+ * The keys name a chain FAMILY and nothing more. There is no chain id here,
+ * no token address and no settlement address; `profiles.test.ts` is the test
+ * that says so.
+ */
+export interface ChainRpcEndpoints {
+  readonly evm?: string;
+  readonly solana?: string;
+}
+
 export interface NetworkProfile {
   /** Stable id; the key the active profile is remembered by. */
   readonly id: string;
@@ -38,6 +62,8 @@ export interface NetworkProfile {
   readonly gatewayDomain: string;
   /** Where to get test funds, when the network has a faucet. */
   readonly faucetUrl?: string | undefined;
+  /** Where to read the chains and send transactions. Empty uses the client's. */
+  readonly rpc: ChainRpcEndpoints;
   readonly origin: ProfileOrigin;
 }
 
@@ -57,6 +83,10 @@ export const DEVNET: NetworkProfile = {
   relayUrl: 'wss://relay-ws.devnet.toonprotocol.dev',
   gatewayDomain: 'gw.devnet.toonprotocol.dev',
   faucetUrl: 'https://faucet.devnet.toonprotocol.dev',
+  // Left to the client's own presets: the public test chains' endpoints are
+  // published by `@toon-protocol/client` already, and a second copy here would
+  // be a second thing to correct when one of them moves.
+  rpc: {},
   origin: 'built-in',
 };
 
@@ -67,6 +97,8 @@ export const SANDBOX: NetworkProfile = {
   connectorUrl: 'http://localhost:3200/ilp',
   relayUrl: 'ws://localhost:7100',
   gatewayDomain: 'gw.localhost:3280',
+  // The sandbox's own chains, on this machine. Nothing could default to these.
+  rpc: { evm: 'http://localhost:8545', solana: 'http://localhost:8899' },
   origin: 'built-in',
 };
 
@@ -77,6 +109,7 @@ export const MAINNET: NetworkProfile = {
   connectorUrl: '',
   relayUrl: '',
   gatewayDomain: '',
+  rpc: {},
   origin: 'built-in',
 };
 

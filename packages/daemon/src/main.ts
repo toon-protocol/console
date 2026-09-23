@@ -7,6 +7,8 @@ import { ChainSeedStore } from './chain-seed.js';
 import { FileChainSeedCache } from './chain-seed-cache.js';
 import { defaultConnectorReader, readConnectorHealth } from './connector-health.js';
 import { readDirectory } from './directory.js';
+import { FundingStore } from './funding.js';
+import { LiveChainPort } from './funding-chain.js';
 import { openKeystore } from './keystore-open.js';
 import {
   mintLaunchToken,
@@ -68,6 +70,17 @@ export async function main(): Promise<void> {
     cache: new FileChainSeedCache(paths),
   });
 
+  // Funding follows the ACTIVE PROFILE and the signed-in account together: a
+  // deposit address is the account's, a channel is the profile's, and neither
+  // means anything without the other (TOON_Network#90).
+  const funding = new FundingStore({
+    profile: () => profiles.active(),
+    chainSeed,
+    readHealth: (profile) => readConnectorHealth(profile, reader),
+    chains: new LiveChainPort(),
+    paths,
+  });
+
   const port = Number(process.env.TOON_CONSOLE_PORT ?? DEFAULT_PORT);
   const recordPath = launchFilePath(paths);
 
@@ -84,6 +97,7 @@ export async function main(): Promise<void> {
       profiles,
       session,
       chainSeed,
+      funding,
       version,
       paths,
       startedAt: new Date(),

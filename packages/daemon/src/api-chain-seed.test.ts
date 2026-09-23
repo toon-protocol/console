@@ -16,6 +16,7 @@ import {
 } from './chain-seed.testkit.js';
 import { generateAccountKey, toNsec } from './account-key.js';
 import { PassphraseFileKeystore, keystoreFilePath } from './keystore-file.js';
+import { fakeChainPort, fundingStoreFor } from './funding.testkit.js';
 import { activeProfileFilePath, consolePaths, type ConsolePaths } from './paths.js';
 import { ProfileStore } from './profile-store.js';
 import { SignerIndex, signerIndexPath } from './signer-index.js';
@@ -71,6 +72,15 @@ describe('the chain seed routes', () => {
         cache: new InMemoryChainSeedCache(),
         dial: fakeRelayNetwork([own, toon]),
         timeoutMs: 200,
+      }),
+      funding: fundingStoreFor({
+        chainSeed: new ChainSeedStore({
+          signer: () => undefined,
+          seedRelays: () => [],
+          cache: new InMemoryChainSeedCache(),
+        }),
+        paths,
+        chains: fakeChainPort(),
       }),
       version: { name: '@toon-protocol/console-daemon', version: '0.1.0' },
       paths,

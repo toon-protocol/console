@@ -11,6 +11,7 @@ import { handleApi, type ApiDeps } from './api.js';
 import type { ConnectorHealth } from './connector-health.js';
 import type { DirectoryFilters, DirectoryResult } from './directory.js';
 import { PassphraseFileKeystore, keystoreFilePath } from './keystore-file.js';
+import { fakeChainPort, fundingStoreFor } from './funding.testkit.js';
 import { consolePaths, activeProfileFilePath } from './paths.js';
 import { ProfileStore } from './profile-store.js';
 import { SignerIndex, signerIndexPath } from './signer-index.js';
@@ -46,6 +47,15 @@ describe('GET /api/directory', () => {
         signer: () => session.signingPort(),
         seedRelays: () => [],
         cache: new InMemoryChainSeedCache(),
+      }),
+      funding: fundingStoreFor({
+        chainSeed: new ChainSeedStore({
+          signer: () => undefined,
+          seedRelays: () => [],
+          cache: new InMemoryChainSeedCache(),
+        }),
+        paths,
+        chains: fakeChainPort(),
       }),
       version: { name: '@toon-protocol/console-daemon', version: '0.1.0' },
       paths,

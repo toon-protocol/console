@@ -117,6 +117,7 @@ const health: Health = {
     connectorUrl: 'https://connector.test/ilp',
     relayUrl: RELAY,
     gatewayDomain: 'gw.test',
+    rpc: {},
     origin: 'built-in',
     configured: true,
     active: true,

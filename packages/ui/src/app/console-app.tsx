@@ -5,10 +5,12 @@ import { useAccount } from '@/hooks/use-account';
 import { useChainSeed } from '@/hooks/use-chain-seed';
 import { useConsole } from '@/hooks/use-console';
 import { useDirectory } from '@/hooks/use-directory';
+import { useFunding } from '@/hooks/use-funding';
 
 import { AccountCard, AccountChip } from './account-view';
 import { ChainSeedCard } from './chain-seed-view';
 import { DirectoryView } from './directory-view';
+import { FundingView } from './funding-view';
 import { HealthView } from './health-view';
 import { ProfileSwitcher } from './profile-switcher';
 import { SignInView } from './sign-in-view';
@@ -16,9 +18,14 @@ import { SignInView } from './sign-in-view';
 /**
  * The shell.
  *
- * Three views now — health (#87), the Provider Directory (#91) and the Account
- * (#88, with its Chain Seed from #89) — behind the header that will carry the
- * rest: funds (#90) and the workload dashboard (#93 onward).
+ * Four views now — health (#87), the Provider Directory (#91), the Account
+ * (#88, with its Chain Seed from #89) and Funds (#90) — behind the header that
+ * will carry the workload dashboard (#93 onward).
+ *
+ * Funds is the one view that is USELESS without an account, and it says so
+ * rather than being hidden: a person deciding whether this is worth an account
+ * should be able to see what funding would involve — two addresses, a gas
+ * problem nobody can solve for them, and a channel — before they make one.
  *
  * The console is NOT gated on signing in, and that is deliberate. Reading the
  * directory and asking the connector what it settles in are free, they need no
@@ -31,11 +38,12 @@ import { SignInView } from './sign-in-view';
  * daemon holds, so the daemon is the only thing that knows.
  */
 
-type Tab = 'health' | 'directory' | 'account';
+type Tab = 'health' | 'directory' | 'account' | 'funds';
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'health', label: 'Health' },
   { id: 'directory', label: 'Providers' },
+  { id: 'funds', label: 'Funds' },
   { id: 'account', label: 'Account' },
 ];
 
@@ -53,6 +61,13 @@ export function ConsoleApp() {
   // Keyed to the account: the Chain Seed belongs to whoever is signed in, and
   // signing in as somebody else is a different seed or none (ADR 0020).
   const chainSeed = useChainSeed({ pubkey: account.status?.account?.pubkey });
+  // Keyed to the account AND the network: an address belongs to the account, a
+  // channel belongs to the network, and a switch of either is another view.
+  const funding = useFunding({
+    active: tab === 'funds',
+    pubkey: account.status?.account?.pubkey,
+    ...(health === undefined ? {} : { profileId: health.profile.id }),
+  });
 
   return (
     <div className="min-h-dvh">
@@ -111,7 +126,9 @@ export function ConsoleApp() {
           </div>
         )}
 
-        {tab === 'account' ? (
+        {tab === 'funds' ? (
+          <FundingView funding={funding} />
+        ) : tab === 'account' ? (
           account.status &&
           (signedIn ? (
             <div className="space-y-4">
