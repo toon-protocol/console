@@ -9,6 +9,10 @@ import { defaultConnectorReader, readConnectorHealth } from './connector-health.
 import { readDirectory } from './directory.js';
 import { FundingStore } from './funding.js';
 import { LiveChainPort } from './funding-chain.js';
+import { LeaseStore } from './lease.js';
+import { LiveProviderPort } from './lease-route.js';
+import { LeaseVault } from './lease-vault.js';
+import { FileLeaseVaultCache } from './lease-vault-cache.js';
 import { openKeystore } from './keystore-open.js';
 import {
   mintLaunchToken,
@@ -63,13 +67,35 @@ export async function main(): Promise<void> {
   // The Chain Seed follows whoever is signed in: the store holds no key of its
   // own, asks the session for one each time, and drops everything when the
   // account changes (TOON_Network#89, ADR 0020).
+  const seedCache = new FileChainSeedCache(paths);
   const chainSeed = new ChainSeedStore({
     signer: () => session.signingPort(),
     // The profile's relay is a SEED for discovery, not where a seed is kept:
     // the account's own NIP-65 write relays are, when it has named any.
     seedRelays: () => [profiles.active().relayUrl].filter((url) => url.length > 0),
-    cache: new FileChainSeedCache(paths),
+    cache: seedCache,
   });
+
+  /**
+   * Where to START looking for an account's own records.
+   *
+   * The network profile's relay, plus every relay this console has already
+   * seen this account on. The second half matters and is easy to miss: on
+   * every TOON network the profile's relay is a TOON relay, which charges for
+   * writes — so an account that published a NIP-65 list at all published it
+   * somewhere ELSE, and a console that only ever asked the profile's relay
+   * would never find that list again after a restart. The Chain Seed's cache
+   * is where those relays are already remembered (#89), and it is the right
+   * place for them: a Chain Seed is published before anything can be spawned,
+   * so by the time there is a lease to vault, that list has been written.
+   */
+  const accountRelays = () => {
+    const pubkey = session.signingPort()?.pubkey;
+    return [
+      profiles.active().relayUrl,
+      ...(pubkey === undefined ? [] : (seedCache.read(pubkey)?.relays ?? [])),
+    ].filter((url) => url.length > 0);
+  };
 
   // Funding follows the ACTIVE PROFILE and the signed-in account together: a
   // deposit address is the account's, a channel is the profile's, and neither
@@ -79,6 +105,32 @@ export async function main(): Promise<void> {
     chainSeed,
     readHealth: (profile) => readConnectorHealth(profile, reader),
     chains: new LiveChainPort(),
+    paths,
+  });
+
+  // The Lease Vault follows the account, exactly as the Chain Seed does: one
+  // sealed record per lease on the account's own relays, with a local cache
+  // (TOON_Network#92, ADR 0021). The records it finds belong to the ACCOUNT
+  // and not to the network — each one says which network its lease was bought
+  // on — so the only thing the profile contributes is somewhere to start
+  // looking.
+  const vault = new LeaseVault({
+    signer: () => session.signingPort(),
+    seedRelays: accountRelays,
+    cache: new FileLeaseVaultCache(paths),
+  });
+
+  // Spawning: the first route this console pays somebody else for
+  // (TOON_Network#92). It reads the directory for the provider's Profile and
+  // its Listing, the connectors for who collects, and the account's own
+  // channel store for what pays.
+  const leases = new LeaseStore({
+    profile: () => profiles.active(),
+    vault,
+    chainSeed,
+    readHealth: (profile) => readConnectorHealth(profile, reader),
+    readDirectory: (profile) => readDirectory({ profile }),
+    provider: new LiveProviderPort(),
     paths,
   });
 
@@ -99,15 +151,20 @@ export async function main(): Promise<void> {
       session,
       chainSeed,
       funding,
+      vault,
+      leases,
       version,
       paths,
       startedAt: new Date(),
       readHealth: (profile, options) => readConnectorHealth(profile, reader, options),
       readDirectory: (profile, filters) => readDirectory({ profile, filters }),
       readTemplates: (profile) => readTemplates({ profile }),
-      // `spawnFromTemplate` is deliberately not passed: buying the lease is
-      // TOON_Network#92's, and until it lands `POST /api/templates/spawn`
-      // answers 501 with the expansion rather than a half-done purchase.
+      // The seam #94 left: a Template is expanded into a §6.2 content there,
+      // and bought here. Both paths end at the same `buildSpawnContent` and
+      // then at the same `LeaseStore`, so "spawning from a Template produces
+      // the same result as the equivalent manual spawn" is true by
+      // construction rather than by two builders agreeing.
+      spawnFromTemplate: (request) => leases.spawnFromTemplate(request),
     },
   }).catch((error: unknown) => {
     if (isAddressInUse(error)) {

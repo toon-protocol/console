@@ -13,6 +13,7 @@ import { ProfileStore } from './profile-store.js';
 import { ChainSeedStore } from './chain-seed.js';
 import { InMemoryChainSeedCache } from './chain-seed-cache.js';
 import { fakeChainPort, fundingStoreFor } from './funding.testkit.js';
+import { idleLeases } from './lease.testkit.js';
 import { startServer, type RunningServer } from './server.js';
 import { SignerIndex, signerIndexPath } from './signer-index.js';
 
@@ -70,6 +71,7 @@ describe('the daemon server', () => {
         paths,
         chains: fakeChainPort(),
       }),
+      ...idleLeases(paths),
       version: { name: '@toon-protocol/console-daemon', version: '0.1.0' },
       paths,
       startedAt: new Date('2026-09-22T00:00:00Z'),

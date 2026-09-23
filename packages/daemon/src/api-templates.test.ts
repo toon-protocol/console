@@ -13,6 +13,7 @@ import { fakeRelays } from './directory.testkit.js';
 import { fakeChainPort, fundingStoreFor } from './funding.testkit.js';
 import { keystoreFilePath, PassphraseFileKeystore } from './keystore-file.js';
 import type { NostrEvent } from './nostr.js';
+import { idleLeases } from './lease.testkit.js';
 import { activeProfileFilePath, consolePaths } from './paths.js';
 import { ProfileStore } from './profile-store.js';
 import { DEVNET } from './profiles.js';
@@ -87,6 +88,7 @@ describe('the Template routes', () => {
         paths,
         chains: fakeChainPort(),
       }),
+      ...idleLeases(paths),
       version: { name: '@toon-protocol/console-daemon', version: '0.1.0' },
       paths,
       startedAt: new Date('2026-09-23T00:00:00Z'),

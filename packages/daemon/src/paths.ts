@@ -63,6 +63,19 @@ export function accountChainSeedPath(paths: ConsolePaths, pubkey: string): strin
 }
 
 /**
+ * The Lease Vault's local cache (TOON_Network#92, ADR 0021).
+ *
+ * Beside the Chain Seed and keyed the same way — by the ACCOUNT, not by the
+ * network profile. A lease is bought on one network, but the record that holds
+ * its Root Secret belongs to the account and follows it to any machine, so it
+ * lives where the account's other sealed records do. Which network a lease was
+ * bought on is a field inside the record, not a directory it hides under.
+ */
+export function accountLeaseVaultPath(paths: ConsolePaths, pubkey: string): string {
+  return join(accountDataDir(paths, pubkey), 'leases.json');
+}
+
+/**
  * A pubkey is 64 hex characters, but it arrives from a signer rather than
  * from this process, and a value that reaches `join` decides which file is
  * written. Anything that is not the shape of a pubkey never becomes a path.

@@ -10,8 +10,9 @@ It installs, starts and opens, it knows which network it is pointed at, it can t
 that network's connector says about itself, it browses the Provider Directory, an
 **Account** can sign in with its **Signer** and seal itself a **Chain Seed** ([#89][i89]),
 that account can deposit, open a payment channel and watch its balances ([#90][i90]),
-and it browses **Templates** and expands one into the spawn it would send ([#94][i94]).
-The workload dashboard ([#93][i93] onward) builds on it.
+it browses **Templates** and expands one into the spawn it would send ([#94][i94]),
+and that account can **spawn a workload** and keep its Root Secret in the **Lease Vault**
+([#92][i92]). The workload dashboard ([#93][i93] onward) builds on it.
 
 ## What is here
 
@@ -243,11 +244,79 @@ from its Listing and from nowhere else.
   bytes** — the provider does, and verifies every one of them against the digest
   ([ADR 0006][adr6], §8.4). Each card says which of those was checked.
 
-Buying the lease is [#92][i92]: `POST /api/templates/spawn` expands and then hands the
-content to that seam, and answers `501` with the expansion while it is unwired.
+`POST /api/templates/spawn` expands and then buys: it hands the content to the same
+`LeaseStore` the form below uses, so a Template is a convenience and not a second protocol.
 
 ```bash
 curl -H "authorization: Bearer $TOKEN" 'http://127.0.0.1:7797/api/templates'
+```
+
+## Workloads
+
+The **Workloads** view is where the console first **spends**. It holds the **Lease Vault**
+and the spawn form.
+
+A spawn buys one **Lease Interval** at the listing's price, there are no refunds, and a
+request the provider refuses is billed exactly like one it accepts ([ADR 0003][adr3],
+§5). So `POST /api/leases/preflight` exists: it is free, it sends nothing, and it answers
+with the route, the price, the connector that will collect and **every problem with the
+request** — the image's form, the ports, a volume the listing cannot fit, an SSH key that
+is really a private one. The button is not live until it says `ok`.
+
+### The Root Secret goes into the vault first
+
+A lease is bound to a **Continuation Token** derived from a 32-byte **Root Secret** the
+tenant mints (§6.1.1). Lose the secret and the lease is lost — not merely inaccessible:
+nothing in the protocol can produce the token again. So the console seals the secret to the
+account and **publishes it before the spawn is sent** ([ADR 0021][adr21]):
+
+- one NIP-78 record per workload, kind `30078`, `d` = `toon-console/lease/<workload id>`,
+  NIP-44-sealed to the account itself;
+- written to the account's NIP-65 **write** relays, with a local cache;
+- a write no relay accepted **aborts the spawn**, so nothing is paid for a lease whose
+  secret only one disk would hold.
+
+A lease may be marked **local only**. It is still sealed and signed, and it is kept here
+and nowhere else — no relay learns the workload exists, and if this disk goes the lease
+goes with it.
+
+Sign in on another machine and the vault comes back from the relays, access details and
+all. If the account's relay list is not on the network's own relay — and on a TOON network
+it will not be, because that relay charges for writes — name one to look on from the
+Account tab first, exactly as for the Chain Seed.
+
+### What a refusal leaves behind
+
+| What happened | What the vault does |
+| --- | --- |
+| The provider answered with an `error` code, or the packet was rejected | The record is taken back: a tombstone replaces it and a NIP-09 deletion goes out |
+| The spawn never left (the payer keys could not be borrowed) | The record is taken back; nothing was paid |
+| The packet went out and nothing came back | **The record is kept.** A workload may be running behind it, and this secret is the only thing that could ever stop it |
+
+The provider's own code is what you are shown — `no_capacity` is "try elsewhere",
+`refused_image` is "not that image here" — never a sentence this console made up about it.
+
+### Which connector collects
+
+A spawn is addressed to the provider's ILP route and sealed to its connector's pinned key
+(§4.1, [ADR 0011][adr11]). Who takes the payment is read from the two self-descriptions
+the console can fetch: the **active profile's connector** when it publishes a route
+carrying the provider's prefix — the local sandbox's hub does — and the **provider's own
+connector** otherwise, which always terminates its own routes. Devnet is the second case
+today.
+
+A spawn never opens a channel: opening locks collateral on chain and pays that chain's own
+gas, and neither is a thing to do to somebody who pressed "spawn". It refuses with
+somewhere to go instead, and `POST /api/funding/channel` takes a `connector` so the channel
+can be opened with the right one. A spawn may also name the `chain` to pay on, which
+matters when you hold channels on two: a connector that has to convert refuses a packet
+whose amount converts to nothing at the rate it declares — at full price.
+
+```bash
+curl -H "authorization: Bearer $TOKEN" http://127.0.0.1:7797/api/leases
+curl -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"provider":"<pubkey>","listing":"basic","image":{"reference":"traefik/whoami","digest":"sha256:…"},"ports":[{"containerPort":80}],"sshPublicKey":"ssh-ed25519 …"}' \
+  http://127.0.0.1:7797/api/leases/preflight
 ```
 
 ## Security
@@ -270,8 +339,13 @@ and never revealed: there is no route that exports it, no answer that carries it
 recovery is the Nostr key alone. The payer keys an open needs are derived inside one call
 frame, lent to that one transaction and zeroed when it returns —
 `packages/daemon/src/api-funding.test.ts` is the test that says no funding answer carries
-key material, and `funding.test.ts` is the one that says the keys come back wiped. The
-Lease Vault arrives with [ADR 0021][adr21].
+key material, and `funding.test.ts` is the one that says the keys come back wiped.
+
+A lease's **Root Secret** is held the same way ([ADR 0021][adr21]). It is minted in the
+daemon, sealed to the account and published; the type the API answers with has no field
+for it, so no route can return one by forgetting to strip it.
+`packages/daemon/src/api-leases.test.ts` and `lease-vault.test.ts` are the tests that say
+so — on a spawn that worked, a spawn that was refused, and a read of the whole vault.
 
 ## Development
 
@@ -289,7 +363,9 @@ published identity; nothing in this repository should suggest otherwise.
 [spec]: https://github.com/toon-protocol/TOON_Network
 [context]: https://github.com/toon-protocol/TOON_Network/blob/main/CONTEXT.md
 [client]: https://www.npmjs.com/package/@toon-protocol/client
+[adr3]: https://github.com/toon-protocol/TOON_Network/blob/main/docs/adr/0003-one-payment-buys-one-lease-interval.md
 [adr6]: https://github.com/toon-protocol/TOON_Network/blob/main/docs/adr/0006-image-bytes-are-verified-by-digest-wherever-they-are-stored.md
+[adr11]: https://github.com/toon-protocol/TOON_Network/blob/main/docs/adr/0011-a-profile-pins-its-connectors-sealing-key.md
 [adr19]: https://github.com/toon-protocol/TOON_Network/blob/main/docs/adr/0019-the-console-is-a-local-app-not-a-website.md
 [adr20]: https://github.com/toon-protocol/TOON_Network/blob/main/docs/adr/0020-an-accounts-chain-keys-come-from-a-seed-sealed-to-it.md
 [adr21]: https://github.com/toon-protocol/TOON_Network/blob/main/docs/adr/0021-root-secrets-are-vaulted-on-the-accounts-own-relays.md
