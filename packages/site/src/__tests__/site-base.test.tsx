@@ -26,10 +26,11 @@ afterEach(() => {
 
 async function mount(initialPath: string) {
   const { SiteApp } = await import('@/app/site-app');
+  const { DEFAULT_CONFIG } = await import('@/lib/config');
   return render(
     <SiteApp
       initialPath={initialPath}
-      loadSiteConfig={() => Promise.resolve({ docsNpub: '', relays: [] })}
+      loadSiteConfig={() => Promise.resolve(DEFAULT_CONFIG)}
       loadArticles={() => new Promise(() => {})}
     />
   );
