@@ -297,7 +297,11 @@ describe('the dashboard routes', () => {
 
   it('has no route it does not have', async () => {
     expect((await call('POST', '/api/workloads')).status).toBe(404);
-    expect((await call('POST', `/api/workloads/${workloadId}/rotate`)).status).toBe(404);
+    // `…/rotate` exists now (TOON_Network#96) and has its own tests; what is
+    // pinned here is that this build wired the dashboard without it, and says
+    // so rather than pretending to have rotated anything.
+    expect((await call('POST', `/api/workloads/${workloadId}/rotate`)).status).toBe(501);
+    expect((await call('GET', `/api/workloads/${workloadId}/rotate`)).status).toBe(404);
     expect((await call('GET', `/api/workloads/${workloadId}/extend`)).status).toBe(404);
   });
 });

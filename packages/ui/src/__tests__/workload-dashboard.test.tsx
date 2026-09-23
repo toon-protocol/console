@@ -337,6 +337,23 @@ describe('the workload dashboard', () => {
             })
           );
         }
+        // And a rotation panel (TOON_Network#96), which reads on mount and
+        // sends nothing. Its own cases live in `rotation-panel.test.tsx`.
+        if (path.endsWith('/rotation')) {
+          return Promise.resolve(
+            answer({
+              workloadId: WORKLOAD,
+              underWay: false,
+              ok: true,
+              problems: [],
+              members: [],
+              confirmed: 0,
+              of: 1,
+              vault: { relays: [], ready: true },
+              localOnly: false,
+            })
+          );
+        }
         if (path.endsWith('/extend')) return Promise.resolve(answer(extendAnswer));
         if (path.endsWith('/terminate')) return Promise.resolve(answer(terminateAnswer));
         if (path.endsWith('/auto-extend')) {
