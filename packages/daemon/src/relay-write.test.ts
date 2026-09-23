@@ -174,6 +174,60 @@ describe('buying one write', () => {
     expect(receipt.writes[0]?.state).toBe('written');
   });
 
+  /**
+   * TOON_Network#126: `SANDBOX.connectorUrl` is `http://localhost:3200/ilp`,
+   * but the sandbox connector calls ITSELF `http://127.0.0.1:3200/ilp` — the
+   * same loopback machine, a different string, and `@toon-protocol/client`
+   * keys a channel binding by whichever one `ToonClient` was told to dial. A
+   * write must find that binding by asking the connector what it calls
+   * itself, never by comparing `profile.connectorUrl` literally.
+   */
+  it('finds its channel by what the connector calls itself, not by the profile’s connectorUrl (#126)', async () => {
+    const selfEndpoint = 'http://127.0.0.1:3200';
+    // The binding lives under the connector's OWN identity — exactly what an
+    // open through `funding.ts` now saves it under — never under
+    // `SANDBOX.connectorUrl` itself.
+    giveChannel(paths, SANDBOX.id, selfEndpoint);
+    const port = fakePort();
+    const health = () =>
+      connectorHealth({
+        endpoint: SANDBOX.connectorUrl,
+        selfEndpoint,
+        ilpAddresses: ['g.toon.relay', 'g.toon.relay.ephemeral'],
+        routes: [
+          { prefix: 'g.toon.relay', price: '1' },
+          { prefix: 'g.toon.relay.ephemeral', price: '0' },
+        ],
+      });
+    const writer = writerWith(port, health);
+
+    const targets = await writer.targets();
+    expect(targets.ready).toBe(true);
+    expect(targets.channelId).toBe('0xchannel');
+    expect(targets.payAt).toBe(selfEndpoint);
+
+    const receipt = await writer.write({ event, what: 'A record' });
+    expect(port.sent[0]).toMatchObject({ payAt: selfEndpoint });
+    expect(receipt.writes[0]?.state).toBe('written');
+  });
+
+  /**
+   * The other half of #126's acceptance criteria: normalising host spellings
+   * must never make two DIFFERENT connectors look like the same one. A
+   * channel bound to some other address is not this connector's, whatever the
+   * profile says.
+   */
+  it('still treats a genuinely different connector as a different one', async () => {
+    giveChannel(paths, SANDBOX.id, 'http://203.0.113.9:3200');
+    const port = fakePort();
+
+    const targets = await writerWith(port).targets();
+
+    expect(targets.ready).toBe(false);
+    expect(targets.blockedBy).toContain('holds no payment channel');
+    expect(port.sent).toEqual([]);
+  });
+
   it('refuses an event that does not verify, and sends nothing', async () => {
     giveChannel(paths, SANDBOX.id, SANDBOX.connectorUrl);
     const port = fakePort();

@@ -525,6 +525,7 @@ export class FundingStore {
       chains.push(
         await this.#chainView({
           profile,
+          connectorId: health.selfEndpoint,
           settlement,
           seed,
           faucet,
@@ -585,6 +586,22 @@ export class FundingStore {
         404
       );
     }
+
+    // `status` above just confirmed this connector answered, so this is a
+    // cache hit in the common case — read again rather than trust a value
+    // `status` already discarded, because what a channel is BOUND under has
+    // to be this connector's own word for itself, not `profile.connectorUrl`
+    // (TOON_Network#126).
+    const health = await this.#deps.readHealth(profile);
+    if (health.state !== 'ok') {
+      throw new FundingError(
+        'connector_unreachable',
+        `The connector at ${profile.connectorUrl} stopped answering between reading this ` +
+          `chain's status and opening a channel on it. ${health.reason}`,
+        502
+      );
+    }
+    const connectorId = health.selfEndpoint;
 
     const key = this.#openKey(profile.connectorUrl, status.pubkey ?? '', chain.chain);
     const running = this.#opens.get(key);
@@ -647,7 +664,7 @@ export class FundingStore {
     record.work = this.#deps.chainSeed
       .usePayerKeys((keys) =>
         this.#deps.chains.openChannel({
-          connectorUrl: profile.connectorUrl,
+          connectorUrl: connectorId,
           kind: chain.kind,
           chain: chain.chain,
           rpcUrl: chain.rpc.url,
@@ -775,6 +792,8 @@ export class FundingStore {
 
   async #chainView(input: {
     profile: NetworkProfile;
+    /** What the connector says about itself — where a channel is bound (#126). */
+    connectorId: string;
     settlement: SettlementView;
     seed: ChainSeedStatus;
     faucet: FaucetView | undefined;
@@ -782,7 +801,7 @@ export class FundingStore {
     store: ChannelStore;
     refresh: boolean;
   }): Promise<ChainFundingView> {
-    const { profile, settlement, seed, faucet, quote, store, refresh } = input;
+    const { profile, connectorId, settlement, seed, faucet, quote, store, refresh } = input;
     const address = settlement.kind === 'evm' ? seed.addresses?.evm : seed.addresses?.solana;
     const rpc = resolveRpc(profile, settlement.kind);
     const balanceKey = `${profile.connectorUrl}|${seed.pubkey ?? ''}|${settlement.chain}`;
@@ -801,6 +820,7 @@ export class FundingStore {
 
     const channel = this.#channelView({
       connectorUrl: profile.connectorUrl,
+      connectorId,
       pubkey: seed.pubkey ?? '',
       chain: settlement.chain,
       store,
@@ -866,9 +886,18 @@ export class FundingStore {
    * identity holds with which connector on which chain, and the watermark file
    * records what has been signed against it. That is enough for every figure
    * shown, and it is why this view can poll.
+   *
+   * Two different connector strings, on purpose. `connectorUrl` is the
+   * profile's own — it only ever dedupes an OPEN this process itself has in
+   * flight, so it stays whatever `openChannel` registered it under.
+   * `connectorId` is what the connector SAYS about itself, and it is what the
+   * PERSISTED binding is looked up by: a channel opened while reaching this
+   * connector under one spelling of its host must still be found under
+   * another (TOON_Network#126).
    */
   #channelView(input: {
     connectorUrl: string;
+    connectorId: string;
     pubkey: string;
     chain: string;
     store: ChannelStore;
@@ -889,7 +918,7 @@ export class FundingStore {
       };
     }
 
-    const binding = findChannelBinding(input.store, input.connectorUrl, input.chain);
+    const binding = findChannelBinding(input.store, input.connectorId, input.chain);
     if (!binding) {
       if (running?.state === 'failed') {
         return {

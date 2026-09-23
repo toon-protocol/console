@@ -454,7 +454,7 @@ export class PaidRelayWriter implements RelayWriter {
         code: 'no_write_route',
         status: 409,
         relays: [relay],
-        payAt: profile.connectorUrl,
+        payAt: health.selfEndpoint,
         blockedBy:
           `The connector at ${profile.connectorUrl} publishes no paid route of its own to buy ` +
           `a relay write on. It answers for ${health.ilpAddresses.join(', ') || 'nothing'}, ` +
@@ -463,19 +463,23 @@ export class PaidRelayWriter implements RelayWriter {
       };
     }
 
+    // The channel binding is looked up by what the connector SAYS about
+    // itself (`health.selfEndpoint`), never by `profile.connectorUrl` — a
+    // connector answering on `localhost` and on `127.0.0.1` alike publishes
+    // only one of them, and `@toon-protocol/client` keys a binding by whatever
+    // string it was told to dial. Comparing against the profile's own string
+    // would key a fresh channel right and then fail to find it the next time
+    // this console reached the same connector by its other name
+    // (TOON_Network#126).
     const channels = channelStoreFor(this.#deps.paths, profile.id);
     for (const settlement of health.settlements) {
-      const binding = findChannelBinding(
-        channels.store,
-        profile.connectorUrl,
-        settlement.chain
-      );
+      const binding = findChannelBinding(channels.store, health.selfEndpoint, settlement.chain);
       if (!binding) continue;
       return {
         relay,
         destination: route.destination,
         price: route.price,
-        payAt: profile.connectorUrl,
+        payAt: health.selfEndpoint,
         chain: settlement.chain,
         chainKind: settlement.kind,
         rpcUrl: resolveRpc(profile, settlement.kind).url,
@@ -488,7 +492,7 @@ export class PaidRelayWriter implements RelayWriter {
       code: 'no_channel',
       status: 402,
       relays: [relay],
-      payAt: profile.connectorUrl,
+      payAt: health.selfEndpoint,
       destination: route.destination,
       price: route.price,
       blockedBy:

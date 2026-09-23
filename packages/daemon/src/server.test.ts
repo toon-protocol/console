@@ -23,6 +23,7 @@ const TOKEN = 'a-launch-token';
 const HEALTHY: ConnectorHealth = {
   state: 'ok',
   endpoint: 'https://connector.example',
+  selfEndpoint: 'https://connector.example',
   ilpAddresses: ['g.toon.relay'],
   settlements: [
     {

@@ -55,6 +55,8 @@ export type ConnectorHealth =
   | {
       state: 'ok';
       endpoint: string;
+      /** What the connector calls itself — a channel is keyed by this, not `endpoint` (TOON_Network#126). */
+      selfEndpoint: string;
       ilpAddresses: string[];
       settlements: SettlementView[];
       routes: RouteView[];

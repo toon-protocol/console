@@ -7,7 +7,7 @@ import {
   type ConnectorReader,
 } from './connector-health.js';
 import { HiddenTransportError } from './hidden-transport.js';
-import { DEVNET, MAINNET } from './profiles.js';
+import { DEVNET, MAINNET, SANDBOX } from './profiles.js';
 
 /** A connector's answer, shaped as the devnet relay edge really answers. */
 const DESCRIPTION: NodeSelfDescription = {
@@ -69,6 +69,41 @@ describe('readConnectorHealth', () => {
     const health = await readConnectorHealth(DEVNET, readerReturning(DESCRIPTION));
     if (health.state !== 'ok') throw new Error('expected ok');
     expect(health.endpoint).toBe('https://proxy.relay.devnet.toonprotocol.dev');
+  });
+
+  /**
+   * The sandbox connector's real shape (TOON_Network#126): `SANDBOX.connectorUrl`
+   * is `http://localhost:3200/ilp`, and the connector this console reaches
+   * there publishes `httpEndpoint: http://127.0.0.1:3200/ilp` — the same
+   * loopback machine, a different string. `endpoint` says how THIS console got
+   * there; `selfEndpoint` says what the connector calls itself, and a channel
+   * binding is looked up (and opened) by the latter, never the former.
+   */
+  it('reports what the connector calls ITSELF, separately from the URL this console dialled', async () => {
+    const health = await readConnectorHealth(
+      SANDBOX,
+      readerReturning({ ...DESCRIPTION, httpEndpoint: 'http://127.0.0.1:3200/ilp' })
+    );
+    if (health.state !== 'ok') throw new Error('expected ok');
+    expect(health.endpoint).toBe('http://localhost:3200');
+    expect(health.selfEndpoint).toBe('http://127.0.0.1:3200');
+  });
+
+  it('resolves a relative httpEndpoint against the URL it was read from', async () => {
+    const health = await readConnectorHealth(
+      SANDBOX,
+      readerReturning({ ...DESCRIPTION, httpEndpoint: '/ilp' })
+    );
+    if (health.state !== 'ok') throw new Error('expected ok');
+    expect(health.selfEndpoint).toBe('http://localhost:3200');
+  });
+
+  it('falls back to the dialled endpoint when the connector publishes no httpEndpoint', async () => {
+    const { httpEndpoint: _drop, ...noHttpEndpoint } = DESCRIPTION;
+    const health = await readConnectorHealth(SANDBOX, readerReturning(noHttpEndpoint));
+    if (health.state !== 'ok') throw new Error('expected ok');
+    expect(health.selfEndpoint).toBe(health.endpoint);
+    expect(health.selfEndpoint).toBe('http://localhost:3200');
   });
 
   it('says "unconfigured" for a profile with no connector, which is not a fault', async () => {
