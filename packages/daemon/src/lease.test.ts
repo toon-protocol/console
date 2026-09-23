@@ -559,6 +559,55 @@ describe('spawning a workload', () => {
       expect(view.payment?.via).toBe('provider-connector');
     });
 
+    /**
+     * TOON_Network#129: the same shape #126 fixed for a relay write, here for
+     * a provider's connector. The Provider Profile names one string
+     * (`PROVIDER_CONNECTOR`, this test's stand-in for the sandbox's
+     * docker-internal `http://provider-connector:3000/ilp`) and the connector
+     * calls ITSELF another — exactly the sandbox's shape, where a provider's
+     * own `GET /ilp` answers `http://127.0.0.1:3240/ilp`. A spawn must find
+     * the channel by what the connector says about itself, never by the
+     * Profile's string, and it must pay under that same identity too.
+     */
+    it('finds its channel by what the provider’s connector calls itself, not by its Profile (#129)', async () => {
+      const selfEndpoint = 'http://127.0.0.1:3240';
+      await build({
+        health: (asked) =>
+          Promise.resolve(
+            connectorHealth({
+              endpoint: asked.connectorUrl,
+              ...(asked.connectorUrl === PROVIDER_CONNECTOR ? { selfEndpoint } : {}),
+            })
+          ),
+        channelAt: selfEndpoint,
+      });
+
+      const view = await fixture.leases.preflight(GOOD_SPAWN as SpawnRequest);
+      expect(view.ok).toBe(true);
+      expect(view.payment?.connectorUrl).toBe(selfEndpoint);
+      expect(view.payment?.channelId).toBe('0xchannel');
+
+      await fixture.leases.spawn(GOOD_SPAWN as SpawnRequest);
+      expect(port.sent[0]?.payAt).toBe(selfEndpoint);
+    });
+
+    /**
+     * The other half of #126's and #129's acceptance criteria: normalising
+     * host spellings must never make two DIFFERENT connectors look like the
+     * same one.
+     */
+    it('still treats a genuinely different connector as a different one', async () => {
+      await build({ channelAt: 'http://203.0.113.9:3240' });
+      const view = await fixture.leases.preflight(GOOD_SPAWN as SpawnRequest);
+
+      expect(view.ok).toBe(false);
+      expect(view.problems.join(' ')).toMatch(/No payment channel/u);
+      await expect(fixture.leases.spawn(GOOD_SPAWN as SpawnRequest)).rejects.toMatchObject({
+        status: 409,
+      });
+      expect(port.sent).toHaveLength(0);
+    });
+
     it('pays at the profile’s own connector when it publishes a carrying route', async () => {
       await build({
         health: (profile) =>
