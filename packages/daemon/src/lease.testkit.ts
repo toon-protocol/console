@@ -156,6 +156,14 @@ export function connectorHealth(input: {
   settlements?: readonly SettlementView[];
   /** What this node answers for itself — where a relay write is bought (#120). */
   ilpAddresses?: readonly string[];
+  /**
+   * The edge's own sealing key, as `GET /ilp` reports it.
+   *
+   * Only a Workload Gateway's handover needs one (TOON_Network#97): a
+   * provider's is pinned in its signed Profile instead (ADR 0011), so a health
+   * document with no key is still a perfectly good provider connector.
+   */
+  edgeSealKey?: string;
 }): ConnectorHealth {
   return {
     state: 'ok',
@@ -172,6 +180,7 @@ export function connectorHealth(input: {
     ],
     routes: input.routes ?? [],
     peerCarriages: [],
+    ...(input.edgeSealKey === undefined ? {} : { edgeSealKey: input.edgeSealKey }),
     supportedVersions: [1],
   };
 }

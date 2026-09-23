@@ -3,12 +3,21 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { AccountSession } from './account-session.js';
+import {
+  DesktopNotifier,
+  FileAlertStore,
+  notifying,
+  OmarchyNotificationPort,
+} from './alerts.js';
+import { DesktopState } from './desktop.js';
 import { ChainSeedStore } from './chain-seed.js';
 import { FileChainSeedCache } from './chain-seed-cache.js';
 import { defaultConnectorReader, readConnectorHealth } from './connector-health.js';
 import { readDirectory } from './directory.js';
 import { DocsStore } from './docs.js';
 import { FundingStore } from './funding.js';
+import { GatewayStore } from './gateway.js';
+import { LiveGatewayProbe } from './gateway-probe.js';
 import { LiveChainPort } from './funding-chain.js';
 import { AnonTransport } from './hidden-transport.js';
 import { LeaseStore } from './lease.js';
@@ -27,6 +36,7 @@ import {
 import { activeProfileFilePath, consolePaths, launchFilePath } from './paths.js';
 import { ProfileStore } from './profile-store.js';
 import { startServer } from './server.js';
+import { readTheme } from './theme.js';
 import { SignerIndex, signerIndexPath } from './signer-index.js';
 import { readTemplates } from './templates.js';
 import { daemonVersion } from './version.js';
@@ -59,6 +69,18 @@ const DEFAULT_PORT = 7797;
  * somebody arms one.
  */
 const AUTO_EXTEND_TICK_MS = 60_000;
+
+/**
+ * How often the daemon looks at the dashboard on its own account
+ * (TOON_Network#99).
+ *
+ * This is the tick that makes a desktop notification worth having: a window
+ * that is open polls every thirty seconds by itself, and this is what notices
+ * an Eviction, a Takeover or a runway falling under a day while nobody has the
+ * console open at all. Five minutes against a threshold measured in
+ * twenty-four hours, on a route the provider prices at zero (§5).
+ */
+const ALERT_TICK_MS = 300_000;
 
 export async function main(): Promise<void> {
   const paths = consolePaths();
@@ -218,6 +240,26 @@ export async function main(): Promise<void> {
     autoExtend: () => budgets,
   });
 
+  // The hostname (TOON_Network#97). It shares the provider port with the
+  // dashboard above — a Gateway Handover is the same kind of thing as a Lease
+  // Request, a body sealed to a connector's pinned key on a route that
+  // connector terminates — and the same note store, because what this console
+  // handed to a gateway belongs beside what it last heard about the lease.
+  //
+  // What it does NOT share is the vault's secret: every Gateway Grant is
+  // derived inside `vault.withContinuation` for the length of one message.
+  const gateway = new GatewayStore({
+    profile: () => profiles.active(),
+    vault,
+    chainSeed,
+    readHealth: (profile) => readConnectorHealth(profile, reader),
+    gateway: new LiveProviderPort(),
+    hidden,
+    probe: new LiveGatewayProbe(),
+    paths,
+    notes,
+  });
+
   // Budgets: the one thing here that spends with nobody present. It is armed
   // per lease, never by default, and `auto-extend.ts` lists the nine rules
   // that can each stop it on its own.
@@ -227,6 +269,21 @@ export async function main(): Promise<void> {
     pubkey: () => session.signingPort()?.pubkey,
     profileId: () => profiles.active().id,
   });
+
+  // The desktop around the window (TOON_Network#99): the colours Omarchy
+  // rendered for this console, and whatever its menu last asked to be opened.
+  // Both are read from this machine — there is no palette in this program.
+  const desktop = new DesktopState();
+
+  // The three things worth interrupting somebody for. It decorates the
+  // dashboard rather than living inside it, so every dashboard built — by an
+  // open window, or by the tick below with none open — is reviewed exactly
+  // once and each event announced exactly once.
+  const notifier = new DesktopNotifier({
+    store: new FileAlertStore(paths),
+    port: new OmarchyNotificationPort(),
+  });
+  const watchedWorkloads = notifying(workloads, notifier);
 
   const port = Number(process.env.TOON_CONSOLE_PORT ?? DEFAULT_PORT);
   const recordPath = launchFilePath(paths);
@@ -239,6 +296,9 @@ export async function main(): Promise<void> {
   const running = await startServer({
     token,
     uiRoot: resolveUiRoot(),
+    // Read per navigation, so a window opened after a theme change is already
+    // that theme before its first script runs.
+    themeCss: () => readTheme().css,
     port,
     deps: {
       profiles,
@@ -260,8 +320,10 @@ export async function main(): Promise<void> {
       // the same result as the equivalent manual spawn" is true by
       // construction rather than by two builders agreeing.
       spawnFromTemplate: (request) => leases.spawnFromTemplate(request),
-      workloads,
+      workloads: watchedWorkloads,
       autoExtend: budgets,
+      gateway,
+      desktop,
       hidden,
     },
   }).catch((error: unknown) => {
@@ -302,8 +364,21 @@ export async function main(): Promise<void> {
   }, AUTO_EXTEND_TICK_MS);
   ticker.unref();
 
+  // And the dashboard, so that a Takeover or an Eviction reaches somebody who
+  // does not have the console open. Signed out, this costs one call that
+  // answers `signed_out` and sends nothing.
+  const alerts = setInterval(() => {
+    void watchedWorkloads.dashboard({ refresh: true }).catch((error: unknown) => {
+      process.stderr.write(
+        `desktop alerts: ${error instanceof Error ? error.message : String(error)}\n`
+      );
+    });
+  }, ALERT_TICK_MS);
+  alerts.unref();
+
   const shutdown = (signal: NodeJS.Signals) => {
     clearInterval(ticker);
+    clearInterval(alerts);
     process.stdout.write(`\n${signal} — stopping\n`);
     removeLaunchRecord(recordPath);
     // The carriage holds an undici pool and a websocket agent's sockets.

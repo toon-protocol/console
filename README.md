@@ -56,9 +56,70 @@ through `omarchy-webapp-install`. `SUPER + SPACE` launches it; launching again f
 window that is already open rather than opening a second one. On a desktop without Omarchy
 you get a plain `.desktop` entry instead.
 
-`packaging/bin/toon-console-uninstall` removes both. It never touches
+It also installs the Omarchy integration below. `--omarchy-only` installs just that half,
+leaving a running service and its launcher alone.
+
+`packaging/bin/toon-console-uninstall` removes all of it. It never touches
 `~/.local/share/toon-console`, which is where channel state — and later the Lease Vault
 cache — lives, nor the keystore.
+
+## Part of the desktop
+
+The console is an Omarchy app, not a website that happens to run locally (ADR 0019). Three
+pieces of it live outside this repository's own directories, and each is one file:
+
+| File | What it does |
+| --- | --- |
+| `~/.config/omarchy/themed/toon-console.css.tpl` | Omarchy renders it against the current theme on every theme change |
+| `~/.config/omarchy/hooks/theme-set.d/toon-console` | tells a running daemon the theme moved |
+| `~/.config/omarchy/extensions/omarchy-menu.jsonc` | three menu entries, between this package's own markers |
+
+### The colours are the desktop's
+
+**There is no palette in this app.** `packages/ui` names its colours and gives none of them
+a value; `packaging/omarchy/toon-console.css.tpl` maps the current Omarchy theme onto those
+names, Omarchy renders it into `~/.local/state/omarchy/current/theme/toon-console.css`
+whenever a theme is set, and `packages/daemon/src/theme.ts` reads the result and hands it to
+the window. The daemon puts that `:root` rule into the page it serves, so the first paint is
+already the right colours, and replaces it over `/api/desktop` when the theme changes under
+an open window. Nothing restarts and nothing reloads: a custom property changing repaints
+the page.
+
+Surfaces are mixes towards the theme's foreground rather than named shades, because half of
+Omarchy's themes are light and `lighter_background` is a raised surface on one and a
+recessed one on the other. Meaning comes from the theme's own semantic colours — a
+destructive button is its red.
+
+What comes back off disk is treated as input: the daemon keeps only the properties the UI
+reads, checks each value against a character set that cannot close a style block, and builds
+the rule itself.
+
+On a desktop that is not Omarchy, none of this exists and the console starts on the one
+default theme in the repository, which lives in `theme.ts` and is named there as the
+fallback it is.
+
+### The menu opens a view
+
+Each entry runs `toon-console --view <workloads|new-workload|funds>`, which posts the view to
+the daemon and then hands the window to `omarchy-launch-or-focus-webapp`. The post is what
+makes the entry work on a window that is **already open**: focusing is all Omarchy can do to
+one, so the window is told separately and switches tab. A request older than a minute is
+ignored, so a window opened an hour later opens where it always does.
+
+### Three notifications, once per event
+
+`omarchy-notification-send` carries exactly three things, and a card on the dashboard is
+where all three come from (`packages/daemon/src/alerts.ts`):
+
+- **runway under 24 hours** — the figure is `card.runway.seconds`, never a second sum;
+- **a Takeover** — keyed by the Standby that won, so a later Takeover by another one is a
+  new event;
+- **an Eviction** — keyed by the workload, and it survives a restart.
+
+An open window polls the dashboard every thirty seconds and the daemon polls it every five
+minutes with none open, so an event is seen many times and announced once. What has been
+said is written to `alerts.json` beside the account's other state. A runway that recovers
+above the line forgets its key, so the next fall below it is news again.
 
 ## Signing in
 

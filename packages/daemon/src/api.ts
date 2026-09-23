@@ -2,6 +2,7 @@ import { KeyMaterialError } from './account-key.js';
 import { SessionError, type AccountSession } from './account-session.js';
 import { ChainSeedError, type ChainSeedStore } from './chain-seed.js';
 import { channelStoreFor } from './channel-store.js';
+import { isMenuView, MENU_VIEWS, type DesktopView, type MenuView } from './desktop.js';
 import type { ConnectorHealth } from './connector-health.js';
 import { DocsNotFound, type DocsStore } from './docs.js';
 import {
@@ -12,6 +13,13 @@ import {
   type DirectoryResult,
 } from './directory.js';
 import { FundingError, type FundingStore } from './funding.js';
+import {
+  GatewayError,
+  type GatewayView,
+  type HandoverRequest,
+  type HandoverResult,
+  type WithdrawalResult,
+} from './gateway.js';
 import { HiddenTransportError, type HiddenTransportPort } from './hidden-transport.js';
 import { LeaseError, type LeaseStore, type SpawnRequest } from './lease.js';
 import { LeaseVaultError, type LeaseVault } from './lease-vault.js';
@@ -108,6 +116,17 @@ export interface ApiDeps {
   /** The budgets. A dashboard reads perfectly well without them armed. */
   readonly autoExtend?: AutoExtendPort | undefined;
   /**
+   * The hostname (TOON_Network#97). Absent in a build that wired the dashboard
+   * without it, and the routes say so rather than pretending.
+   */
+  readonly gateway?: GatewayPort | undefined;
+  /**
+   * The desktop around the window: the current Omarchy theme, and whatever the
+   * Omarchy menu last asked to be opened (TOON_Network#99). Absent only in a
+   * build that did not wire it, and the route says so rather than pretending.
+   */
+  readonly desktop?: DesktopPort | undefined;
+  /**
    * The Anyone Protocol carriage (TOON_Network#98, spec §10). Reported by
    * `/api/health` so a person can see, before they pick a Hidden Provider,
    * whether this console can reach one at all.
@@ -115,6 +134,24 @@ export interface ApiDeps {
   readonly hidden?: HiddenTransportPort | undefined;
   readonly now?: (() => Date) | undefined;
 }
+
+/** What `/api/desktop` needs of `DesktopState`, and no more. */
+export interface DesktopPort {
+  current(): DesktopView;
+  refreshTheme(): DesktopView;
+  requestView(view: MenuView): DesktopView;
+  wait(since: number | undefined, timeoutMs: number): Promise<DesktopView>;
+}
+
+/**
+ * How long a `wait=1` poll is held before it answers anyway.
+ *
+ * Long enough that an idle window reconnects a couple of times an hour, short
+ * enough that a proxy, a suspend or a sleeping laptop never leaves the window
+ * holding a socket nothing will ever answer.
+ */
+const DESKTOP_WAIT_MS = 25_000;
+const DESKTOP_WAIT_MAX_MS = 60_000;
 
 /** What `/api/workloads/*` needs of `WorkloadStore`, and no more. */
 export interface WorkloadPort {
@@ -125,6 +162,13 @@ export interface WorkloadPort {
     options?: { maxPrice?: string | undefined; chain?: string | undefined }
   ): Promise<ExtendResult>;
   terminate(workloadId: string): Promise<TerminateResult>;
+}
+
+/** What `/api/workloads/<id>/gateway*` needs of `GatewayStore`, and no more. */
+export interface GatewayPort {
+  view(workloadId: string, options?: { probe?: boolean }): Promise<GatewayView>;
+  handover(workloadId: string, request?: HandoverRequest): Promise<HandoverResult>;
+  withdraw(workloadId: string): Promise<WithdrawalResult>;
 }
 
 /** What `/api/workloads/<id>/auto-extend` needs of `AutoExtender`. */
@@ -175,6 +219,10 @@ export async function handleApi(deps: ApiDeps, request: ApiRequest): Promise<Api
       throw error;
     }
     return { status: 200, body: profilesBody(deps) };
+  }
+
+  if (path === '/api/desktop' || path.startsWith('/api/desktop/')) {
+    return handleDesktop(deps, method, path, request.query, request.body);
   }
 
   if (path === '/api/directory' && method === 'GET') {
@@ -255,6 +303,73 @@ export async function handleApi(deps: ApiDeps, request: ApiRequest): Promise<Api
   }
 
   return problem(404, 'not_found', `No route ${method} ${path}.`);
+}
+
+/* -------------------------------------------------------------------------- */
+/* The desktop                                                                */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * `/api/desktop` — the window's one channel to the desktop around it
+ * (TOON_Network#99).
+ *
+ * `GET` answers with the current theme and whatever the Omarchy menu last
+ * asked for. With `?wait=1&since=<seq>` it does not answer until something
+ * changes, so a theme switch reaches an open window in the time one round trip
+ * takes. `desktop.ts` explains why this is a long poll and not an EventSource.
+ *
+ * The two POSTs are what the desktop uses to reach in: the `theme-set` hook
+ * says the theme moved, and a menu entry says which view to open. Both are
+ * behind the per-launch token like everything else here — the hook and the
+ * launcher read it out of the launch record, which lives in the runtime
+ * directory and is readable by this user alone.
+ */
+async function handleDesktop(
+  deps: ApiDeps,
+  method: string,
+  path: string,
+  query: URLSearchParams,
+  body: unknown
+): Promise<ApiResponse> {
+  const desktop = deps.desktop;
+  if (desktop === undefined) {
+    return problem(
+      501,
+      'desktop_unwired',
+      'This build has no desktop wiring, so it has no theme to report. That is a ' +
+        'packaging fault rather than anything about the request.'
+    );
+  }
+
+  if (path === '/api/desktop' && method === 'GET') {
+    if (query.get('wait') !== '1') return ok(desktop.current());
+    const since = Number(query.get('since'));
+    const timeout = Math.min(
+      Math.max(Number(query.get('timeout') ?? DESKTOP_WAIT_MS) || DESKTOP_WAIT_MS, 1_000),
+      DESKTOP_WAIT_MAX_MS
+    );
+    return ok(await desktop.wait(Number.isFinite(since) ? since : undefined, timeout));
+  }
+
+  // The `theme-set` hook. It says only "look again": what the colours now are
+  // is read off the rendered file, never taken from the caller.
+  if (path === '/api/desktop/theme' && method === 'POST') {
+    return ok(desktop.refreshTheme());
+  }
+
+  if (path === '/api/desktop/view' && method === 'POST') {
+    const view = asRecord(body).view;
+    if (!isMenuView(view)) {
+      return problem(
+        400,
+        'invalid_request',
+        `Body must be \`{ "view": "<one of ${MENU_VIEWS.join(', ')}>" }\`.`
+      );
+    }
+    return ok(desktop.requestView(view));
+  }
+
+  return problem(404, 'unknown_route', `No route ${method} ${path}.`);
 }
 
 /**
@@ -743,28 +858,37 @@ async function handleWorkloads(
   query: URLSearchParams,
   body: unknown
 ): Promise<ApiResponse> {
-  const workloads = deps.workloads;
-  if (workloads === undefined) {
-    return problem(
-      501,
-      'dashboard_unwired',
-      'This console holds leases but has no dashboard wired to act on them. That is a ' +
-        'packaging fault rather than anything about the request.'
-    );
-  }
-
   const refresh = query.get('refresh') === '1';
   if (path === '/api/workloads' && method === 'GET') {
-    return ok(await workloads.dashboard({ refresh }));
+    if (deps.workloads === undefined) return dashboardUnwired();
+    return ok(await deps.workloads.dashboard({ refresh }));
   }
 
   const parts = path.split('/').filter((part) => part !== '');
-  // ['api', 'workloads', '<id>', '<action>'?]
+  // ['api', 'workloads', '<id>', '<action>'?, '<verb>'?] — the fifth part is
+  // the gateway's alone: `handover` and `withdraw` are two messages about one
+  // thing, and hanging them off `…/gateway` keeps that visible in the URL.
   const workloadId = parts[2];
   const action = parts[3];
-  if (workloadId === undefined || parts.length > 4) {
+  const verb = parts[4];
+  if (
+    workloadId === undefined ||
+    parts.length > 5 ||
+    (parts.length === 5 && action !== 'gateway')
+  ) {
     return problem(404, 'unknown_route', `No route ${method} ${path}.`);
   }
+
+  // The gateway is reached before the dashboard is required, because it is a
+  // separate thing that happens to hang off the same id: a build with a
+  // hostname and no dashboard is odd but not broken, and `gateway_unwired` and
+  // `dashboard_unwired` are two different packaging faults.
+  if (action === 'gateway') {
+    return handleGateway(deps, method, path, query, body, workloadId, verb);
+  }
+
+  const workloads = deps.workloads;
+  if (workloads === undefined) return dashboardUnwired();
 
   try {
     if (action === undefined && method === 'GET') {
@@ -819,6 +943,88 @@ async function handleWorkloads(
     throw error;
   }
 
+  return problem(404, 'unknown_route', `No route ${method} ${path}.`);
+}
+
+function dashboardUnwired(): ApiResponse {
+  return problem(
+    501,
+    'dashboard_unwired',
+    'This console holds leases but has no dashboard wired to act on them. That is a ' +
+      'packaging fault rather than anything about the request.'
+  );
+}
+
+/**
+ * The hostname: handing a workload to a Workload Gateway and taking it back
+ * (TOON_Network#97, spec §12).
+ *
+ * Three routes, and what they cost is again the shape of the surface.
+ *
+ * `GET …/gateway` is built from what this console already knows and sends
+ * nothing. `?probe=1` additionally knocks on the hostname itself — an ordinary
+ * HTTPS request to the name, reaching no provider, no connector and no relay —
+ * which is how the answer to "does the hostname the console shows match what
+ * the gateway serves" is a check rather than a claim.
+ *
+ * `POST …/gateway/handover` derives one Gateway Grant per member of the
+ * Standby Set and seals one message. It is free on every gateway built so far,
+ * and the answer says where it was bought and what it cost, because "free" is
+ * the gateway's price and not the network's.
+ *
+ * `POST …/gateway/withdraw` stops the gateway serving. It is free too, and
+ * irreversible only in the sense that nothing here un-withdraws: handing over
+ * again is an ordinary second handover.
+ *
+ * And, as everywhere else on this surface, **no answer carries a Gateway
+ * Grant.** A grant is a secret — whoever holds it reads that lease's `status`
+ * — and it is derived inside the vault for the length of one sealed message.
+ * `api-gateway.test.ts` is the test that says so.
+ */
+async function handleGateway(
+  deps: ApiDeps,
+  method: string,
+  path: string,
+  query: URLSearchParams,
+  body: unknown,
+  workloadId: string,
+  verb: string | undefined
+): Promise<ApiResponse> {
+  const gateway = deps.gateway;
+  if (gateway === undefined) {
+    return problem(
+      501,
+      'gateway_unwired',
+      'This console holds leases but has no gateway wired to hand them to. That is a ' +
+        'packaging fault rather than anything about the request.'
+    );
+  }
+  try {
+    if (verb === undefined && method === 'GET') {
+      return ok(await gateway.view(workloadId, { probe: query.get('probe') === '1' }));
+    }
+    if (verb === 'handover' && method === 'POST') {
+      const fields = asRecord(body);
+      return ok(
+        await gateway.handover(workloadId, {
+          ...optional('expiresAt', number(fields, 'expiresAt')),
+          ...optional('expiresIn', number(fields, 'expiresIn')),
+          ...optional('httpPort', number(fields, 'httpPort')),
+          ...optional('name', string(fields, 'name')),
+          ...optional('chain', string(fields, 'chain')),
+        })
+      );
+    }
+    if (verb === 'withdraw' && method === 'POST') {
+      return ok(await gateway.withdraw(workloadId));
+    }
+  } catch (error) {
+    if (error instanceof GatewayError) return problem(error.status, error.code, error.message);
+    if (error instanceof LeaseVaultError) {
+      return problem(error.status, error.code, error.message);
+    }
+    throw error;
+  }
   return problem(404, 'unknown_route', `No route ${method} ${path}.`);
 }
 

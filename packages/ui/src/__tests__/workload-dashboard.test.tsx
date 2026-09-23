@@ -54,6 +54,7 @@ const health: Health = {
     connectorUrl: 'https://connector.test/ilp',
     relayUrl: 'wss://relay.test',
     gatewayDomain: 'gw.test',
+    gatewayConnectorUrl: 'https://gateway.test/ilp',
     rpc: {},
     origin: 'built-in',
     configured: true,
@@ -252,6 +253,21 @@ describe('the workload dashboard', () => {
         }
         if (path === '/api/leases' || path === '/api/leases/refresh') {
           return Promise.resolve(answer(vault));
+        }
+        // Every card carries a gateway panel now (TOON_Network#97). This
+        // suite is about the dashboard, so the hostname answers its empty
+        // state and the gateway's own cases live in `gateway-panel.test.tsx`.
+        if (path.includes('/gateway')) {
+          return Promise.resolve(
+            answer({
+              workloadId: WORKLOAD,
+              held: false,
+              problems: [],
+              ok: true,
+              ports: [],
+              checkedAt: '2026-09-23T10:00:00.000Z',
+            })
+          );
         }
         if (path.endsWith('/extend')) return Promise.resolve(answer(extendAnswer));
         if (path.endsWith('/terminate')) return Promise.resolve(answer(terminateAnswer));
