@@ -26,10 +26,32 @@ interface Route {
   readonly d?: string;
 }
 
+/**
+ * Where this build is served from, without its trailing slash: `''` at the
+ * root of a domain, `'/console'` under GitHub Pages' project path. Vite sets
+ * `BASE_URL` from the `base` the build was made with, so the routes below are
+ * written as the site's own paths and the prefix is added and removed here.
+ * A build whose base is wrong therefore breaks loudly at the first link,
+ * rather than serving a page that cannot link to its siblings.
+ */
+const BASE = (import.meta.env.BASE_URL || '/').replace(/\/$/u, '');
+
+/** A location's path as this site names it, with the deploy prefix removed. */
+function ownPath(pathname: string): string {
+  if (BASE !== '' && pathname.startsWith(BASE)) return pathname.slice(BASE.length) || '/';
+  return pathname;
+}
+
+/** One of this site's own paths, as the browser must be told it. */
+function href(path: string): string {
+  return `${BASE}${path}`;
+}
+
 function routeOf(pathname: string): Route {
-  const match = /^\/docs\/([^/]+)\/?$/u.exec(pathname);
+  const path = ownPath(pathname);
+  const match = /^\/docs\/([^/]+)\/?$/u.exec(path);
   if (match?.[1] !== undefined) return { kind: 'doc', d: decodeURIComponent(match[1]) };
-  if (pathname === '/docs' || pathname === '/docs/') return { kind: 'doc', d: 'concepts' };
+  if (path === '/docs' || path === '/docs/') return { kind: 'doc', d: 'concepts' };
   return { kind: 'landing' };
 }
 
@@ -77,10 +99,10 @@ export function SiteApp({
   }, []);
 
   const openDoc = useCallback(
-    (d: string) => go({ kind: 'doc', d }, `/docs/${encodeURIComponent(d)}`),
+    (d: string) => go({ kind: 'doc', d }, href(`/docs/${encodeURIComponent(d)}`)),
     [go]
   );
-  const openHome = useCallback(() => go({ kind: 'landing' }, '/'), [go]);
+  const openHome = useCallback(() => go({ kind: 'landing' }, href('/')), [go]);
 
   const doc = route.kind === 'doc' ? docBySlug(articles.docs, route.d ?? '') : undefined;
 
