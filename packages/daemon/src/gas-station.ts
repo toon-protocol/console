@@ -861,7 +861,7 @@ export class GasStationStore {
           (doors.length === 0
             ? `Nothing the gas station's connector terminates can be paid for from the ` +
               `channel this account holds at ${payer.payer.payAt}.`
-            : `The only door that channel can reach — ` +
+            : `Every door that channel can reach — ` +
               `${doors.map((entry) => entry.destination).join(', ')} — has already refused a ` +
               `quote or an execute from this console, and a purchase needs both.`) +
           ` The station publishes ${station.ilpAddresses.join(', ') || 'no address at all'}, ` +
