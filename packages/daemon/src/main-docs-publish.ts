@@ -303,6 +303,12 @@ export async function main(
   const writer = new PaidRelayWriter({
     profile: () => args.profile,
     readHealth: (profile) => readConnectorHealth(profile, reader),
+    // A relay names its own paid write edge now (#121), and that edge is
+    // routinely a connector other than the profile's. This publisher writes
+    // its articles to the one relay it was pointed at, so the only connector
+    // this ever reaches is the one that relay itself named.
+    readHealthAt: (connectorUrl) =>
+      readConnectorHealth({ ...args.profile, connectorUrl }, reader),
     // Derived inside the borrow and wiped when it returns, exactly as the
     // daemon's `usePayerKeys` does it (ADR 0020). Nothing holds a key between
     // packets.
@@ -327,9 +333,17 @@ export async function main(
   }
   process.stdout.write(
     `Publishing as ${docsAuthorNpub(key.pubkey)}\n` +
-      `  relay:       ${targets.relays.join(', ')}\n` +
-      `  paid route:  ${targets.destination} at ${targets.price} base units per write\n` +
-      `  paying at:   ${targets.payAt} on ${targets.chain}, channel ${targets.channelId}\n\n`
+      targets.plan
+        .map((entry) =>
+          entry.ready
+            ? `  ${entry.url}\n` +
+              `      ${entry.destination} at ${entry.price} base units per write, ` +
+              `paid at ${entry.payAt} on ${entry.chain} (channel ${entry.channelId})\n`
+            : `  ${entry.url}\n      NOT PAYABLE (${entry.code}): ${entry.reason}\n`
+        )
+        .join('') +
+      `  ${targets.totalPrice ?? targets.price} base units per event, across ` +
+      `${targets.relays.length} relay(s)\n\n`
   );
 
   let report: DocsPublishReport;

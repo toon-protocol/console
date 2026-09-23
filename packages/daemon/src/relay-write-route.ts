@@ -12,16 +12,30 @@ import type { RelayPacketOutcome, RelayWritePacket, RelayWritePort } from './rel
  * implementation that has been paying for relay writes since Milestone 1), and
  * this is the console's copy of them.
  *
- * **The carriage is named, not discovered.** `transport: 'btp'`, in so many
- * words, because devnet's relay PINS `g.toon.relay` to BTP: an HTTP one-shot
- * is refused `TRANSPORT_REQUIRED` before the packet is routed. The library's
- * `'auto'` honours a node's `requiredTransport`, but the relay connector
- * advertises `peerCarriages: []` and prices the route without naming a
- * carriage, so `auto` cannot discover the pin and would spend a round trip
- * learning it every time — that gap is TOON_Network#111. Naming BTP is also
- * right on its own terms: a claim carries a strictly increasing nonce per
- * channel, and one ordered socket cannot race its own nonces the way parallel
- * HTTP requests can.
+ * **The carriage is read when the relay states one, and named when it does
+ * not.** A relay's NIP-11 document says which carriage its write route pins
+ * (spec §13.3, TOON_Network#121), and `packet.carriage` carries that statement
+ * here verbatim — devnet's relay says `btp`, in its own words, where this
+ * module used to assume it.
+ *
+ * `'btp'` remains the fallback, and it is a fallback rather than a default:
+ * devnet's relay PINS `g.toon.relay` to BTP, so an HTTP one-shot is refused
+ * `TRANSPORT_REQUIRED` before the packet is routed. The library's `'auto'`
+ * honours a node's `requiredTransport`, but a relay connector advertises
+ * `peerCarriages: []` and prices the route without naming a carriage, so
+ * `auto` cannot discover the pin and would spend a round trip learning it
+ * every time — that gap is TOON_Network#111. Naming BTP is also right on its
+ * own terms: a claim carries a strictly increasing nonce per channel, and one
+ * ordered socket cannot race its own nonces the way parallel HTTP requests
+ * can.
+ *
+ * **It seals past a hop only when told to.** `packet.sealTo` is the key a
+ * relay's own document pinned for the connector that TERMINATES its write
+ * route, and it is present exactly when this console pays at an edge that
+ * FORWARDS that route rather than terminating it. No hop may name the
+ * terminating connector's key on its behalf, so there is no discovery here and
+ * no default: absent means the destination terminates where the packet is paid
+ * for, which is every write this console made before TOON_Network#121.
  *
  * **It never opens a channel.** `autoOpenChannel: false`, deliberately: the
  * library's default is to open one on the first send, and an open locks
@@ -56,7 +70,7 @@ export class LiveRelayWritePort implements RelayWritePort {
         rpcUrl: packet.rpcUrl,
         channelStore: packet.channelStore,
         autoOpenChannel: false,
-        transport: 'btp',
+        transport: packet.carriage ?? 'btp',
         timeoutMs,
       });
     } catch (error) {
@@ -72,12 +86,18 @@ export class LiveRelayWritePort implements RelayWritePort {
     }
 
     try {
-      const sent = await client.send(packet.destination, {
-        // The relay's write surface takes `{ event }` as JSON and nothing else
-        // (`POST /write`), exactly as the provider's publisher sends it.
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ event: packet.event }),
-      });
+      const sent = await client.send(
+        packet.destination,
+        {
+          // The relay's write surface takes `{ event }` as JSON and nothing
+          // else (`POST /write`), exactly as the provider's publisher sends it.
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ event: packet.event }),
+        },
+        // No `amount`: the client pays what the route quoted (#82). `sealTo`
+        // only when the edge being paid forwards rather than terminates.
+        packet.sealTo === undefined ? undefined : { sealTo: packet.sealTo }
+      );
       if (sent.fulfilled) {
         return {
           kind: 'answered',

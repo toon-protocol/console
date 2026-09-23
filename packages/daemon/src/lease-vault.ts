@@ -1470,6 +1470,7 @@ function toView(held: OpenLease): LeaseView {
 /** Before the writer has been asked anything. Never mistaken for "ready". */
 const UNREAD_TARGETS: RelayWriteTargets = {
   relays: [],
+  plan: [],
   ready: false,
   blockedBy: 'Nothing has asked this network’s connector what a relay write costs yet.',
 };

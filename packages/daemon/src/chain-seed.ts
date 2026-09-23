@@ -704,6 +704,22 @@ export class ChainSeedStore {
     }
   }
 
+  /**
+   * The relays this account's own NIP-65 list says to WRITE to, as they are
+   * known right now.
+   *
+   * The writer asks for these (#121): an Account's records go to every relay
+   * in its write list the console can pay, not only to the profile's. It is
+   * synchronous and it dials nothing — it answers with what the last `refresh`
+   * found, and with nothing before one has run. That is deliberate: a
+   * `targets()` call happens on every status, and making it read a relay list
+   * would put a socket round trip behind every view. An empty answer means the
+   * profile's relay alone, which is exactly #120's behaviour.
+   */
+  writeRelays(): readonly string[] {
+    return this.#relayList?.write ?? [];
+  }
+
   /** Forget this session's opened seed — a sign-out, not a deletion. */
   forget(): void {
     this.#forPubkey = undefined;
@@ -1046,6 +1062,7 @@ function reportOf(what: PublishReport['what'], receipt: RelayWriteReceipt): Publ
 /** Before the writer has been asked anything. Never mistaken for "ready". */
 const UNREAD_TARGETS: RelayWriteTargets = {
   relays: [],
+  plan: [],
   ready: false,
   blockedBy: 'Nothing has asked this network’s connector what a relay write costs yet.',
 };

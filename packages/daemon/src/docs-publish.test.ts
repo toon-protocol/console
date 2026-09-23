@@ -105,8 +105,18 @@ function writerFor(relay: FakeRelay, options: { refuse?: Set<string> } = {}): Re
     targets: (): Promise<RelayWriteTargets> =>
       Promise.resolve({
         relays: ['ws://relay.test'],
+        plan: [
+          {
+            url: 'ws://relay.test',
+            ready: true,
+            destination: 'g.toon.relay',
+            price: '1',
+            via: 'document',
+          },
+        ],
         destination: 'g.toon.relay',
         price: '1',
+        totalPrice: '1',
         ready: true,
       }),
     write: (request: RelayWriteRequest): Promise<RelayWriteReceipt> => {

@@ -197,14 +197,17 @@ function NotYetRecoverable({
           disabled={seed.busy || !writes.ready}
           onClick={() => void seed.publish()}
         >
-          {seed.busy ? 'Publishing…' : 'Publish it — one paid write'}
+          {seed.busy
+            ? 'Publishing…'
+            : `Publish it — ${writes.relays.length === 1 ? 'one paid write' : `${writes.relays.length} paid writes`}`}
         </Button>
         <p className="text-muted-foreground text-xs">
           {writes.ready
-            ? `One packet on ${writes.destination}: ${writes.price} base units of this network’s settlement token, paid from this account’s own channel.`
+            ? `${writes.relays.length === 1 ? 'One packet' : `${writes.relays.length} packets, one per relay`}: ${writes.totalPrice ?? writes.price} base units of this network’s settlement token in total, paid from this account’s own channel.`
             : writes.blockedBy}
         </p>
       </div>
+      <UnpayableRelays writes={writes} />
     </div>
   );
 }
@@ -334,10 +337,12 @@ function RelayList({ status, seed }: { status: ChainSeedStatus; seed: ChainSeedS
       <p className="text-muted-foreground text-xs tracking-wide uppercase">Where it is kept</p>
       <p className="text-sm">
         {writes.ready
-          ? `Records are written to ${listOf(writes.relays)} as paid packets on ${writes.destination ?? 'this network’s relay route'} — ${writes.price} base units of the settlement token each, from this account’s own payment channel.`
+          ? `Records are written to ${listOf(writes.relays)} as paid packets — ${writes.totalPrice ?? writes.price} base units of the settlement token per record in total, from this account’s own payment channel. A record on several relays is one that survives a relay losing it.`
           : (writes.blockedBy ??
             'This console cannot buy a relay write on this network right now.')}
       </p>
+      <PerRelayCost writes={writes} />
+      <UnpayableRelays writes={writes} />
       {list.state === 'present' ? (
         <p className="text-sm">
           This account&rsquo;s NIP-65 list names {listOf(list.write)} to write to and{' '}
@@ -412,6 +417,57 @@ function Problem({ seed }: { seed: ChainSeedState }) {
       <Button size="sm" variant="outline" onClick={seed.clearError}>
         Dismiss
       </Button>
+    </div>
+  );
+}
+
+/**
+ * What each relay costs, one line each.
+ *
+ * A total tells a person what a publish costs; this tells them where the
+ * money went, which is the question they ask next when one relay is dearer
+ * than the rest (TOON_Network#121). Nothing here computes a price — every
+ * figure is the one the route quoted.
+ */
+function PerRelayCost({ writes }: { writes: ChainSeedStatus['writes'] }) {
+  const payable = writes.plan.filter((entry) => entry.ready);
+  if (payable.length < 2) return null;
+  return (
+    <ul className="text-muted-foreground space-y-0.5 text-xs" data-testid="per-relay-cost">
+      {payable.map((entry) => (
+        <li key={entry.url} className="font-mono break-all">
+          {entry.url} — {entry.price} on {entry.destination}, paid at {entry.payAt}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * The relays an Account's record does NOT reach, and why.
+ *
+ * Shown rather than swallowed: a NIP-65 list naming five relays that this
+ * console reaches one of is a recovery story that is quietly worse than it
+ * looks, and the only way a person can fix it is to be told which relay and
+ * what stopped it (TOON_Network#121, spec §13).
+ */
+function UnpayableRelays({ writes }: { writes: ChainSeedStatus['writes'] }) {
+  const blocked = writes.plan.filter((entry) => !entry.ready);
+  if (blocked.length === 0) return null;
+  return (
+    <div className="space-y-1 text-xs" data-testid="unpayable-relays">
+      <p className="text-muted-foreground">
+        {blocked.length === 1
+          ? 'One relay this account writes to could not be paid:'
+          : `${blocked.length} relays this account writes to could not be paid:`}
+      </p>
+      <ul className="space-y-1">
+        {blocked.map((entry) => (
+          <li key={entry.url}>
+            <span className="font-mono break-all">{entry.url}</span> — {entry.reason}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

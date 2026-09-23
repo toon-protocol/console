@@ -70,7 +70,13 @@ function view(overrides: Partial<RotationView> = {}): RotationView {
     ],
     confirmed: 0,
     of: 2,
-    vault: { relays: ['wss://relay.test'], ready: true, price: '1' },
+    vault: {
+      relays: ['wss://relay.test'],
+      plan: [{ url: 'wss://relay.test', ready: true, price: '1' }],
+      ready: true,
+      price: '1',
+      totalPrice: '1',
+    },
     localOnly: false,
     ...overrides,
   };

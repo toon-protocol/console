@@ -173,15 +173,39 @@ export function fakePaidWriter(
       if (relay === undefined || blocked !== undefined) {
         return Promise.resolve({
           relays: relay === undefined ? [] : [relay.url],
+          plan:
+            relay === undefined
+              ? []
+              : [
+                  {
+                    url: relay.url,
+                    ready: false,
+                    code: 'no_channel',
+                    reason: blocked?.message ?? 'This network names no relay.',
+                  },
+                ],
           ready: false,
           blockedBy: blocked?.message ?? 'This network names no relay.',
         });
       }
       return Promise.resolve({
         relays: [relay.url],
+        plan: [
+          {
+            url: relay.url,
+            ready: true,
+            destination: FAKE_DESTINATION,
+            payAt: FAKE_PAY_AT,
+            price: writer.cost,
+            chain: 'evm:31337',
+            channelId: '0xchannel',
+            via: 'document',
+          },
+        ],
         destination: FAKE_DESTINATION,
         payAt: FAKE_PAY_AT,
         price: writer.cost,
+        totalPrice: writer.cost,
         chain: 'evm:31337',
         channelId: '0xchannel',
         ready: true,

@@ -84,7 +84,13 @@ const vault: LeaseVaultStatus = {
   state: 'ready',
   pubkey: 'b'.repeat(64),
   leases: [],
-  writes: { relays: ['wss://own.relay.test'], ready: true, price: '1' },
+  writes: {
+    relays: ['wss://own.relay.test'],
+    plan: [{ url: 'wss://own.relay.test', ready: true, price: '1' }],
+    ready: true,
+    price: '1',
+    totalPrice: '1',
+  },
   unreadable: 0,
   checkedAt: '2026-09-23T10:00:00.000Z',
 };

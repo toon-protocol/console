@@ -294,11 +294,16 @@ function Vault({ leases, workloads }: { leases: LeasesState; workloads: Workload
             ? vault.writes.relays.join(', ')
             : 'no relay this console can write to'}{' '}
           as a paid packet
-          {vault?.writes.ready && vault.writes.price
-            ? ` — ${vault.writes.price} base units of the settlement token per write`
+          {vault?.writes.ready && (vault.writes.totalPrice ?? vault.writes.price)
+            ? ` — ${vault.writes.totalPrice ?? vault.writes.price} base units of the settlement ` +
+              `token per record, across ${vault.writes.relays.length} relay(s)`
             : ''}
           . Sign in anywhere and they come back.
           {vault && !vault.writes.ready ? ` ${vault.writes.blockedBy ?? ''}` : ''}
+          {(vault?.writes.plan ?? [])
+            .filter((entry) => !entry.ready)
+            .map((entry) => ` ${entry.url} gets nothing: ${entry.reason}`)
+            .join('')}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
