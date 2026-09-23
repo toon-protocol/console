@@ -21,7 +21,13 @@ import {
   type WithdrawalResult,
 } from './gateway.js';
 import { HiddenTransportError, type HiddenTransportPort } from './hidden-transport.js';
-import { LeaseError, type LeaseStore, type SpawnRequest } from './lease.js';
+import {
+  LeaseError,
+  type LeaseStore,
+  type SpawnRequest,
+  type StandbyMemberRequest,
+  type StandbySetSpawnRequest,
+} from './lease.js';
 import { LeaseVaultError, type LeaseVault } from './lease-vault.js';
 import {
   KeystoreUnavailableError,
@@ -159,9 +165,16 @@ export interface WorkloadPort {
   card(workloadId: string, options?: { refresh?: boolean }): Promise<WorkloadCard>;
   extend(
     workloadId: string,
-    options?: { maxPrice?: string | undefined; chain?: string | undefined }
+    options?: {
+      maxPrice?: string | undefined;
+      chain?: string | undefined;
+      member?: string | undefined;
+    }
   ): Promise<ExtendResult>;
-  terminate(workloadId: string): Promise<TerminateResult>;
+  terminate(
+    workloadId: string,
+    options?: { member?: string | undefined }
+  ): Promise<TerminateResult>;
 }
 
 /** What `/api/workloads/<id>/gateway*` needs of `GatewayStore`, and no more. */
@@ -820,6 +833,23 @@ async function handleLeases(
     return ok(await deps.leases.spawn(request.value));
   }
 
+  // A Standby Set: one workload id bought from several providers, the primary
+  // on `.spawn` and each Warm Standby on `.standby` (§7). Its own pair of
+  // routes rather than a flag on the pair above, because it spends at EVERY
+  // member and the shapes of the two answers differ — a set reports per
+  // member, including the ones that refused and were billed anyway.
+  if (
+    at('/api/leases/standby-set/preflight', 'POST') ||
+    at('/api/leases/standby-set', 'POST')
+  ) {
+    const request = readStandbySetRequest(body);
+    if ('error' in request) return problem(400, 'invalid_request', request.error);
+    if (path.endsWith('/preflight')) {
+      return ok(await deps.leases.preflightSet(request.value));
+    }
+    return ok(await deps.leases.spawnSet(request.value));
+  }
+
   return problem(404, 'unknown_route', `No route ${method} ${path}.`);
 }
 
@@ -905,11 +935,19 @@ async function handleWorkloads(
           // Which settlement chain to pay on, when this lease's record does
           // not say and the account holds channels on more than one.
           ...optional('chain', string(fields, 'chain')),
+          // Which member of the Standby Set to extend (§7). Without it, the
+          // primary. The daemon reads what that member is doing before it
+          // picks between `.extend` and `.standby.extend` — a reservation and
+          // a running lease refuse each other's route, each at its own price.
+          ...optional('member', string(fields, 'member')),
         })
       );
     }
     if (action === 'terminate' && method === 'POST') {
-      return ok(await workloads.terminate(workloadId));
+      const fields = asRecord(body);
+      return ok(
+        await workloads.terminate(workloadId, optional('member', string(fields, 'member')))
+      );
     }
     if (action === 'auto-extend') {
       const budgets = deps.autoExtend;
@@ -1105,6 +1143,48 @@ function readSpawnRequest(body: unknown): { value: SpawnRequest } | { error: str
       ...(fields.localOnly === true ? { localOnly: true } : {}),
     } as SpawnRequest,
   };
+}
+
+/**
+ * A Standby Set's spawn, out of a JSON body (§7).
+ *
+ * The primary is the ordinary spawn request, read by the function above, and
+ * `standbys` names the rest of the set: each with the provider it reserves
+ * capacity at and the tier that reservation is bought on, because two
+ * providers need not publish the same tier at the same version or the same
+ * `standby_price`.
+ */
+function readStandbySetRequest(
+  body: unknown
+): { value: StandbySetSpawnRequest } | { error: string } {
+  const primary = readSpawnRequest(body);
+  if ('error' in primary) return primary;
+  const fields = asRecord(body);
+  const raw = fields.standbys;
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return {
+      error:
+        '`standbys` is a non-empty array of `{ provider, listing }`: a Standby Set is a ' +
+        'primary lease and at least one Warm Standby (spec §7). A lease with none is an ' +
+        'ordinary spawn.',
+    };
+  }
+  const standbys: StandbyMemberRequest[] = [];
+  for (const entry of raw) {
+    const member = asRecord(entry);
+    const provider = string(member, 'provider');
+    const listing = string(member, 'listing');
+    if (!provider || !listing) {
+      return { error: 'Every standby names the `provider` and the `listing` it reserves on.' };
+    }
+    standbys.push({
+      provider,
+      listing,
+      ...optional('listingVersion', number(member, 'listingVersion')),
+      ...optional('chain', string(member, 'chain')),
+    });
+  }
+  return { value: { ...primary.value, standbys } };
 }
 
 /** An array of strings, or nothing. An array with a non-string in it is nothing. */

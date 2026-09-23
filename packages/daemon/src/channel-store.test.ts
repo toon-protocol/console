@@ -23,7 +23,9 @@ describe('the console channel store', () => {
     const devnet = channelStoreFor(paths(), 'devnet');
     const sandbox = channelStoreFor(paths(), 'sandbox');
     expect(devnet.filePath).toContain(join('toon-console', 'profiles', 'devnet', 'channels'));
-    expect(sandbox.filePath).toContain(join('toon-console', 'profiles', 'sandbox', 'channels'));
+    expect(sandbox.filePath).toContain(
+      join('toon-console', 'profiles', 'sandbox', 'channels')
+    );
     expect(devnet.filePath).not.toBe(sandbox.filePath);
     expect(devnet.bindingsPath).not.toBe(devnet.filePath);
   });

@@ -64,6 +64,10 @@ function card(
     status: overrides.status ?? running(),
     runway,
     extend: { ok: true, problems: [] },
+    // A set of one: a standalone lease is a Standby Set with no Warm Standby
+    // in it, and the review reads neither field (spec §7).
+    members: [],
+    set: { members: 1, warm: false },
     ...(overrides.endedAs === undefined ? {} : { endedAs: overrides.endedAs }),
   };
 }
@@ -252,6 +256,43 @@ describe('notifying', () => {
 
     expect(dashboards).toBe(2);
     expect(port.sent).toHaveLength(1);
+  });
+
+  it('forwards every argument whole, the member of a Standby Set included', async () => {
+    const { notifier: watcher } = notifier();
+    const view = dashboard(card());
+    const calls: { name: string; args: unknown[] }[] = [];
+    const wrapped = notifying(
+      {
+        dashboard: async () => view,
+        card: async (...args) => {
+          calls.push({ name: 'card', args });
+          return view.cards[0]!;
+        },
+        extend: async (...args) => {
+          calls.push({ name: 'extend', args });
+          throw new Error('not used');
+        },
+        terminate: async (...args) => {
+          calls.push({ name: 'terminate', args });
+          throw new Error('not used');
+        },
+      },
+      watcher
+    );
+
+    await wrapped.card('w', { refresh: true });
+    await wrapped.extend('w', { member: 'm', maxPrice: '1' }).catch(() => undefined);
+    await wrapped.terminate('w', { member: 'm' }).catch(() => undefined);
+
+    // A wrapper that dropped `terminate`'s options would end the PRIMARY every
+    // time, whichever member was asked for — irreversibly, with no refund
+    // (§6.6, §7).
+    expect(calls).toEqual([
+      { name: 'card', args: ['w', { refresh: true }] },
+      { name: 'extend', args: ['w', { member: 'm', maxPrice: '1' }] },
+      { name: 'terminate', args: ['w', { member: 'm' }] },
+    ]);
   });
 });
 

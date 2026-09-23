@@ -332,7 +332,7 @@ describe('spawning a workload', () => {
       expect(port.sent).toHaveLength(0);
     });
 
-    it('refuses a Standby Set until #95 can buy the reservations too', async () => {
+    it('refuses a Standby Set on the path that buys ONE lease (§7)', async () => {
       const content = buildSpawnContent({
         image: { digest: GOOD_SPAWN.image.digest },
         ports: [{ container_port: 80, protocol: 'tcp' as const }],
@@ -347,7 +347,7 @@ describe('spawning a workload', () => {
           listingVersion: 1,
           content,
         })
-      ).rejects.toThrow(/Warm Standbys are TOON_Network#95/u);
+      ).rejects.toThrow(/buys one lease/u);
       expect(port.sent).toHaveLength(0);
     });
   });

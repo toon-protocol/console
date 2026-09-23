@@ -7,6 +7,9 @@ import {
   type PreflightView,
   type SpawnRequestBody,
   type SpawnResult,
+  type StandbySetPreflightView,
+  type StandbySetRequestBody,
+  type StandbySetResult,
 } from '@/lib/daemon';
 
 /**
@@ -41,11 +44,19 @@ export interface LeasesState {
   readonly preflight?: PreflightView;
   /** The last spawn that worked, so the page can show its access details. */
   readonly spawned?: SpawnResult;
+  /** The last Standby Set preflight, priced at every member (§7). */
+  readonly standbySetPreflight?: StandbySetPreflightView;
+  /** The last Standby Set spawned, reported member by member. */
+  readonly spawnedSet?: StandbySetResult;
   reload(): void;
   /** Re-read the vault from the account's relays. What recovery looks like. */
   recover(): void;
   check(request: SpawnRequestBody): Promise<PreflightView | undefined>;
   spawn(request: SpawnRequestBody): Promise<boolean>;
+  /** Free, and it prices every member of the set. Safe on a debounce. */
+  checkSet(request: StandbySetRequestBody): Promise<StandbySetPreflightView | undefined>;
+  /** Paid at EVERY member. Only ever from a press. */
+  spawnSet(request: StandbySetRequestBody): Promise<boolean>;
   clearError(): void;
   dismissSpawned(): void;
 }
@@ -59,6 +70,8 @@ export function useLeases(options: { active?: boolean; pubkey?: string | undefin
   const [providerError, setProviderError] = useState<string>();
   const [preflight, setPreflight] = useState<PreflightView>();
   const [spawned, setSpawned] = useState<SpawnResult>();
+  const [standbySetPreflight, rememberSetPreflight] = useState<StandbySetPreflightView>();
+  const [spawnedSet, setSpawnedSet] = useState<StandbySetResult>();
   const alive = useRef(true);
 
   useEffect(() => {
@@ -149,6 +162,49 @@ export function useLeases(options: { active?: boolean; pubkey?: string | undefin
     [remember]
   );
 
+  const checkSet = useCallback(
+    async (request: StandbySetRequestBody): Promise<StandbySetPreflightView | undefined> => {
+      try {
+        const view = await daemon.preflightStandbySet(request);
+        if (alive.current) rememberSetPreflight(view);
+        return view;
+      } catch (caught) {
+        remember(caught);
+        return undefined;
+      }
+    },
+    [remember]
+  );
+
+  const spawnSet = useCallback(
+    async (request: StandbySetRequestBody): Promise<boolean> => {
+      setBusy(true);
+      setError(undefined);
+      setErrorCode(undefined);
+      setProviderError(undefined);
+      try {
+        const result = await daemon.spawnStandbySet(request);
+        if (!alive.current) return true;
+        setSpawnedSet(result);
+        rememberSetPreflight(result.preflight);
+        setVault(await daemon.leases());
+        return true;
+      } catch (caught) {
+        remember(caught);
+        void daemon
+          .leases()
+          .then((next) => {
+            if (alive.current) setVault(next);
+          })
+          .catch(() => undefined);
+        return false;
+      } finally {
+        if (alive.current) setBusy(false);
+      }
+    },
+    [remember]
+  );
+
   return {
     vault,
     loading,
@@ -158,15 +214,22 @@ export function useLeases(options: { active?: boolean; pubkey?: string | undefin
     providerError,
     preflight,
     spawned,
+    standbySetPreflight,
+    spawnedSet,
     reload: () => load(false),
     recover: () => load(true),
     check,
     spawn,
+    checkSet,
+    spawnSet,
     clearError: () => {
       setError(undefined);
       setErrorCode(undefined);
       setProviderError(undefined);
     },
-    dismissSpawned: () => setSpawned(undefined),
+    dismissSpawned: () => {
+      setSpawned(undefined);
+      setSpawnedSet(undefined);
+    },
   } satisfies LeasesState;
 }

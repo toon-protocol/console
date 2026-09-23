@@ -392,6 +392,12 @@ export class DesktopNotifier {
  * Only `dashboard()` is reviewed and not `card()`: a card carries no account
  * to key an alert by, and the window that refreshes one card is the window
  * that polls the whole dashboard thirty seconds later.
+ *
+ * Every other method forwards its arguments **whole**. A decorator that drops
+ * one is worse than no decorator: `terminate` names which member of a Standby
+ * Set to end (§7), and a wrapper that forgot it would end the primary every
+ * time — silently, irreversibly and with no refund (§6.6). `alerts.test.ts`
+ * is the test that says so.
  */
 export function notifying(port: WorkloadPort, notifier: DesktopNotifier): WorkloadPort {
   return {
@@ -402,6 +408,6 @@ export function notifying(port: WorkloadPort, notifier: DesktopNotifier): Worklo
     },
     card: (workloadId, options) => port.card(workloadId, options),
     extend: (workloadId, options) => port.extend(workloadId, options),
-    terminate: (workloadId) => port.terminate(workloadId),
+    terminate: (workloadId, options) => port.terminate(workloadId, options),
   };
 }

@@ -81,6 +81,8 @@ export interface AutoExtendRun {
   readonly outcome: 'extended' | 'waited' | 'stopped';
   readonly reason: string;
   readonly cost?: string | undefined;
+  /** Which members of the Standby Set this run bought an interval for (§7). */
+  readonly members?: readonly string[] | undefined;
 }
 
 export interface ArmRequest {
@@ -232,7 +234,7 @@ export interface WorkloadOps {
   card(workloadId: string, options?: { refresh?: boolean }): Promise<WorkloadCard>;
   extend(
     workloadId: string,
-    options?: { maxPrice?: string | undefined }
+    options?: { maxPrice?: string | undefined; member?: string | undefined }
   ): Promise<ExtendResult>;
 }
 
@@ -306,32 +308,37 @@ export class AutoExtender implements AutoExtendReader {
     }
 
     const card = await this.#deps.workloads.card(request.workloadId, { refresh: false });
-    const quoted = card.extend.route?.price;
+    // The price agreed to is the SET's: one round of extensions for every
+    // member that is still a lease — the primary at its listing's price and
+    // each Warm Standby at its `standby_price` (§5, §7). A budget armed
+    // against the primary's figure alone would quietly let the reservations
+    // lapse, which is a Standby Set that has stopped protecting anything. For
+    // a standalone lease the two figures are the same number.
+    const quoted = card.set.pricePerInterval;
     if (quoted === undefined) {
       throw new WorkloadError(
         'no_price',
-        'No connector this console can reach prices this lease’s `.extend` route right now, so ' +
-          'there is no figure to agree to and nothing to hold a budget against. Nothing was ' +
-          'armed.',
+        `No connector this console can reach prices every member of this workload’s ` +
+          `extension routes right now, so there is no figure to agree to and nothing to hold ` +
+          `a budget against. ${card.set.reason ?? ''} Nothing was armed.`.trim(),
         409
       );
     }
     if (compareAmounts(quoted, request.agreedPrice) !== 0) {
       throw new WorkloadError(
         'price_moved',
-        `One interval on ${card.extend.route?.route ?? 'this route'} costs ${quoted} base ` +
-          `units at ${card.extend.route?.payAt ?? 'that connector'}, not the ` +
-          `${request.agreedPrice} this request agreed to. Read the price again and arm against ` +
-          `what it actually is. Nothing was armed.`,
+        `One round of extensions for this workload’s ${card.set.members} member(s) costs ` +
+          `${quoted} base units, not the ${request.agreedPrice} this request agreed to. Read ` +
+          `the price again and arm against what it actually is. Nothing was armed.`,
         409
       );
     }
     if (compareAmounts(request.budget, quoted) < 0) {
       throw new WorkloadError(
         'budget_below_price',
-        `A budget of ${request.budget} base units buys no whole interval at ${quoted}, and ` +
-          `§6.3 sells whole ones only (ADR 0003). This budget would stop before it extended ` +
-          `anything, so nothing was armed.`,
+        `A budget of ${request.budget} base units buys no whole round at ${quoted}, and ` +
+          `§6.3 sells whole intervals only (ADR 0003). This budget would stop before it ` +
+          `extended anything, so nothing was armed.`,
         400
       );
     }
@@ -429,114 +436,184 @@ export class AutoExtender implements AutoExtendReader {
       );
     }
 
-    // Rule 5. Silence is not a reason to buy anything.
-    if (card.status.kind !== 'read') {
-      return waited(
-        card.status.kind === 'silent'
-          ? `The provider is not answering, and nothing is bought on silence: an extension into ` +
-              `it would be an interval on a lease that may have ended, refused \`expired\` and ` +
-              `billed. ${card.status.reason}`
-          : card.status.kind === 'refused'
-            ? `The provider answered \`${card.status.code}\` when asked about this lease.`
-            : `This lease's state could not be read. ${card.status.reason}`
-      );
-    }
-
-    if (card.status.life.phase === 'ended') {
+    // A Standby Set is kept alive member by member, and the members do not
+    // agree: after a Takeover the winner is a running lease paid at `price` on
+    // `.extend` and the stood-down primary is a stopped one, while a standby
+    // that lost is still a reservation paid at `standby_price` on
+    // `.standby.extend` (§6.3, §7.1). So every rule below is applied to the
+    // SET, and a member that cannot be extended right now does not stop the
+    // others being kept alive — a lapsed reservation is a Warm Standby that is
+    // not there when the primary goes silent.
+    const live = card.members.filter(
+      (member) => !(member.status.kind === 'read' && member.status.life.phase === 'ended')
+    );
+    if (live.length === 0) {
       return stopped(
-        `This lease has ended, so there is nothing left to extend. What was spent stays ` +
-          `recorded; the budget is off.`
+        `Every member of this workload has ended, so there is nothing left to extend. What ` +
+          `was spent stays recorded; the budget is off.`
       );
     }
 
-    if (!card.extend.ok) {
+    // Rule 4. A price that moved is a different offer — checked over the whole
+    // set, because that is the figure the account agreed to.
+    const setPrice = card.set.pricePerInterval;
+    if (setPrice === undefined) {
       return waited(
-        card.extend.problems[0] ?? 'An extension cannot be sent for this lease right now.'
+        `Not every member of this workload has a price this time. ${card.set.reason ?? ''}`.trim()
       );
     }
-
-    const expiresAt = card.status.expiresAt;
-    if (expiresAt === undefined) {
-      return waited(
-        'The provider did not say when this lease expires, so there is no way to tell whether ' +
-          'an extension is due. Nothing was bought.'
-      );
-    }
-    const due = expiresAt - this.#seconds();
-    if (due > policy.leadSeconds) {
-      return waited(
-        `Not due yet: this lease is paid for another ${due} s and this budget buys inside the ` +
-          `last ${policy.leadSeconds} s. ADR 0003 refunds nothing, so an interval bought early ` +
-          `is one that cannot be handed back.`
-      );
-    }
-
-    const price = card.extend.route?.price;
-    if (price === undefined) {
-      return waited('The connector quoted no price for this lease’s extension this time.');
-    }
-
-    // Rule 4. A price that moved is a different offer.
-    if (compareAmounts(price, policy.agreedPrice) > 0) {
+    if (compareAmounts(setPrice, policy.agreedPrice) > 0) {
+      // A round gets dearer two ways, and both are the same answer: stop and
+      // say so. A Listing that was republished is a new offer (ADR 0009). A
+      // **Takeover** is not a price change at all — it is the set costing
+      // more, because the standby that won is a running lease from that
+      // moment and is paid at `price` on `.extend` rather than at
+      // `standby_price` (§7.1 step 4). Either way the figure is no longer the
+      // one the account agreed to, and spending past it unattended is
+      // precisely what a budget exists to prevent.
       return stopped(
-        `One interval now costs ${price} base units, above the ${policy.agreedPrice} this ` +
-          `budget agreed to. A price change is a new Listing version (ADR 0009), so this is a ` +
-          `different offer from the one that was agreed to and nothing was bought.`
+        `One round of extensions for this workload now costs ${setPrice} base units, above ` +
+          `the ${policy.agreedPrice} this budget agreed to, so nothing was bought. Either a ` +
+          `Listing was republished — a price change is a new Listing version (ADR 0009) — or ` +
+          `a Takeover has made this Standby Set dearer: the member that won runs the workload ` +
+          `now and is paid at the running price, not at the standby price (§7.1). Read the ` +
+          `figure again and arm against what it actually is.`
       );
     }
 
-    // Rule 3. The acceptance criterion: it stops when the budget is spent.
-    const remaining = BigInt(policy.budget) - BigInt(policy.spent);
-    if (compareAmounts(price, remaining.toString()) > 0) {
+    const now = this.#seconds();
+    const due: { member: (typeof live)[number]; price: string }[] = [];
+    const waiting: string[] = [];
+    for (const member of live) {
+      const who = `${member.pubkey.slice(0, 12)}… (${member.role})`;
+      // Rule 5. Silence is not a reason to buy anything.
+      if (member.status.kind !== 'read') {
+        waiting.push(
+          member.status.kind === 'silent'
+            ? `${who} is not answering, and nothing is bought on silence: an extension into it ` +
+                `would be an interval on a lease that may have ended, refused \`expired\` and ` +
+                `billed.`
+            : member.status.kind === 'refused'
+              ? `${who} answered \`${member.status.code}\` when asked about this lease.`
+              : `${who}'s state could not be read. ${member.status.reason}`
+        );
+        continue;
+      }
+      if (!member.extend.ok) {
+        waiting.push(
+          `${who}: ${member.extend.problems[0] ?? 'nothing can be sent to it right now.'}`
+        );
+        continue;
+      }
+      const expiresAt = member.status.expiresAt;
+      if (expiresAt === undefined) {
+        waiting.push(
+          `${who} did not say when its lease expires, so there is no way to tell whether an ` +
+            `extension is due.`
+        );
+        continue;
+      }
+      const remaining = expiresAt - now;
+      if (remaining > policy.leadSeconds) {
+        waiting.push(
+          `Not due yet: ${who} is paid for another ${remaining} s and this budget buys inside ` +
+            `the last ${policy.leadSeconds} s. ADR 0003 refunds nothing, so an interval bought ` +
+            `early is one that cannot be handed back.`
+        );
+        continue;
+      }
+      const price = member.extend.route?.price;
+      if (price === undefined) {
+        waiting.push(`${who} was quoted no price for \`.${member.extend.op}\` this time.`);
+        continue;
+      }
+      due.push({ member, price });
+    }
+
+    if (due.length === 0) {
+      return waited(waiting.join(' ') || 'Nothing in this workload is due an extension yet.');
+    }
+
+    // Rule 3. The acceptance criterion: it stops when the budget is spent, and
+    // it never buys PART of a round — a round that keeps the primary and drops
+    // a reservation is a set that has stopped being one.
+    let round = 0n;
+    for (const entry of due) round += BigInt(entry.price);
+    const left = BigInt(policy.budget) - BigInt(policy.spent);
+    if (round > left) {
       return stopped(
         `The budget is spent: ${policy.spent} of ${policy.budget} base units has gone on ` +
-          `${policy.extensions} extension(s), and the next interval costs ${price}. Nothing ` +
-          `further will be bought for this lease until a new budget is set.`
+          `${policy.extensions} extension(s), and the next round — ${due.length} member(s) of ` +
+          `this workload — costs ${round.toString()}. Nothing further will be bought for this ` +
+          `workload until a new budget is set.`
       );
     }
 
-    let result: ExtendResult;
-    try {
-      result = await this.#deps.workloads.extend(policy.workloadId, {
-        maxPrice: policy.agreedPrice,
-      });
-    } catch (error) {
-      return waited(
-        `The extension was not sent: ${error instanceof Error ? error.message : String(error)}`
-      );
+    const bought: string[] = [];
+    let spent = 0n;
+    let bookedAll = true;
+    for (const entry of due) {
+      let result: ExtendResult;
+      try {
+        result = await this.#deps.workloads.extend(policy.workloadId, {
+          maxPrice: entry.price,
+          member: entry.member.pubkey,
+        });
+      } catch (error) {
+        bookedAll = false;
+        waiting.push(
+          `${entry.member.pubkey.slice(0, 12)}…'s extension was not sent: ` +
+            `${error instanceof Error ? error.message : String(error)}`
+        );
+        continue;
+      }
+      if (!result.sent) {
+        bookedAll = false;
+        waiting.push(
+          `${entry.member.pubkey.slice(0, 12)}…: nothing was sent and nothing was paid. ` +
+            `${result.problems.join(' ')}`.trim()
+        );
+        continue;
+      }
+      // Rule 6. A refusal that was billed is not something to retry on a timer.
+      if (result.providerError !== undefined) {
+        return stopped(
+          `${entry.member.pubkey.slice(0, 12)}… refused this extension ` +
+            `(\`${result.providerError}\`), and a refusal on a paid route is billed ` +
+            `(ADR 0003). This budget is off rather than spending itself learning the same ` +
+            `thing every minute. ${result.message ?? ''}`.trim(),
+          totalOf([...bought.map(() => undefined), result.cost], spent)
+        );
+      }
+      // Rule 7. A packet nobody reported on must not be followed by another.
+      if (result.expiresAt === undefined) {
+        return stopped(
+          `${entry.member.pubkey.slice(0, 12)}…'s extension was sent and its fate is unknown, ` +
+            `so whether an interval was bought cannot be said. This budget is off: a second ` +
+            `attempt might buy a second interval nobody asked for. ${result.message ?? ''}`.trim(),
+          totalOf([result.cost], spent)
+        );
+      }
+      bought.push(entry.member.pubkey);
+      if (result.cost !== undefined && /^\d+$/u.test(result.cost)) {
+        spent += BigInt(result.cost);
+      } else {
+        spent += BigInt(entry.price);
+      }
     }
 
-    if (!result.sent) {
-      return waited(
-        `Nothing was sent and nothing was paid. ${result.problems.join(' ')}`.trim()
-      );
+    if (bought.length === 0) {
+      return waited(waiting.join(' ') || 'Nothing was bought for this workload.');
     }
-    // Rule 6. A refusal that was billed is not something to retry on a timer.
-    if (result.providerError !== undefined) {
-      return stopped(
-        `The provider refused this extension (\`${result.providerError}\`), and a refusal on a ` +
-          `paid route is billed (ADR 0003). This budget is off rather than spending itself ` +
-          `learning the same thing every minute. ${result.message ?? ''}`.trim(),
-        result.cost
-      );
-    }
-    // Rule 7. A packet nobody reported on must not be followed by another.
-    if (result.expiresAt === undefined) {
-      return stopped(
-        `The extension was sent and its fate is unknown, so whether an interval was bought ` +
-          `cannot be said. This budget is off: a second attempt might buy a second interval ` +
-          `nobody asked for. ${result.message ?? ''}`.trim(),
-        result.cost
-      );
-    }
-
     return this.#record(
       pubkey,
       policy,
       'extended',
-      `One interval bought for ${result.cost ?? price} base units; this lease is now paid to ` +
-        `${new Date(result.expiresAt * 1000).toISOString()}.`,
-      result.cost ?? price
+      `${bought.length} of this workload's ${card.set.members} member(s) extended for ` +
+        `${spent.toString()} base units.` +
+        (bookedAll && waiting.length === 0 ? '' : ` ${waiting.join(' ')}`),
+      spent.toString(),
+      bought
     );
   }
 
@@ -552,13 +629,15 @@ export class AutoExtender implements AutoExtendReader {
     policy: AutoExtendPolicy,
     outcome: AutoExtendRun['outcome'],
     reason: string,
-    cost?: string
+    cost?: string,
+    members?: readonly string[]
   ): AutoExtendRun {
     const run: AutoExtendRun = {
       at: this.#at().toISOString(),
       outcome,
       reason,
       ...(cost === undefined ? {} : { cost }),
+      ...(members === undefined ? {} : { members }),
     };
     const spent =
       cost === undefined || !isAmount(cost)
@@ -567,7 +646,7 @@ export class AutoExtender implements AutoExtendReader {
     this.#deps.store.save(pubkey, {
       ...policy,
       spent,
-      extensions: policy.extensions + (outcome === 'extended' ? 1 : 0),
+      extensions: policy.extensions + (outcome === 'extended' ? (members?.length ?? 1) : 0),
       armed: outcome === 'stopped' ? false : policy.armed,
       ...(outcome === 'stopped' ? { stoppedBecause: reason } : {}),
       lastRun: run,
@@ -613,6 +692,18 @@ export function leadFor(asked: number | undefined, leaseIntervalSeconds: number)
       ? Math.max(60, Math.floor(ceiling / 4))
       : Math.floor(asked);
   return Math.min(ceiling, Math.max(60, wanted));
+}
+
+/** What a part-finished round has cost so far, when every part reported one. */
+function totalOf(costs: readonly (string | undefined)[], already: bigint): string | undefined {
+  let sum = already;
+  let seen = already > 0n;
+  for (const cost of costs) {
+    if (cost === undefined || !/^\d+$/u.test(cost)) continue;
+    sum += BigInt(cost);
+    seen = true;
+  }
+  return seen ? sum.toString() : undefined;
 }
 
 function viewOf(policy: AutoExtendPolicy): AutoExtendView {

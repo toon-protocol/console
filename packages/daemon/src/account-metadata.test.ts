@@ -17,7 +17,12 @@ const account = fakeProvider('the-account');
 const stranger = fakeProvider('somebody-else');
 
 function metadata(who: FakeProvider, content: unknown, createdAt = 1_000): NostrEvent {
-  return sign(who, { kind: 0, created_at: createdAt, tags: [], content: JSON.stringify(content) });
+  return sign(who, {
+    kind: 0,
+    created_at: createdAt,
+    tags: [],
+    content: JSON.stringify(content),
+  });
 }
 
 function relayList(who: FakeProvider, tags: string[][], createdAt = 1_000): NostrEvent {

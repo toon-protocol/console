@@ -43,8 +43,13 @@ export interface WorkloadsState {
     { kind: 'extend'; result: ExtendResult } | { kind: 'terminate'; result: TerminateResult };
   reload(options?: { refresh?: boolean }): void;
   refresh(): void;
-  extend(workloadId: string, maxPrice?: string): Promise<ExtendResult | undefined>;
-  terminate(workloadId: string): Promise<TerminateResult | undefined>;
+  /** `member` names which of the Standby Set to extend; without it, the primary. */
+  extend(
+    workloadId: string,
+    maxPrice?: string,
+    member?: string
+  ): Promise<ExtendResult | undefined>;
+  terminate(workloadId: string, member?: string): Promise<TerminateResult | undefined>;
   arm(
     workloadId: string,
     request: { budget: string; agreedPrice: string; leadSeconds?: number }
@@ -149,12 +154,12 @@ export function useWorkloads(
   );
 
   const extend = useCallback(
-    (workloadId: string, maxPrice?: string) =>
+    (workloadId: string, maxPrice?: string, member?: string) =>
       withBusy(workloadId, async () => {
-        const result = await daemon.extendWorkload(
-          workloadId,
-          maxPrice === undefined ? {} : { maxPrice }
-        );
+        const result = await daemon.extendWorkload(workloadId, {
+          ...(maxPrice === undefined ? {} : { maxPrice }),
+          ...(member === undefined ? {} : { member }),
+        });
         if (alive.current) {
           replace(result.card);
           setLastAction({ kind: 'extend', result });
@@ -165,9 +170,12 @@ export function useWorkloads(
   );
 
   const terminate = useCallback(
-    (workloadId: string) =>
+    (workloadId: string, member?: string) =>
       withBusy(workloadId, async () => {
-        const result = await daemon.terminateWorkload(workloadId);
+        const result = await daemon.terminateWorkload(
+          workloadId,
+          member === undefined ? {} : { member }
+        );
         if (alive.current) {
           replace(result.card);
           setLastAction({ kind: 'terminate', result });

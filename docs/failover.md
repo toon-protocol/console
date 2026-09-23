@@ -19,13 +19,27 @@ A **Warm Standby** is a provider holding capacity to take over your workload if 
 provider running it goes silent. What it holds is a **Reservation**: capacity that is paid
 for and on which nothing runs until takeover.
 
-You pay for a standby. It is an ordinary lease on an ordinary listing, at that listing's
-ordinary price. A standby on `basic` costs the same 1000 µUSDC an hour as the primary,
-because the provider really is holding the resources.
+You pay for a standby, and at its own price. A listing that sells warm standbys publishes a
+second figure beside its ordinary one — devnet's `basic` is 1000 µUSDC an hour to run and
+400 µUSDC an hour to stand by — and a listing that publishes no such figure sells no
+standby at all. The Console offers you only the tiers that do.
 
-In the Console, standbys are a toggle on a workload, not a separate thing to manage. Add
-one, pick a listing on another provider, and the card starts showing two leases where it
-showed one.
+A reservation is extended on its own route too, at the standby price, and the Console picks
+that route from what the lease **is** rather than from what it was bought as. That matters
+because getting it wrong costs money: a provider refuses a reservation extended like a
+running lease, and a refusal is an answer it charges for. After a takeover the member that
+won is a running lease from that moment, so it is extended at the running price — winning
+buys no time.
+
+In the Console, standbys are part of the "New workload" form, not a separate thing to
+manage. Add one, pick another provider and a tier that prices a standby, and the card shows
+every member of the set: what each is doing, what keeps each alive, and which one the
+workload is actually on. Your **runway** is then the set's, not the primary's — a set
+protects a workload only while every member is paid, so the figure is bounded by whichever
+member runs out first, and the Console names it.
+
+Membership is fixed once the set exists. Changing it means spawning again under a new
+workload id.
 
 ## What triggers a takeover
 
@@ -83,11 +97,24 @@ Gateway](gateways) resolves your workload id rather than an address, so the host
 follows the workload across the takeover. Without a gateway, you find the new address in
 the Console and tell your clients yourself.
 
+## Telling a self-stop from an expiry
+
+These look alike at a glance and are not alike at all, so the Console keeps them apart in
+words.
+
+A **self-stopped** primary still holds its lease. It is paid to its expiry, it still holds
+its capacity, and it can still be extended at the running price — it simply is not running
+your workload, because it gave up the workload rather than risk running beside the standby
+that took over. An **expired** lease is over: nobody paid for another interval, there is no
+grace period, and nothing restarts it. A new workload is a new spawn.
+
 ## What to expect on devnet
 
-Devnet has one provider today. You can see the mechanism in the Console — the standby
-toggle, the set, the liveness countdown — but you need a second provider to see a real
-takeover. Running one is [next on the roadmap](spec) for the Console itself.
+Devnet has one provider today. You can see the mechanism in the Console — the tier's
+standby price, the set as the form builds it, the liveness countdown — but a Standby Set
+needs a second provider, and a real takeover needs one too. Running one is [next on the
+roadmap](spec) for the Console itself. Against the local docker sandbox, which has two
+providers, the whole thing works end to end.
 
 ## Next
 

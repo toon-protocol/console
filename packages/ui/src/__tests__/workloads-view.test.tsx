@@ -150,6 +150,29 @@ const vaultWithLease: LeaseVaultStatus = {
       workloadId: WORKLOAD,
       state: 'live',
       standbySet: [PROVIDER],
+      members: [
+        {
+          pubkey: PROVIDER,
+          index: 0,
+          role: 'standalone',
+          provider: {
+            pubkey: PROVIDER,
+            ilp_address: 'g.toon.provider',
+            connector_url: 'https://provider.test/ilp',
+            connector_seal_key: '0x04aa',
+          },
+          listing: {
+            name: 'basic',
+            version: 1,
+            address: `30432:${PROVIDER}:basic`,
+            lease_interval_s: 3600,
+            price: 1000,
+          },
+          paidAt: 'https://provider.test/ilp',
+          state: 'live',
+          known: true,
+        },
+      ],
       provider: {
         pubkey: PROVIDER,
         ilp_address: 'g.toon.provider',

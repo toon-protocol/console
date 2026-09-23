@@ -17,11 +17,14 @@ import {
   type LeaseAccess,
   type LeaseVault,
   type LeaseView,
+  type MemberState,
   type VaultedLease,
+  type VaultedMember,
 } from './lease-vault.js';
 import type { ConsolePaths } from './paths.js';
 import { isConfigured, type NetworkProfile } from './profiles.js';
 import type { RelayWriteTargets } from './relay-write.js';
+import { checkStandbySet } from './standby-set.js';
 import {
   buildSpawnContent,
   DIGEST,
@@ -303,6 +306,86 @@ export interface SpawnResult {
   readonly confirmationFailed?: string | undefined;
 }
 
+/* -------------------------------------------------------------------------- */
+/* A Standby Set (spec §7, TOON_Network#95)                                   */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * One Warm Standby, and the tier its reservation is bought on.
+ *
+ * A member names its OWN Listing, because a Standby Set is several providers
+ * and nothing makes two of them publish the same tier at the same version or
+ * the same price. What they must share is the workload id and the membership
+ * list; everything about how each one is bought is its own (§7).
+ */
+export interface StandbyMemberRequest {
+  readonly provider: string;
+  /** The Listing's `d` name, or its `30432:<pubkey>:<name>` address. */
+  readonly listing: string;
+  readonly listingVersion?: number | undefined;
+  readonly chain?: string | undefined;
+}
+
+/**
+ * A spawn that buys a primary lease AND its Warm Standbys, under one workload
+ * id.
+ *
+ * `provider` and `listing` are the PRIMARY's — `standby_set[0]`, bought on
+ * `.spawn` at the listing's price — and `standbys` are the rest of the set in
+ * the order they would take the workload over, each bought on `.standby` at
+ * its own tier's `standby_price` (§5, §7).
+ */
+export interface StandbySetSpawnRequest extends SpawnRequest {
+  readonly standbys: readonly StandbyMemberRequest[];
+}
+
+export interface MemberPlanView {
+  readonly pubkey: string;
+  readonly index: number;
+  readonly role: 'primary' | 'standby';
+  /** Exactly what a single spawn's preflight says, for this member alone. */
+  readonly view: PreflightView;
+}
+
+export interface StandbySetPreflightView {
+  readonly ok: boolean;
+  /** Wrong with the SET rather than with a member: §6.2 step 3's rules. */
+  readonly problems: readonly string[];
+  /** The one id every member's spawn will carry (§7). */
+  readonly workloadId?: string | undefined;
+  readonly members: readonly MemberPlanView[];
+  /** What the whole set costs to spawn, base units, when every member quoted. */
+  readonly cost?: string | undefined;
+  readonly vault: PreflightView['vault'];
+}
+
+export interface MemberSpawnResult {
+  readonly pubkey: string;
+  readonly index: number;
+  readonly role: 'primary' | 'standby';
+  readonly route?: string | undefined;
+  /** `false` when nothing left this console for this member. */
+  readonly sent: boolean;
+  readonly ok: boolean;
+  /** What this member's spawn cost. Present on a refusal too (ADR 0003). */
+  readonly cost?: string | undefined;
+  readonly expiresAt?: number | undefined;
+  /** Absent for a standby until a Takeover — nothing runs for a reservation. */
+  readonly access?: LeaseAccess | undefined;
+  readonly providerError?: string | undefined;
+  readonly message?: string | undefined;
+}
+
+export interface StandbySetResult {
+  readonly lease?: LeaseView | undefined;
+  readonly preflight: StandbySetPreflightView;
+  /** One per member, in `standby_set` order. A refusal is reported, not thrown. */
+  readonly members: readonly MemberSpawnResult[];
+  /** What the whole set cost, base units, when every member reported. */
+  readonly cost?: string | undefined;
+  readonly confirmationFailed?: string | undefined;
+}
+
 export interface LeaseStoreDeps {
   readonly profile: () => NetworkProfile;
   readonly vault: LeaseVault;
@@ -332,6 +415,15 @@ interface Selection {
   readonly localOnly: boolean;
   /** The settlement chain to pay on, when the caller named one. */
   readonly chain?: string | undefined;
+  /**
+   * Which of §5's two spawn routes this member's request is paid on.
+   *
+   * `spawn` for a standalone lease and for index 0 of a Standby Set; `standby`
+   * for every other index. It is not a preference: §6.2 step 3 refuses a
+   * primary's spawn that arrives on `.standby` and a standby's that arrives on
+   * `.spawn`, as `invalid_request`, after billing.
+   */
+  readonly route?: 'spawn' | 'standby' | undefined;
 }
 
 export class LeaseStore {
@@ -397,6 +489,332 @@ export class LeaseStore {
   }
 
   /* ------------------------------------------------------------------------ */
+  /* A Standby Set                                                            */
+  /* ------------------------------------------------------------------------ */
+
+  /**
+   * Everything a Standby Set's spawn would do, with nothing spent (§7).
+   *
+   * A set costs an interval at every member, so the case for a free preflight
+   * is N times the case for a single spawn's: a `standby_set` that names a
+   * provider twice, or a member whose tier prices no Warm Standby, is
+   * `invalid_request` or `wrong_listing_version` at EVERY member it was sent
+   * to — each refusal billed at that member's own price (ADR 0003,
+   * TOON_Network#115).
+   */
+  async preflightSet(request: StandbySetSpawnRequest): Promise<StandbySetPreflightView> {
+    return (await this.#planSet(request)).view;
+  }
+
+  /**
+   * Buy a primary lease and its Warm Standbys under one workload id (§7).
+   *
+   * The order is the whole of the method, and each step is there because of
+   * what the previous one costs.
+   *
+   * 1. **Plan every member, send nothing.** A set whose third member is
+   *    mis-addressed must not have bought the first two.
+   * 2. **Vault the Root Secret first**, naming the whole set (ADR 0021,
+   *    §6.1.1). One record, one secret, one paid write — a token per member is
+   *    DERIVED from it and never stored.
+   * 3. **The primary's `.spawn` at `price`.** If it is definitively refused,
+   *    nothing else is sent and the record is taken back: reservations for a
+   *    workload that never started protect nothing and cost `standby_price`
+   *    each.
+   * 4. **Each standby's `.standby` at `standby_price`**, in its own request,
+   *    naming only that member and presenting only that member's Continuation
+   *    Token (§7). A standby that refuses does NOT stop the others and does
+   *    NOT take the record back: the primary's lease is real, the remaining
+   *    standbys are real, and the account paid for the refusal.
+   * 5. **One confirmation write** for the whole set.
+   *
+   * @throws {LeaseError} before anything is paid, or when the PRIMARY's spawn
+   *   failed — in which case the set does not exist.
+   */
+  async spawnSet(request: StandbySetSpawnRequest): Promise<StandbySetResult> {
+    const planned = await this.#planSet(request);
+    const { view } = planned;
+    if (!view.ok || planned.members.length === 0) {
+      const problems = [
+        ...view.problems,
+        ...view.members.flatMap((member) =>
+          member.view.problems.map(
+            (problem) => `${member.pubkey.slice(0, 12)}… (${member.role}): ${problem}`
+          )
+        ),
+      ];
+      throw new LeaseError(
+        problems.some((problem) => problem.includes('No payment channel'))
+          ? 'no_channel'
+          : 'invalid_request',
+        `This Standby Set was not spawned, and nothing was paid. ${problems.join(' ')}`,
+        problems.some((problem) => problem.includes('No payment channel')) ? 409 : 400
+      );
+    }
+
+    const localOnly = request.localOnly === true;
+    const first = planned.members[0];
+    if (first === undefined) throw new LeaseError('invalid_request', 'No members.');
+    const rootSecret = mintRootSecret();
+    const record: VaultedLease = {
+      v: 1,
+      state: 'spawning',
+      workload_id: first.ready.content.workload_id,
+      root_secret: rootSecret,
+      standby_set: planned.members.map((member) => member.pubkey),
+      members: planned.members.map((member) => memberRecord(member, 'spawning')),
+      provider: providerRecord(first.ready),
+      paid_at: first.ready.payAt,
+      ...(first.ready.chain === undefined ? {} : { paid_chain: first.ready.chain }),
+      listing: listingRecord(first.ready),
+      profile_id: this.#deps.profile().id,
+      image: first.ready.content.image,
+      ports: first.ready.content.ports,
+      env_keys: Object.keys(first.ready.content.env),
+      created_at: this.#at().toISOString(),
+      ...(first.ready.content.template === undefined
+        ? {}
+        : { template: first.ready.content.template }),
+      ...(localOnly ? { local_only: true } : {}),
+    };
+
+    await this.#deps.vault.publish(record).catch((error: unknown) => {
+      if (error instanceof LeaseVaultError) {
+        throw new LeaseError(error.code, error.message, error.status, {
+          ...(error.relays ? { relays: error.relays } : {}),
+        });
+      }
+      throw error;
+    });
+
+    const workloadId = record.workload_id;
+    const results: MemberSpawnResult[] = [];
+    const confirmations: Parameters<LeaseVault['confirmSet']>[1][number][] = [];
+
+    for (const member of planned.members) {
+      const { ready } = member;
+      const body = {
+        request: {
+          request_id: mintRequestId(),
+          op: member.index === 0 ? ('spawn' as const) : ('standby' as const),
+          provider: member.pubkey,
+          expiration: this.#seconds() + REQUEST_TTL_S,
+          // Derived per provider from the ONE Root Secret (§6.1.1), so every
+          // member holds a different token and none can act as the tenant
+          // against another.
+          continuation: continuationFor(rootSecret, member.pubkey),
+          content: ready.content,
+        },
+      };
+
+      let outcome: PacketOutcome;
+      try {
+        outcome = await this.#deps.chainSeed.usePayerKeys((keys) =>
+          this.#deps.provider.send({
+            payAt: ready.payAt,
+            sealTo: ready.sealTo,
+            route: ready.route,
+            body,
+            chainKind: ready.chainKind,
+            rpcUrl: ready.rpcUrl,
+            keys,
+            channelStore: ready.channelStore,
+            ...(this.#deps.timeoutMs === undefined ? {} : { timeoutMs: this.#deps.timeoutMs }),
+          })
+        );
+      } catch (error) {
+        if (member.index === 0) {
+          await this.#deps.vault.retract(
+            workloadId,
+            'the primary’s spawn was never sent: the payer keys could not be borrowed'
+          );
+          throw error;
+        }
+        results.push({
+          pubkey: member.pubkey,
+          index: member.index,
+          role: member.role,
+          route: ready.route,
+          sent: false,
+          ok: false,
+          message: `This reservation was never sent: ${messageOf(error)}`,
+        });
+        confirmations.push({
+          pubkey: member.pubkey,
+          state: 'failed',
+          failed_because: `the reservation was never sent: ${messageOf(error)}`,
+        });
+        continue;
+      }
+
+      const read = readMemberOutcome(outcome, workloadId);
+      results.push({
+        pubkey: member.pubkey,
+        index: member.index,
+        role: member.role,
+        route: ready.route,
+        sent: true,
+        ok: read.ok,
+        ...(read.cost === undefined ? {} : { cost: read.cost }),
+        ...(read.expiresAt === undefined ? {} : { expiresAt: read.expiresAt }),
+        ...(read.access === undefined ? {} : { access: read.access }),
+        ...(read.error === undefined ? {} : { providerError: read.error }),
+        ...(read.message === undefined ? {} : { message: read.message }),
+      });
+
+      if (member.index === 0 && !read.ok) {
+        if (read.definitive) {
+          // The primary did not start, so no reservation is worth buying: a
+          // Warm Standby takes over a workload, and there is none.
+          const taken = await this.#deps.vault.retract(
+            workloadId,
+            `the primary’s spawn was refused: ${read.error ?? 'no answer this console reads'}`
+          );
+          throw new LeaseError(
+            'spawn_refused',
+            `The primary of this Standby Set refused the spawn: ${read.error ?? 'unreadable answer'}. ` +
+              `${read.message ?? ''} No reservation was bought — a Warm Standby holds capacity ` +
+              `for a workload, and there is none. The lease record was taken back.` +
+              (taken.retracted
+                ? ''
+                : ` The record could NOT be taken back: ${taken.reason ?? ''}`) +
+              (read.cost === undefined
+                ? ''
+                : ` It was still billed ${read.cost} base units — a paid route bills for an ` +
+                  `answer, and a refusal is one (ADR 0003, spec §5).`),
+            502,
+            read.error === undefined ? {} : { providerError: read.error }
+          );
+        }
+        // NOT retracted, and no standby bought: a packet nobody reported on
+        // may have started a workload, and its Root Secret is the only thing
+        // that could ever stop it.
+        throw new LeaseError(
+          'spawn_unconfirmed',
+          `The primary's spawn was sent and nothing came back: ${read.message ?? ''} The lease ` +
+            `record is kept, because a workload may be running behind it and its Root Secret is ` +
+            `the only thing that could stop it. No reservation was bought. Ask the primary for ` +
+            `its status — that is free — before spawning again.`,
+          504
+        );
+      }
+
+      confirmations.push({
+        pubkey: member.pubkey,
+        state: read.ok ? ('live' as MemberState) : ('failed' as MemberState),
+        ...(read.role === undefined ? {} : { role: read.role }),
+        ...(read.expiresAt === undefined ? {} : { expires_at: read.expiresAt }),
+        ...(read.access === undefined ? {} : { access: read.access }),
+        ...(read.ok
+          ? {}
+          : {
+              failed_because:
+                read.error ?? 'the provider’s answer was not one this console reads',
+            }),
+      });
+    }
+
+    const confirmed = await this.#deps.vault.confirmSet(workloadId, confirmations);
+    const lease = this.#deps.vault.find(workloadId);
+    return {
+      ...(lease === undefined ? {} : { lease }),
+      preflight: view,
+      members: results,
+      ...optionalCost(results.map((member) => member.cost)),
+      ...(confirmed.confirmed ? {} : { confirmationFailed: confirmed.reason ?? 'unknown' }),
+    };
+  }
+
+  /** Every member's plan, and the set's own problems. Sends nothing. */
+  async #planSet(request: StandbySetSpawnRequest): Promise<{
+    view: StandbySetPreflightView;
+    members: readonly (MemberPlanView & { ready: ReadyPlan })[];
+  }> {
+    const setProblems: string[] = [];
+    const seats: readonly StandbyMemberRequest[] = [
+      { provider: request.provider, listing: request.listing, chain: request.chain },
+      ...request.standbys,
+    ];
+    const pubkeys = seats.map((seat) => seat.provider);
+    setProblems.push(...checkStandbySet(pubkeys));
+
+    const targets = await this.#deps.vault.targets();
+    const vault = { localOnly: request.localOnly === true, writes: targets };
+
+    const views: MemberPlanView[] = [];
+    const ready: (MemberPlanView & { ready: ReadyPlan })[] = [];
+    for (const [index, seat] of seats.entries()) {
+      const problems: string[] = [];
+      // ONE content, built once and checked against each member's own Listing
+      // — because §7 sends the same content to every member, and a volume that
+      // fits one provider's tier need not fit another's.
+      const content = manualContent(
+        { ...request, workloadId: request.workloadId ?? undefined },
+        problems
+      );
+      const withSet =
+        content === undefined
+          ? undefined
+          : ({ ...content, standby_set: pubkeys } as SpawnContent);
+      const plan = await this.#plan(
+        {
+          provider: seat.provider,
+          listing: seat.listing,
+          localOnly: request.localOnly === true,
+          route: index === 0 ? 'spawn' : 'standby',
+          ...(seat.chain === undefined ? {} : { chain: seat.chain }),
+          ...(seat.listingVersion === undefined
+            ? {}
+            : { listingVersion: seat.listingVersion }),
+        },
+        withSet,
+        problems
+      );
+      const role = index === 0 ? ('primary' as const) : ('standby' as const);
+      const entry: MemberPlanView = {
+        pubkey: seat.provider,
+        index,
+        role,
+        view: plan.view,
+      };
+      views.push(entry);
+      if (plan.ready !== undefined && plan.view.ok) {
+        ready.push({ ...entry, ready: plan.ready });
+      }
+    }
+
+    // ONE workload id for the whole set (§7), and it is the FIRST member's:
+    // every member's content is built from the same request, so they agree
+    // unless the caller fixed one — in which case they agree on that.
+    const workloadId = ready[0]?.ready.content.workload_id;
+    const spread = ready.map((member) => ({
+      ...member,
+      ready: {
+        ...member.ready,
+        content: { ...member.ready.content, workload_id: workloadId } as SpawnContent,
+      },
+    }));
+
+    const ok =
+      setProblems.length === 0 &&
+      views.length === seats.length &&
+      views.every((member) => member.view.ok) &&
+      spread.length === seats.length;
+
+    return {
+      view: {
+        ok,
+        problems: setProblems,
+        ...(workloadId === undefined ? {} : { workloadId }),
+        members: views,
+        ...optionalCost(views.map((member) => member.view.payment?.routePrice)),
+        vault,
+      },
+      members: ok ? spread : [],
+    };
+  }
+
+  /* ------------------------------------------------------------------------ */
 
   async #buy(plan: Plan, localOnly: boolean): Promise<SpawnResult> {
     if (!plan.ready) {
@@ -412,29 +830,46 @@ export class LeaseStore {
     }
 
     const { ready } = plan;
+    const set = ready.content.standby_set ?? [ready.provider.pubkey];
+    if (set.length > 1) {
+      // §7: every member of a Standby Set needs its own request, on its own
+      // route, with its own Continuation Token. This path buys ONE. Selling a
+      // person a primary lease and calling it a Standby Set would leave them
+      // paying for a set that protects nothing, so the answer is no — before
+      // anything is paid.
+      throw new LeaseError(
+        'standby_set_unbought',
+        `This spawn names a Standby Set of ${set.length} members but buys one lease. Every ` +
+          `member is spawned in a request of its own — the primary on \`.spawn\` at the ` +
+          `listing's price, each Warm Standby on \`.standby\` at its \`standby_price\` (§7) — ` +
+          `so spawn the set as a set. Nothing was sent and nothing was paid.`
+      );
+    }
     const rootSecret = mintRootSecret();
     const record: VaultedLease = {
       v: 1,
       state: 'spawning',
       workload_id: ready.content.workload_id,
       root_secret: rootSecret,
-      standby_set: ready.content.standby_set ?? [ready.provider.pubkey],
-      provider: {
-        pubkey: ready.provider.pubkey,
-        ilp_address: ready.provider.profile.ilpAddress,
-        connector_url: ready.provider.profile.connectorUrl,
-        connector_seal_key: ready.provider.profile.connectorSealKey,
-        ...(ready.provider.profile.hidden ? { hidden: true } : {}),
-      },
+      standby_set: set,
+      members: [
+        {
+          pubkey: ready.provider.pubkey,
+          index: 0,
+          ilp_address: ready.provider.profile.ilpAddress,
+          connector_url: ready.provider.profile.connectorUrl,
+          connector_seal_key: ready.provider.profile.connectorSealKey,
+          ...(ready.provider.profile.hidden ? { hidden: true } : {}),
+          listing: listingRecord(ready),
+          paid_at: ready.payAt,
+          ...(ready.chain === undefined ? {} : { paid_chain: ready.chain }),
+          state: 'spawning',
+        },
+      ],
+      provider: providerRecord(ready),
       paid_at: ready.payAt,
       ...(ready.chain === undefined ? {} : { paid_chain: ready.chain }),
-      listing: {
-        name: ready.listing.name,
-        version: ready.listing.version,
-        address: ready.listing.address,
-        lease_interval_s: ready.listing.leaseIntervalSeconds,
-        price: ready.listing.price,
-      },
+      listing: listingRecord(ready),
       profile_id: this.#deps.profile().id,
       image: ready.content.image,
       ports: ready.content.ports,
@@ -719,7 +1154,23 @@ export class LeaseStore {
       }
     }
 
-    const route = `${provider.profile.ilpAddress}.${listing.name}.v${listing.version}.spawn`;
+    // §6.2 step 2: a `.standby` route exists for exactly the listings whose
+    // Listing event carries `standby_price` (§4.2, §5). A tier that prices no
+    // Warm Standby sells none, and a connector MUST NOT terminate a route the
+    // provider did not price — so a `.standby` spawn on one is refused
+    // `wrong_listing_version`, and billed. Caught here, where it is free.
+    const op = selection.route ?? 'spawn';
+    if (op === 'standby' && listing.standbyPrice === undefined) {
+      problems.push(
+        `${JSON.stringify(listing.name)} v${listing.version} prices no Warm Standby, so this ` +
+          `provider sells none on it and its connector terminates no \`.standby\` route at ` +
+          `all (§4.2, §5). A reservation bought there is refused \`wrong_listing_version\` — ` +
+          `and billed. Choose a tier this provider publishes a \`standby_price\` for.`
+      );
+      return unready();
+    }
+
+    const route = `${provider.profile.ilpAddress}.${listing.name}.v${listing.version}.${op}`;
     const payment = await this.#payment(profile, provider, route, selection, problems);
 
     const view: PreflightView = {
@@ -971,6 +1422,130 @@ interface Plan {
   readonly ready?: ReadyPlan | undefined;
 }
 
+function providerRecord(ready: ReadyPlan): VaultedLease['provider'] {
+  return {
+    pubkey: ready.provider.pubkey,
+    ilp_address: ready.provider.profile.ilpAddress,
+    connector_url: ready.provider.profile.connectorUrl,
+    connector_seal_key: ready.provider.profile.connectorSealKey,
+    ...(ready.provider.profile.hidden ? { hidden: true } : {}),
+  };
+}
+
+function listingRecord(ready: ReadyPlan): VaultedLease['listing'] {
+  return {
+    name: ready.listing.name,
+    version: ready.listing.version,
+    address: ready.listing.address,
+    lease_interval_s: ready.listing.leaseIntervalSeconds,
+    price: ready.listing.price,
+  };
+}
+
+function memberRecord(
+  member: MemberPlanView & { ready: ReadyPlan },
+  state: MemberState
+): VaultedMember {
+  const { ready } = member;
+  return {
+    pubkey: member.pubkey,
+    index: member.index,
+    ilp_address: ready.provider.profile.ilpAddress,
+    connector_url: ready.provider.profile.connectorUrl,
+    connector_seal_key: ready.provider.profile.connectorSealKey,
+    ...(ready.provider.profile.hidden ? { hidden: true } : {}),
+    listing: listingRecord(ready),
+    paid_at: ready.payAt,
+    ...(ready.chain === undefined ? {} : { paid_chain: ready.chain }),
+    state,
+  };
+}
+
+/**
+ * One member's spawn outcome, in the two halves a caller has to tell apart.
+ *
+ * `definitive` is the whole point. A provider that answered — with a lease or
+ * with a refusal — has DECIDED, so a lease that did not start definitely did
+ * not start and the record may be taken back. A packet nobody reported on has
+ * decided nothing, and a Root Secret dropped behind one is a workload nobody
+ * can ever stop.
+ */
+function readMemberOutcome(
+  outcome: PacketOutcome,
+  workloadId: string
+): {
+  ok: boolean;
+  definitive: boolean;
+  cost?: string;
+  role?: string;
+  expiresAt?: number;
+  access?: LeaseAccess;
+  error?: string;
+  message?: string;
+} {
+  if (outcome.kind === 'unknown') {
+    return { ok: false, definitive: false, message: outcome.message };
+  }
+  if (outcome.kind === 'refused') {
+    return {
+      ok: false,
+      definitive: true,
+      ...(outcome.cost === undefined ? {} : { cost: outcome.cost }),
+      error: outcome.code,
+      message: describeRefusal(outcome),
+    };
+  }
+  const answered = readSpawnAnswer(outcome.body);
+  const cost = outcome.cost === undefined ? {} : { cost: outcome.cost };
+  if (answered.error !== undefined || outcome.status !== 200) {
+    return {
+      ok: false,
+      definitive: true,
+      ...cost,
+      error: answered.error ?? `HTTP ${outcome.status}`,
+      ...(answered.message === undefined ? {} : { message: answered.message }),
+    };
+  }
+  if (answered.workloadId !== workloadId) {
+    return {
+      ok: false,
+      // NOT definitive: this member answered about a lease this console did
+      // not buy, and something may be running behind it. Its Root Secret must
+      // survive whatever else happens to the set.
+      definitive: false,
+      ...cost,
+      error: 'wrong_workload',
+      message:
+        `This member answered about workload ${answered.workloadId ?? 'nothing'}, not the one ` +
+        `this set asked for.`,
+    };
+  }
+  return {
+    ok: true,
+    definitive: true,
+    ...cost,
+    ...(answered.role === undefined ? {} : { role: answered.role }),
+    ...(answered.expiresAt === undefined ? {} : { expiresAt: answered.expiresAt }),
+    ...(answered.access === undefined ? {} : { access: answered.access }),
+  };
+}
+
+/** The sum, when every part reported one. A missing part means no total. */
+function optionalCost(
+  parts: readonly (string | undefined)[]
+): { cost: string } | Record<string, never> {
+  let sum = 0n;
+  for (const part of parts) {
+    if (part === undefined) return {};
+    try {
+      sum += BigInt(part);
+    } catch {
+      return {};
+    }
+  }
+  return parts.length === 0 ? {} : { cost: sum.toString() };
+}
+
 function selectionOf(request: SpawnRequest): Selection {
   return {
     provider: request.provider,
@@ -1091,13 +1666,11 @@ export function checkContent(
   if (content.standby_set !== undefined) {
     // §6.2 step 3: a `standby_set` present at all makes this a set member's
     // spawn, and every other member needs its own `.standby` request with its
-    // own token (§7). Buying the primary's lease and leaving the reservations
-    // unbought would be a Standby Set that protects nothing.
-    problems.push(
-      'Warm Standbys are TOON_Network#95. This console can buy the primary’s lease but not ' +
-        'the reservations at the other members of the set, and a half-formed Standby Set ' +
-        'protects nothing while costing an interval at every member (spec §7).'
-    );
+    // own token (§7). The rules a set must satisfy live in `standby-set.ts`;
+    // whether this console is about to buy every member of it is `#buy`'s
+    // business, because a half-formed Standby Set protects nothing while
+    // costing an interval at every member it did reach.
+    problems.push(...checkStandbySet(content.standby_set));
   }
 }
 
@@ -1252,6 +1825,10 @@ export function readSpawnAnswer(body: unknown): {
  */
 export function routeCarries(prefix: string, destination: string): boolean {
   return destination === prefix || destination.startsWith(`${prefix}.`);
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function describeRefusal(outcome: Extract<PacketOutcome, { kind: 'refused' }>): string {
