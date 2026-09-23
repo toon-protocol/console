@@ -76,6 +76,8 @@ describe('the daemon server', () => {
       readHealth: () => Promise.resolve(HEALTHY),
       readDirectory: () =>
         Promise.resolve({ state: 'unconfigured', reason: 'not what this file tests' }),
+      readTemplates: () =>
+        Promise.resolve({ state: 'unconfigured', reason: 'not what this file tests' }),
     };
     running = await startServer({ deps, token: TOKEN, uiRoot, host: '127.0.0.1', port: 0 });
   });

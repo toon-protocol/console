@@ -6,6 +6,7 @@ import { useChainSeed } from '@/hooks/use-chain-seed';
 import { useConsole } from '@/hooks/use-console';
 import { useDirectory } from '@/hooks/use-directory';
 import { useFunding } from '@/hooks/use-funding';
+import { useTemplates } from '@/hooks/use-templates';
 
 import { AccountCard, AccountChip } from './account-view';
 import { ChainSeedCard } from './chain-seed-view';
@@ -14,13 +15,19 @@ import { FundingView } from './funding-view';
 import { HealthView } from './health-view';
 import { ProfileSwitcher } from './profile-switcher';
 import { SignInView } from './sign-in-view';
+import { TemplatesView } from './templates-view';
 
 /**
  * The shell.
  *
- * Four views now — health (#87), the Provider Directory (#91), the Account
- * (#88, with its Chain Seed from #89) and Funds (#90) — behind the header that
- * will carry the workload dashboard (#93 onward).
+ * Five views now — health (#87), the Provider Directory (#91), Templates (#94),
+ * the Account (#88, with its Chain Seed from #89) and Funds (#90) — behind the
+ * header that will carry the workload dashboard (#93 onward).
+ *
+ * Templates sits beside Providers rather than inside it, because the two
+ * answer different questions: a Listing is WHERE a workload runs and what it
+ * costs, a Template is WHAT runs and what may be set about it. Neither knows
+ * about the other until a spawn puts them together (#92).
  *
  * Funds is the one view that is USELESS without an account, and it says so
  * rather than being hidden: a person deciding whether this is worth an account
@@ -38,11 +45,12 @@ import { SignInView } from './sign-in-view';
  * daemon holds, so the daemon is the only thing that knows.
  */
 
-type Tab = 'health' | 'directory' | 'account' | 'funds';
+type Tab = 'health' | 'directory' | 'templates' | 'account' | 'funds';
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'health', label: 'Health' },
   { id: 'directory', label: 'Providers' },
+  { id: 'templates', label: 'Templates' },
   { id: 'funds', label: 'Funds' },
   { id: 'account', label: 'Account' },
 ];
@@ -54,6 +62,12 @@ export function ConsoleApp() {
   // another relay and another set of providers.
   const directory = useDirectory({
     active: tab === 'directory',
+    ...(health === undefined ? {} : { profileId: health.profile.id }),
+  });
+  // Keyed to the profile for the same reason the directory is: Templates are
+  // published to a network's relays, and another network has other publishers.
+  const templates = useTemplates({
+    active: tab === 'templates',
     ...(health === undefined ? {} : { profileId: health.profile.id }),
   });
   const account = useAccount();
@@ -117,7 +131,7 @@ export function ConsoleApp() {
             role="alert"
             className="border-destructive/40 bg-destructive/10 text-destructive space-y-1 rounded-lg border px-4 py-3 text-sm"
           >
-            {[error, directory.error, account.error]
+            {[error, directory.error, templates.error, account.error]
               .filter((message): message is string => Boolean(message))
               .filter((message, at, all) => all.indexOf(message) === at)
               .map((message) => (
@@ -138,6 +152,8 @@ export function ConsoleApp() {
           ) : (
             <SignInView account={account} />
           ))
+        ) : tab === 'templates' ? (
+          <TemplatesView templates={templates} />
         ) : tab === 'directory' ? (
           <DirectoryView
             {...(directory.directory === undefined ? {} : { directory: directory.directory })}

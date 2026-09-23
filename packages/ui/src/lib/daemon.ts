@@ -169,6 +169,146 @@ export type Directory =
   | { state: 'unconfigured'; reason: string };
 
 /**
+ * The Template gallery (TOON_Network#94, spec §8.3).
+ *
+ * The same hand-kept mirror as the directory above. Two things about this one
+ * are worth saying out loud, because the window is where they could go wrong:
+ *
+ * A Template GRANTS NO CAPABILITY (ADR 0004), so there is no field for one
+ * here and there must never be. What a lease may do comes from its Listing.
+ *
+ * And the window does not expand a Template. It posts which Template and what
+ * the person typed, and the daemon — which re-reads the publisher's signed
+ * event — decides what is settable and builds the spawn. That is why
+ * `ExpandedTemplate` comes back rather than being assembled here: the
+ * "tenant-settable only" rule has to be enforced somewhere a stale tab cannot
+ * reach.
+ */
+
+export interface TemplatePort {
+  containerPort: number;
+  protocol: 'tcp' | 'udp';
+}
+
+export interface TemplateResources {
+  cpuMillicores: number;
+  memoryMb: number;
+  storageGb: number;
+  gpu?: string;
+}
+
+export interface ImageBlob {
+  digest: string;
+  size: number;
+  mediaType: string;
+  source:
+    | { type: 'toon-store'; blobRecordTxid: string }
+    | { type: 'oci'; registry: string; repository: string };
+}
+
+export interface ImageEntryView {
+  address: string;
+  /** `<publisher npub>/<name>:<tag>`, §8.1's canonical name for the image. */
+  canonicalName: string;
+  digest: string;
+  mediaType: string;
+  blobs: ImageBlob[];
+  signer: string;
+  publishedAt: string;
+  eventId: string;
+}
+
+export interface BlobRecordView {
+  digest: string;
+  size: number;
+  partSize: number;
+  shape: 'inline' | 'paged';
+  parts: number;
+  publishedAt: string;
+  eventId: string;
+  signer: string;
+}
+
+export type TemplateAvailability =
+  | {
+      state: 'available';
+      /** What was checked — records, not bytes. Shown, so it cannot overclaim. */
+      checked: string;
+      entry?: ImageEntryView;
+      blobRecord?: BlobRecordView;
+    }
+  | { state: 'unavailable'; reason: string };
+
+export interface PublisherView {
+  pubkey: string;
+  npub: string;
+  name?: string;
+  displayName?: string;
+  picture?: string;
+  nip05?: string;
+}
+
+export interface TemplateView {
+  name: string;
+  address: string;
+  publisher: PublisherView;
+  version: number;
+  image: { digest: string; registryEntry?: { address: string; relay?: string } };
+  ports: TemplatePort[];
+  dataPath?: string;
+  envFixed: Record<string, string>;
+  envTenant: string[];
+  minResources?: TemplateResources;
+  availability: TemplateAvailability;
+  warnings: string[];
+  publishedAt: string;
+  eventId: string;
+}
+
+export type TemplateGallery =
+  | {
+      state: 'ok';
+      relays: { seed: string[]; read: RelayOutcome[] };
+      templates: TemplateView[];
+      rejected: { address: string; name: string; reason: string }[];
+      rejectedEvents: number;
+      readAt: string;
+    }
+  | { state: 'unconfigured'; reason: string };
+
+/** §6.2's spawn content, in the wire's own spelling. Never rewritten here. */
+export interface SpawnContent {
+  workload_id: string;
+  image: {
+    digest: string;
+    reference?: string;
+    registry_entry?: { address: string; relay?: string };
+  };
+  env: Record<string, string>;
+  ports: { container_port: number; protocol: 'tcp' | 'udp' }[];
+  volume_gb?: number;
+  ssh_public_key: string;
+  entrypoint?: string[];
+  args?: string[];
+  standby_set?: string[];
+  template?: string;
+}
+
+export interface ExpandedTemplate {
+  template: string;
+  spawn: SpawnContent;
+  warnings: string[];
+}
+
+export interface TemplateSettings {
+  env?: Record<string, string>;
+  sshPublicKey: string;
+  volumeGb?: number;
+  workloadId?: string;
+  standbySet?: string[];
+}
+
+/**
  * The Account, its Signer and the local keystore (TOON_Network#88).
  *
  * Note what is NOT here and never will be: an nsec, a mnemonic, a passphrase
@@ -497,6 +637,16 @@ export const daemon = {
     call<Profiles>('/api/profiles/active', { method: 'POST', body: JSON.stringify({ id }) }),
   directory: (filters: DirectoryFilters = {}) =>
     call<Directory>(`/api/directory${directoryQuery(filters)}`),
+
+  templates: () => call<TemplateGallery>('/api/templates'),
+  /**
+   * Expands a Template and spends NOTHING. The answer is the §6.2 content a
+   * spawn would carry, so a person can read what they are about to buy before
+   * anything is bought — and so a window can show that it really is the same
+   * request a manual spawn would send.
+   */
+  expandTemplate: (template: string, settings: TemplateSettings) =>
+    post<ExpandedTemplate>('/api/templates/expand', { template, ...settings }),
 
   account: () => call<SessionStatus>('/api/account'),
   addLocalSigner: (request: LocalSignerRequest) =>

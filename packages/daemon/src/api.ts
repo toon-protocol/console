@@ -22,6 +22,13 @@ import { UnknownProfileError, type ProfileStore } from './profile-store.js';
 import { RelayListError, type RelayMode } from './relay-list.js';
 import { RemoteSignerError } from './remote-signer.js';
 import { SealingError } from './signer.js';
+import {
+  expandTemplate,
+  TemplateExpansionError,
+  type TemplateSettings,
+  type TemplateSpawnPort,
+} from './template-spawn.js';
+import type { TemplateGalleryResult, TemplateView } from './templates.js';
 import type { DaemonVersion } from './version.js';
 
 /**
@@ -36,8 +43,9 @@ import type { DaemonVersion } from './version.js';
  * Health, the profile list and the switch came with the skeleton (#87); the
  * Provider Directory joins them here (#91); `/api/account/*` is sign-in (#88):
  * the Account, its Signer and the local keystore. `/api/chain-seed/*` is the
- * Chain Seed (#89), and `/api/funding/*` is deposits, gas, balances and
- * payment channels (#90).
+ * Chain Seed (#89), `/api/funding/*` is deposits, gas, balances and payment
+ * channels (#90), and `/api/templates/*` is the Template gallery and the
+ * expansion a tenant does for itself (#94, spec §8.3).
  *
  * Every route here is already behind the per-launch token — `server.ts` checks
  * it before anything in this file runs — and that matters more now than it did
@@ -65,6 +73,12 @@ export interface ApiDeps {
     profile: NetworkProfile,
     filters: DirectoryFilters
   ) => Promise<DirectoryResult>;
+  readonly readTemplates: (profile: NetworkProfile) => Promise<TemplateGalleryResult>;
+  /**
+   * The paid half of a spawn, which TOON_Network#92 owns. Absent until it is
+   * wired, and `POST /api/templates/spawn` says so rather than pretending.
+   */
+  readonly spawnFromTemplate?: TemplateSpawnPort | undefined;
   readonly now?: (() => Date) | undefined;
 }
 
@@ -121,6 +135,10 @@ export async function handleApi(deps: ApiDeps, request: ApiRequest): Promise<Api
       status: 200,
       body: await deps.readDirectory(deps.profiles.active(), filters.value),
     };
+  }
+
+  if (path === '/api/templates' || path.startsWith('/api/templates/')) {
+    return handleTemplates(deps, method, path, request.body);
   }
 
   if (path === '/api/account' && method === 'GET') {
@@ -397,6 +415,166 @@ async function handleFunding(
   }
 
   return problem(404, 'unknown_route', `No route ${method} ${path}.`);
+}
+
+/**
+ * Templates: the gallery, and expanding one (TOON_Network#94, spec §8.3).
+ *
+ * `GET` is free and needs no account — reading relays costs nothing and a
+ * person deciding what to run should be able to look first, exactly as with
+ * the Provider Directory.
+ *
+ * `POST /expand` is where the acceptance criterion about tenant-settable
+ * settings is actually enforced. It would have been cheaper to let the window
+ * assemble the spawn and post it, and it would have been wrong: the browser
+ * would then be the thing that decides which of a publisher's settings are
+ * fixed, and a stale tab or a scripted caller could set any of them. So the
+ * daemon re-reads the Template from the relays, expands it against what the
+ * publisher signed, and refuses anything else. Nothing about the Template
+ * comes from the request except which one it is.
+ *
+ * `POST /spawn` is the seam for #92. It expands exactly as `/expand` does and
+ * then hands the content to whoever buys the lease; with nobody wired it
+ * answers `501` AND the expansion, so that the half that exists is visible and
+ * testable before the half that pays does.
+ */
+async function handleTemplates(
+  deps: ApiDeps,
+  method: string,
+  path: string,
+  body: unknown
+): Promise<ApiResponse> {
+  if (path === '/api/templates' && method === 'GET') {
+    return ok(await deps.readTemplates(deps.profiles.active()));
+  }
+
+  if (
+    method === 'POST' &&
+    (path === '/api/templates/expand' || path === '/api/templates/spawn')
+  ) {
+    const fields = asRecord(body);
+    const address = string(fields, 'template');
+    if (address === undefined) {
+      return problem(
+        400,
+        'invalid_request',
+        'Body must name the `template` to expand, as its `30436:<pubkey>:<name>` address.'
+      );
+    }
+
+    const settings = readTemplateSettings(fields);
+    if ('error' in settings) return problem(400, 'invalid_request', settings.error);
+
+    const gallery = await deps.readTemplates(deps.profiles.active());
+    if (gallery.state !== 'ok') {
+      return problem(409, 'unconfigured', gallery.reason);
+    }
+    const template = gallery.templates.find(
+      (candidate: TemplateView) => candidate.address === address
+    );
+    if (template === undefined) {
+      return problem(
+        404,
+        'unknown_template',
+        `No Template \`${address}\` was on the relays read. A publisher may have replaced it, ` +
+          'or this network may not carry it.'
+      );
+    }
+
+    let expanded;
+    try {
+      expanded = expandTemplate(template, settings.value);
+    } catch (error) {
+      if (error instanceof TemplateExpansionError) {
+        return problem(error.status, error.code, error.message);
+      }
+      throw error;
+    }
+
+    if (path === '/api/templates/expand') return ok(expanded);
+
+    const listing = string(fields, 'listing');
+    const provider = string(fields, 'provider');
+    const listingVersion = number(fields, 'listingVersion');
+    if (listing === undefined || provider === undefined || listingVersion === undefined) {
+      return problem(
+        400,
+        'invalid_request',
+        'A spawn names the `listing` to buy on, its `listingVersion`, and the `provider` whose ' +
+          'Listing it is (§4.2, §6.1).'
+      );
+    }
+
+    if (deps.spawnFromTemplate === undefined) {
+      // Not an error in the request: the expansion above is complete and
+      // correct, and what is missing is the paid hop (TOON_Network#92).
+      return {
+        status: 501,
+        body: {
+          error: 'spawn_unwired',
+          message:
+            'This console can expand a Template but cannot yet buy a lease: the paid spawn is ' +
+            'TOON_Network#92. The expansion below is what it will be handed.',
+          expansion: expanded,
+        },
+      };
+    }
+
+    return ok(
+      await deps.spawnFromTemplate({
+        template: expanded.template,
+        provider,
+        listing,
+        listingVersion,
+        content: expanded.spawn,
+        ...(fields.localOnly === true ? { localOnly: true } : {}),
+      })
+    );
+  }
+
+  return problem(404, 'unknown_route', `No route ${method} ${path}.`);
+}
+
+/** The half of a spawn a Template leaves to the tenant (§8.3). */
+function readTemplateSettings(
+  fields: Record<string, unknown>
+): { value: TemplateSettings } | { error: string } {
+  const sshPublicKey = string(fields, 'sshPublicKey');
+  if (sshPublicKey === undefined) {
+    return { error: 'Body must carry the tenant’s `sshPublicKey`.' };
+  }
+
+  let env: Record<string, string> | undefined;
+  if (fields.env !== undefined) {
+    const raw = asRecord(fields.env);
+    if (typeof fields.env !== 'object' || fields.env === null || Array.isArray(fields.env)) {
+      return { error: '`env` is an object of names to values.' };
+    }
+    env = {};
+    for (const [name, value] of Object.entries(raw)) {
+      if (typeof value !== 'string') return { error: `\`env.${name}\` must be a string.` };
+      env[name] = value;
+    }
+  }
+
+  const standby = fields.standbySet;
+  let standbySet: string[] | undefined;
+  if (standby !== undefined) {
+    if (!Array.isArray(standby) || standby.some((member) => typeof member !== 'string')) {
+      return { error: '`standbySet` is an array of provider public keys, primary first.' };
+    }
+    standbySet = standby as string[];
+  }
+
+  return {
+    value: {
+      sshPublicKey,
+      ...(env === undefined ? {} : { env }),
+      ...optional('volumeGb', number(fields, 'volumeGb')),
+      ...optional('workloadId', string(fields, 'workloadId')),
+      ...(standbySet === undefined ? {} : { standbySet }),
+    },
+  };
 }
 
 /** `{ "relays": [{ "url": "wss://…", "mode": "read" | "write" | "both" }] }`. */

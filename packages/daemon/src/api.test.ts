@@ -66,6 +66,8 @@ describe('GET /api/directory', () => {
         asked.push(filters);
         return Promise.resolve(EMPTY);
       },
+      readTemplates: () =>
+        Promise.resolve({ state: 'unconfigured', reason: 'not what this file tests' }),
     };
   });
 
