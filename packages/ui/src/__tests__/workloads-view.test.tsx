@@ -132,9 +132,21 @@ const emptyVault: LeaseVaultStatus = {
   leases: [],
   writes: {
     relays: ['wss://own.relay.test'],
+    plan: [
+      {
+        url: 'wss://own.relay.test',
+        ready: true,
+        destination: 'g.toon.relay',
+        payAt: 'https://connector.test/ilp',
+        price: '1',
+        chain: 'evm:84532',
+        channelId: '0xchannel',
+      },
+    ],
     destination: 'g.toon.relay',
     payAt: 'https://connector.test/ilp',
     price: '1',
+    totalPrice: '1',
     chain: 'evm:84532',
     channelId: '0xchannel',
     ready: true,
@@ -237,9 +249,19 @@ const goodPreflight: PreflightView = {
     localOnly: false,
     writes: {
       relays: ['wss://own.relay.test'],
+      plan: [
+        {
+          url: 'wss://own.relay.test',
+          ready: true,
+          destination: 'g.toon.relay',
+          payAt: 'https://connector.test/ilp',
+          price: '1',
+        },
+      ],
       destination: 'g.toon.relay',
       payAt: 'https://connector.test/ilp',
       price: '1',
+      totalPrice: '1',
       chain: 'evm:84532',
       channelId: '0xchannel',
       ready: true,

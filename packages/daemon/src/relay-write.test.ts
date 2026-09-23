@@ -11,10 +11,12 @@ import { connectorHealth, giveChannel } from './lease.testkit.js';
 import type { NostrEvent } from './nostr.js';
 import { consolePaths, type ConsolePaths } from './paths.js';
 import { SANDBOX } from './profiles.js';
+import type { RelayEdgeReading } from './relay-edge.js';
 import {
   PaidRelayWriter,
   RelayWriteError,
   relayWriteDestination,
+  routePriceFor,
   type RelayPacketOutcome,
   type RelayWritePacket,
   type RelayWritePort,
@@ -121,6 +123,10 @@ describe('buying one write', () => {
     new PaidRelayWriter({
       profile: () => SANDBOX,
       readHealth: () => Promise.resolve(health()),
+      // The sandbox relay serves no NIP-11 document — it predates spec §13 —
+      // so the profile's own relay falls back to #120's route. Stubbed rather
+      // than dialled: a unit test must not depend on a relay being up.
+      edges: noDocuments(),
       payerKeys: (use) => use(KEYS),
       paths,
       port,
@@ -341,5 +347,514 @@ describe('buying one write', () => {
     const targets = await writer.targets();
     expect(targets.ready).toBe(false);
     expect(targets.blockedBy).toContain('ECONNREFUSED');
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Writing to every relay an Account named (TOON_Network#121)                 */
+/* -------------------------------------------------------------------------- */
+
+/** An edge reader that answers from a table, and records who it was asked about. */
+function edgesOf(table: Record<string, RelayEdgeReading>) {
+  const asked: string[] = [];
+  return {
+    asked,
+    read(url: string): Promise<RelayEdgeReading> {
+      asked.push(url);
+      const held = table[url];
+      return Promise.resolve(
+        held ?? {
+          state: 'none',
+          url,
+          code: 'no_document',
+          reason: `${url} answered HTTP 426 to a request for its relay information document.`,
+        }
+      );
+    },
+  };
+}
+
+/** Every relay says nothing: what the fleet looked like before spec §13. */
+function noDocuments() {
+  return edgesOf({});
+}
+
+/** One relay's document, in the shape `relay-edge.ts` hands one over. */
+function edgeAt(
+  url: string,
+  edge: {
+    ilpAddress: string;
+    connectorUrl: string;
+    sealKey?: string;
+    carriage?: 'http' | 'btp';
+    price?: string;
+  }
+): RelayEdgeReading {
+  return {
+    state: 'edge',
+    url,
+    edge: {
+      ilpAddress: edge.ilpAddress,
+      connectorUrl: edge.connectorUrl,
+      sealKey: edge.sealKey ?? SEAL_KEY,
+      ...(edge.carriage === undefined ? {} : { carriage: edge.carriage }),
+      price: edge.price ?? '1',
+      settlement: [{ chain: 'evm:31337', token: '0xtoken', decimals: 6 }],
+    },
+    info: { paymentRequired: true, restrictedWrites: true },
+  };
+}
+
+const SEAL_KEY = '0x04915d29908235be4b53f8f23cd7ac72c88c99be3bcca876dadf5c1a449433b8f9';
+const OTHER_KEY = '0x04aaaa29908235be4b53f8f23cd7ac72c88c99be3bcca876dadf5c1a449433b8f9';
+
+/** A second relay, with a connector of its own. */
+const OTHER_RELAY = 'wss://relay.elsewhere.test';
+const OTHER_CONNECTOR = 'https://connector.elsewhere.test/ilp';
+
+describe('writing to every relay an account named', () => {
+  let home: string;
+  let paths: ConsolePaths;
+  let event: NostrEvent;
+
+  /** The profile's connector: terminates `g.toon.relay`, forwards `g.toon`. */
+  const ownConnector = (routes?: readonly { prefix: string; price: string }[]) =>
+    connectorHealth({
+      endpoint: SANDBOX.connectorUrl,
+      ilpAddresses: ['g.toon.relay', 'g.toon.relay.ephemeral'],
+      routes: routes ?? [
+        { prefix: 'g.toon.relay', price: '1' },
+        { prefix: 'g.toon.relay.ephemeral', price: '0' },
+      ],
+      edgeSealKey: SEAL_KEY,
+    });
+
+  const writerWith = (options: {
+    port: ReturnType<typeof fakePort>;
+    edges: ReturnType<typeof edgesOf>;
+    writeRelays?: readonly string[];
+    health?: () => ConnectorHealth;
+    healthAt?: (url: string) => ConnectorHealth;
+  }) =>
+    new PaidRelayWriter({
+      profile: () => SANDBOX,
+      readHealth: () => Promise.resolve((options.health ?? ownConnector)()),
+      ...(options.healthAt === undefined
+        ? {}
+        : {
+            readHealthAt: (url: string) =>
+              Promise.resolve((options.healthAt as (u: string) => ConnectorHealth)(url)),
+          }),
+      writeRelays: () => options.writeRelays ?? [],
+      edges: options.edges,
+      payerKeys: (use) => use(KEYS),
+      paths,
+      port: options.port,
+    });
+
+  beforeEach(async () => {
+    home = mkdtempSync(join(tmpdir(), 'toon-console-write-many-'));
+    paths = consolePaths({ HOME: home } as NodeJS.ProcessEnv);
+    const account = fakeAccount();
+    event = (await account.sign({
+      kind: 30078,
+      created_at: 1_790_000_000,
+      tags: [['d', 'toon-console/chain-seed']],
+      content: 'sealed',
+    })) as unknown as NostrEvent;
+  });
+
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it('reads each relay’s own document rather than assuming the profile’s route', async () => {
+    giveChannel(paths, SANDBOX.id, SANDBOX.connectorUrl);
+    const edges = edgesOf({
+      [SANDBOX.relayUrl]: edgeAt(SANDBOX.relayUrl, {
+        ilpAddress: 'g.toon.relay',
+        connectorUrl: SANDBOX.connectorUrl,
+        carriage: 'btp',
+      }),
+    });
+    const port = fakePort();
+
+    const receipt = await writerWith({ port, edges }).write({ event, what: 'A record' });
+
+    expect(edges.asked).toEqual([SANDBOX.relayUrl]);
+    expect(port.sent[0]).toMatchObject({ destination: 'g.toon.relay', carriage: 'btp' });
+    expect(receipt.writes[0]).toMatchObject({ state: 'written', carriage: 'btp' });
+  });
+
+  it('writes to the profile’s relay AND every payable relay the NIP-65 list names', async () => {
+    giveChannel(paths, SANDBOX.id, SANDBOX.connectorUrl);
+    giveChannel(paths, SANDBOX.id, OTHER_CONNECTOR, 'evm:31337', '0xfar');
+    const edges = edgesOf({
+      [SANDBOX.relayUrl]: edgeAt(SANDBOX.relayUrl, {
+        ilpAddress: 'g.toon.relay',
+        connectorUrl: SANDBOX.connectorUrl,
+      }),
+      [OTHER_RELAY]: edgeAt(OTHER_RELAY, {
+        ilpAddress: 'g.far.relay',
+        connectorUrl: OTHER_CONNECTOR,
+        price: '7',
+      }),
+    });
+    const port = fakePort((packet) => ({
+      kind: 'answered',
+      status: 200,
+      text: '{}',
+      cost: packet.destination === 'g.far.relay' ? '7' : '1',
+    }));
+
+    const receipt = await writerWith({
+      port,
+      edges,
+      writeRelays: [OTHER_RELAY],
+      healthAt: () =>
+        connectorHealth({
+          endpoint: OTHER_CONNECTOR,
+          ilpAddresses: ['g.far.relay'],
+          routes: [{ prefix: 'g.far.relay', price: '7' }],
+          edgeSealKey: SEAL_KEY,
+        }),
+    }).write({ event, what: 'A record' });
+
+    expect(receipt.relays).toEqual([SANDBOX.relayUrl, OTHER_RELAY]);
+    // The cost is reported per relay AND summed — never a price times a count.
+    expect(receipt.writes.map((write) => [write.url, write.cost])).toEqual([
+      [SANDBOX.relayUrl, '1'],
+      [OTHER_RELAY, '7'],
+    ]);
+    expect(receipt.cost).toBe('8');
+  });
+
+  it('pays one channel for a relay its own connector FORWARDS to, sealed to that relay’s key', async () => {
+    giveChannel(paths, SANDBOX.id, SANDBOX.connectorUrl);
+    const edges = edgesOf({
+      [OTHER_RELAY]: edgeAt(OTHER_RELAY, {
+        ilpAddress: 'g.toon.other-relay',
+        connectorUrl: OTHER_CONNECTOR,
+        sealKey: OTHER_KEY,
+        price: '1',
+      }),
+    });
+    const port = fakePort();
+
+    const receipt = await writerWith({
+      port,
+      edges,
+      writeRelays: [OTHER_RELAY],
+      // This console's connector forwards everything under `g.toon` at 5.
+      health: () =>
+        ownConnector([
+          { prefix: 'g.toon.relay', price: '1' },
+          { prefix: 'g.toon', price: '5' },
+        ]),
+    }).write({ event, what: 'A record' });
+
+    const far = port.sent.find((packet) => packet.destination === 'g.toon.other-relay');
+    expect(far).toMatchObject({ payAt: SANDBOX.connectorUrl, sealTo: OTHER_KEY });
+    // The price is the one the connector being PAID quoted (#82), not the
+    // relay's own — a forwarding hop charges its own fee.
+    expect(receipt.writes.find((write) => write.url === OTHER_RELAY)?.price).toBe('5');
+  });
+
+  it('never seals past a hop that terminates the route itself', async () => {
+    giveChannel(paths, SANDBOX.id, SANDBOX.connectorUrl);
+    const edges = edgesOf({
+      [SANDBOX.relayUrl]: edgeAt(SANDBOX.relayUrl, {
+        ilpAddress: 'g.toon.relay',
+        connectorUrl: SANDBOX.connectorUrl,
+      }),
+    });
+    const port = fakePort();
+    await writerWith({ port, edges }).write({ event, what: 'A record' });
+    expect(port.sent[0]?.sealTo).toBeUndefined();
+  });
+
+  it('buys a write to a relay that charges nothing, with no channel at all (§13.4)', async () => {
+    const free = 'wss://free.test';
+    const freeConnector = 'https://connector.free.test/ilp';
+    const edges = edgesOf({
+      [free]: edgeAt(free, {
+        ilpAddress: 'g.free.relay',
+        connectorUrl: freeConnector,
+        price: '0',
+      }),
+    });
+    const port = fakePort({ kind: 'answered', status: 200, text: '{}' });
+    const writer = () =>
+      writerWith({
+        port,
+        edges,
+        writeRelays: [free],
+        healthAt: () =>
+          connectorHealth({
+            endpoint: freeConnector,
+            ilpAddresses: ['g.free.relay'],
+            routes: [{ prefix: 'g.free.relay', price: '0' }],
+            edgeSealKey: SEAL_KEY,
+          }),
+      });
+
+    // No `giveChannel` anywhere: a free relay must not need one.
+    const targets = await writer().targets();
+    expect(targets.plan.find((entry) => entry.url === free)).toMatchObject({
+      ready: true,
+      price: '0',
+    });
+
+    const receipt = await writer().write({ event, what: 'A record' });
+    expect(receipt.relays).toContain(free);
+    expect(port.sent.some((packet) => packet.destination === 'g.free.relay')).toBe(true);
+  });
+
+  it('is a PUBLISHED record when one relay takes it and another cannot be paid', async () => {
+    giveChannel(paths, SANDBOX.id, SANDBOX.connectorUrl);
+    const edges = edgesOf({
+      [SANDBOX.relayUrl]: edgeAt(SANDBOX.relayUrl, {
+        ilpAddress: 'g.toon.relay',
+        connectorUrl: SANDBOX.connectorUrl,
+      }),
+      // No document at all, and not the profile's relay: nothing to guess at.
+    });
+    const port = fakePort();
+
+    const receipt = await writerWith({ port, edges, writeRelays: [OTHER_RELAY] }).write({
+      event,
+      what: 'A record',
+    });
+
+    expect(receipt.relays).toEqual([SANDBOX.relayUrl]);
+    expect(port.sent).toHaveLength(1);
+    const missed = receipt.writes.find((write) => write.url === OTHER_RELAY);
+    expect(missed).toMatchObject({ state: 'unpayable', code: 'no_document' });
+    expect(missed?.reason).toMatch(/426/u);
+    expect(missed?.cost).toBeUndefined();
+  });
+
+  it('names every reason a relay could not be paid, in its own words', async () => {
+    giveChannel(paths, SANDBOX.id, SANDBOX.connectorUrl);
+    const unchannelled = 'wss://unchannelled.test';
+    const wrongKey = 'wss://wrong-key.test';
+    const badCarriage = 'wss://bad-carriage.test';
+    const edges = edgesOf({
+      [SANDBOX.relayUrl]: edgeAt(SANDBOX.relayUrl, {
+        ilpAddress: 'g.toon.relay',
+        connectorUrl: SANDBOX.connectorUrl,
+      }),
+      [unchannelled]: edgeAt(unchannelled, {
+        ilpAddress: 'g.far.relay',
+        connectorUrl: OTHER_CONNECTOR,
+        price: '3',
+      }),
+      [wrongKey]: edgeAt(wrongKey, {
+        ilpAddress: 'g.far.relay',
+        connectorUrl: OTHER_CONNECTOR,
+        sealKey: OTHER_KEY,
+      }),
+      [badCarriage]: {
+        state: 'none',
+        url: badCarriage,
+        code: 'carriage_unsupported',
+        reason: `${badCarriage} pins its write route to the \`quic\` carriage.`,
+      },
+    });
+
+    const targets = await writerWith({
+      port: fakePort(),
+      edges,
+      writeRelays: [unchannelled, wrongKey, badCarriage],
+      healthAt: () =>
+        connectorHealth({
+          endpoint: OTHER_CONNECTOR,
+          ilpAddresses: ['g.far.relay'],
+          routes: [{ prefix: 'g.far.relay', price: '3' }],
+          edgeSealKey: SEAL_KEY,
+        }),
+    }).targets();
+
+    expect(targets.relays).toEqual([SANDBOX.relayUrl]);
+    const blocked = new Map(targets.plan.map((entry) => [entry.url, entry]));
+    expect(blocked.get(unchannelled)).toMatchObject({
+      ready: false,
+      code: 'no_channel',
+      // It still names what the write would have cost, so a person can decide.
+      price: '3',
+    });
+    expect(blocked.get(wrongKey)).toMatchObject({ ready: false, code: 'edge_disagrees' });
+    expect(blocked.get(wrongKey)?.reason).toMatch(/§13\.2/u);
+    expect(blocked.get(badCarriage)).toMatchObject({
+      ready: false,
+      code: 'carriage_unsupported',
+    });
+  });
+
+  it('refuses the whole publish when NO relay took it, and says what each one did', async () => {
+    const edges = edgesOf({
+      [SANDBOX.relayUrl]: edgeAt(SANDBOX.relayUrl, {
+        ilpAddress: 'g.toon.relay',
+        connectorUrl: SANDBOX.connectorUrl,
+      }),
+    });
+
+    // No channel anywhere: nothing is payable, so nothing is sent.
+    const port = fakePort();
+    await expect(
+      writerWith({ port, edges, writeRelays: [OTHER_RELAY] }).write({
+        event,
+        what: 'A record',
+      })
+    ).rejects.toMatchObject({ name: 'RelayWriteError', status: 402 });
+    expect(port.sent).toHaveLength(0);
+  });
+
+  it('refuses when every packet was refused, and totals what the refusals were billed', async () => {
+    giveChannel(paths, SANDBOX.id, SANDBOX.connectorUrl);
+    giveChannel(paths, SANDBOX.id, OTHER_CONNECTOR, 'evm:31337', '0xfar');
+    const edges = edgesOf({
+      [SANDBOX.relayUrl]: edgeAt(SANDBOX.relayUrl, {
+        ilpAddress: 'g.toon.relay',
+        connectorUrl: SANDBOX.connectorUrl,
+      }),
+      [OTHER_RELAY]: edgeAt(OTHER_RELAY, {
+        ilpAddress: 'g.far.relay',
+        connectorUrl: OTHER_CONNECTOR,
+      }),
+    });
+    const port = fakePort({
+      kind: 'refused',
+      code: 'F99',
+      refusedBy: 'destination',
+      message: 'nope',
+      cost: '1',
+    });
+
+    const error = await writerWith({
+      port,
+      edges,
+      writeRelays: [OTHER_RELAY],
+      healthAt: () =>
+        connectorHealth({
+          endpoint: OTHER_CONNECTOR,
+          ilpAddresses: ['g.far.relay'],
+          routes: [{ prefix: 'g.far.relay', price: '1' }],
+          edgeSealKey: SEAL_KEY,
+        }),
+    })
+      .write({ event, what: 'A record' })
+      .then(() => undefined)
+      .catch((thrown: unknown) => thrown as RelayWriteError);
+
+    expect(error).toBeInstanceOf(RelayWriteError);
+    expect(error?.message).toMatch(/billed 2 base units in total/u);
+    expect(error?.writes?.map((write) => write.state)).toEqual(['refused', 'refused']);
+  });
+
+  it('verifies the event once, before ANY relay is paid', async () => {
+    giveChannel(paths, SANDBOX.id, SANDBOX.connectorUrl);
+    const port = fakePort();
+    const edges = edgesOf({});
+    await expect(
+      writerWith({ port, edges, writeRelays: [OTHER_RELAY] }).write({
+        event: { ...event, content: 'tampered' },
+        what: 'A record',
+      })
+    ).rejects.toMatchObject({ code: 'invalid_event' });
+    expect(port.sent).toHaveLength(0);
+  });
+
+  it('keeps #120’s route for the profile’s OWN relay when it serves no document', async () => {
+    giveChannel(paths, SANDBOX.id, SANDBOX.connectorUrl);
+    const port = fakePort();
+    const targets = await writerWith({ port, edges: noDocuments() }).targets();
+    expect(targets.plan[0]).toMatchObject({
+      url: SANDBOX.relayUrl,
+      ready: true,
+      destination: 'g.toon.relay',
+      via: 'profile-connector',
+    });
+  });
+
+  it('borrows the payer keys ONCE however many relays are written to', async () => {
+    giveChannel(paths, SANDBOX.id, SANDBOX.connectorUrl);
+    giveChannel(paths, SANDBOX.id, OTHER_CONNECTOR, 'evm:31337', '0xfar');
+    let borrows = 0;
+    const writer = new PaidRelayWriter({
+      profile: () => SANDBOX,
+      readHealth: () => Promise.resolve(ownConnector()),
+      readHealthAt: () =>
+        Promise.resolve(
+          connectorHealth({
+            endpoint: OTHER_CONNECTOR,
+            ilpAddresses: ['g.far.relay'],
+            routes: [{ prefix: 'g.far.relay', price: '1' }],
+            edgeSealKey: SEAL_KEY,
+          })
+        ),
+      writeRelays: () => [OTHER_RELAY],
+      edges: edgesOf({
+        [SANDBOX.relayUrl]: edgeAt(SANDBOX.relayUrl, {
+          ilpAddress: 'g.toon.relay',
+          connectorUrl: SANDBOX.connectorUrl,
+        }),
+        [OTHER_RELAY]: edgeAt(OTHER_RELAY, {
+          ilpAddress: 'g.far.relay',
+          connectorUrl: OTHER_CONNECTOR,
+        }),
+      }),
+      payerKeys: (use) => {
+        borrows += 1;
+        return use(KEYS);
+      },
+      paths,
+      port: fakePort(),
+    });
+
+    const receipt = await writer.write({ event, what: 'A record' });
+    expect(receipt.relays).toHaveLength(2);
+    expect(borrows).toBe(1);
+  });
+
+  it('asks each relay once, however many relays are named twice', async () => {
+    giveChannel(paths, SANDBOX.id, SANDBOX.connectorUrl);
+    const edges = edgesOf({});
+    await writerWith({
+      port: fakePort(),
+      edges,
+      // The profile's relay again, under its other spelling.
+      writeRelays: [`${SANDBOX.relayUrl}/`, SANDBOX.relayUrl],
+    }).targets();
+    expect(edges.asked).toEqual([SANDBOX.relayUrl]);
+  });
+});
+
+describe('what a connector quotes for an address', () => {
+  const ok = (health: ConnectorHealth) => health as Extract<ConnectorHealth, { state: 'ok' }>;
+
+  it('matches the LONGEST prefix that covers it, as the connector itself does', () => {
+    const health = ok(
+      connectorHealth({
+        endpoint: SANDBOX.connectorUrl,
+        routes: [
+          { prefix: 'g.toon', price: '100' },
+          { prefix: 'g.toon.relay', price: '1' },
+        ],
+      })
+    );
+    expect(routePriceFor(health, 'g.toon.relay')).toBe('1');
+    expect(routePriceFor(health, 'g.toon.store')).toBe('100');
+    expect(routePriceFor(health, 'g.other')).toBeUndefined();
+  });
+
+  it('never matches a prefix that merely shares a name fragment', () => {
+    const health = ok(
+      connectorHealth({
+        endpoint: SANDBOX.connectorUrl,
+        routes: [{ prefix: 'g.toon.relay', price: '1' }],
+      })
+    );
+    expect(routePriceFor(health, 'g.toon.relayed')).toBeUndefined();
   });
 });

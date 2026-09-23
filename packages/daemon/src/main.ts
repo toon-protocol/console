@@ -141,11 +141,25 @@ export async function main(): Promise<void> {
   });
 
   // The one writer. Every event this console puts on a relay is bought here,
-  // as a paid TOON packet on the route the connector publishes, over the
-  // carriage that route pins (TOON_Network#120).
+  // as a paid TOON packet on the route that relay names, over the carriage
+  // that route pins (TOON_Network#120, #121).
+  //
+  // It writes to every relay in the account's NIP-65 write list it can pay,
+  // not only to the profile's: a relay names its own paid write edge in its
+  // own NIP-11 document now (spec §13, ADR 0024), so one a console merely
+  // holds the URL of can be paid. `writeRelays` is the account's list as the
+  // Chain Seed last read it — the same cycle as `payerKeys`, and for the same
+  // reason.
   const writer: PaidRelayWriter = new PaidRelayWriter({
     profile: () => profiles.active(),
     readHealth: (profile) => readConnectorHealth(profile, reader),
+    // A relay's own connector, which is routinely not this profile's. The
+    // profile is passed for its RPC endpoints and its label only; the URL is
+    // the one the relay named, and nothing else about the profile is used to
+    // reach it.
+    readHealthAt: (connectorUrl) =>
+      readConnectorHealth({ ...profiles.active(), connectorUrl }, reader),
+    writeRelays: () => chainSeed.writeRelays(),
     payerKeys: (use) => chainSeed.usePayerKeys(use),
     paths,
     port: new LiveRelayWritePort(),

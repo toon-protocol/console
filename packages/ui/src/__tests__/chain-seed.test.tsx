@@ -31,9 +31,22 @@ const BLOCKED =
 /** A network where one relay write can be bought, at the price it quoted. */
 const PAYABLE = {
   relays: ['wss://relay.toon.test'],
+  plan: [
+    {
+      url: 'wss://relay.toon.test',
+      ready: true,
+      destination: 'g.toon.relay',
+      payAt: 'https://connector.test/ilp',
+      price: '1',
+      chain: 'evm:84532',
+      channelId: '0xchannel',
+      via: 'document' as const,
+    },
+  ],
   destination: 'g.toon.relay',
   payAt: 'https://connector.test/ilp',
   price: '1',
+  totalPrice: '1',
   chain: 'evm:84532',
   channelId: '0xchannel',
   ready: true,
@@ -281,7 +294,19 @@ describe('the Chain Seed card', () => {
   it('says why a write could not be bought, and keeps saying the seed is held', async () => {
     stub.seed = {
       ...held,
-      writes: { relays: ['wss://relay.toon.test'], ready: false, blockedBy: BLOCKED },
+      writes: {
+        relays: ['wss://relay.toon.test'],
+        plan: [
+          {
+            url: 'wss://relay.toon.test',
+            ready: false,
+            code: 'no_channel',
+            reason: BLOCKED,
+          },
+        ],
+        ready: false,
+        blockedBy: BLOCKED,
+      },
       held: { ...held.held!, lastAttempt: BLOCKED },
     };
     stubDaemon(stub);
@@ -313,7 +338,7 @@ describe('the Chain Seed card', () => {
     stub.seed = {
       state: 'signed_out',
       relayList: { state: 'unknown', read: [], write: [] },
-      writes: { relays: [], ready: false },
+      writes: { relays: [], plan: [], ready: false },
       warning: { text: WARNING },
       supersededSeeds: 0,
       checkedAt: '2026-09-22T00:00:00.000Z',

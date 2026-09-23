@@ -447,21 +447,47 @@ export interface RelayListView {
   publishedAt?: string;
 }
 
+/** One relay a write would go to, or the reason it would not. */
+export interface RelayWriteTarget {
+  url: string;
+  ready: boolean;
+  destination?: string;
+  payAt?: string;
+  price?: string;
+  carriage?: 'http' | 'btp';
+  chain?: string;
+  channelId?: string;
+  /** `document` when the relay named its own edge, else the profile's. */
+  via?: 'document' | 'profile-connector';
+  /** Set exactly when `ready` is false. */
+  code?: string;
+  reason?: string;
+}
+
 /**
  * Where a paid write goes, what it costs, and what stops it
- * (TOON_Network#120).
+ * (TOON_Network#120, #121).
  *
  * Every relay write the console makes is a TOON packet paid from the
  * account's own channel, so this is the shape of "can I write at all" —
- * and every figure in it is one the connector quoted, never one computed
+ * and every figure in it is one a connector quoted, never one computed
  * here.
+ *
+ * A record goes to every relay in the account's NIP-65 write list the console
+ * can pay, so `plan` is the whole answer and the scalars are the first payable
+ * relay's. `ready` is true when ONE relay can be paid, because a record that
+ * reaches one relay is published.
  */
 export interface RelayWriteTargets {
   relays: string[];
+  /** Every relay considered, payable or not, with the reason either way. */
+  plan: RelayWriteTarget[];
   destination?: string;
   payAt?: string;
-  /** Base units per write, verbatim from the connector. */
+  /** Base units per write at the first payable relay, verbatim. */
   price?: string;
+  /** Every payable relay's price summed: what one record costs to publish. */
+  totalPrice?: string;
   chain?: string;
   channelId?: string;
   ready: boolean;
@@ -470,8 +496,12 @@ export interface RelayWriteTargets {
 
 export interface RelayWriteOutcome {
   url: string;
-  destination: string;
-  state: 'written' | 'refused' | 'unknown';
+  destination?: string;
+  payAt?: string;
+  price?: string;
+  carriage?: 'http' | 'btp';
+  /** `unpayable` is a relay no packet was ever sent to, and never billed. */
+  state: 'written' | 'refused' | 'unknown' | 'unpayable';
   reason?: string;
   code?: string;
   /** What it cost — present on a refusal too: a refusal is billed. */
