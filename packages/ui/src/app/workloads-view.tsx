@@ -12,6 +12,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import type { LeasesState } from '@/hooks/use-leases';
+import type { WorkloadsState } from '@/hooks/use-workloads';
 import type {
   Directory,
   LeaseView,
@@ -20,6 +21,7 @@ import type {
   ProviderView,
   SpawnRequestBody,
 } from '@/lib/daemon';
+import { WorkloadCard } from './workload-card';
 
 /**
  * Workloads: the first screen in this console that spends money.
@@ -48,11 +50,13 @@ import type {
  */
 export function WorkloadsView({
   leases,
+  workloads,
   directory,
   signedIn,
   onFindProviders,
 }: {
   leases: LeasesState;
+  workloads: WorkloadsState;
   directory?: Directory | undefined;
   signedIn: boolean;
   onFindProviders: () => void;
@@ -75,8 +79,10 @@ export function WorkloadsView({
   return (
     <div className="space-y-4">
       {leases.error && <Problem leases={leases} />}
+      {workloads.error && <WorkloadProblem workloads={workloads} />}
+      {workloads.lastAction && <ActionReport workloads={workloads} />}
       {leases.spawned?.lease && <Spawned leases={leases} />}
-      <Vault leases={leases} />
+      <Vault leases={leases} workloads={workloads} />
       <SpawnForm leases={leases} directory={directory} onFindProviders={onFindProviders} />
     </div>
   );
@@ -97,6 +103,65 @@ function Problem({ leases }: { leases: LeasesState }) {
       </p>
       <p>{leases.error}</p>
       <Button size="sm" variant="outline" onClick={leases.clearError}>
+        Dismiss
+      </Button>
+    </div>
+  );
+}
+
+/** An action on the dashboard that did not happen. */
+function WorkloadProblem({ workloads }: { workloads: WorkloadsState }) {
+  return (
+    <div
+      role="alert"
+      className="border-destructive/40 bg-destructive/10 text-destructive space-y-2 rounded-lg border px-4 py-3 text-sm"
+    >
+      <p>{workloads.error}</p>
+      <Button size="sm" variant="outline" onClick={workloads.clearError}>
+        Dismiss
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * What the last extension or termination did, and what it cost.
+ *
+ * It is reported even when it did NOT happen, because "nothing was sent and
+ * nothing was paid" is the answer that matters most: a refused paid request is
+ * billed (ADR 0003, TOON_Network#115), so a person needs to be able to tell a
+ * request this console refused to send from one a provider refused after
+ * taking the money.
+ */
+function ActionReport({ workloads }: { workloads: WorkloadsState }) {
+  const action = workloads.lastAction;
+  if (!action) return null;
+  const { result } = action;
+  const headline = !result.sent
+    ? `Nothing was sent, and nothing was paid.`
+    : result.providerError !== undefined
+      ? `The provider refused this ${action.kind === 'extend' ? 'extension' : 'termination'}: ${result.providerError}`
+      : action.kind === 'extend'
+        ? `One Lease Interval bought.`
+        : `This lease has ended.`;
+  return (
+    <div className="bg-muted/40 space-y-2 rounded-lg border px-4 py-3 text-sm" role="status">
+      <p className="font-medium">{headline}</p>
+      {result.message !== undefined && <p>{result.message}</p>}
+      {result.problems.length > 0 && (
+        <ul className="list-disc space-y-1 pl-5 text-xs">
+          {result.problems.map((problem) => (
+            <li key={problem}>{problem}</li>
+          ))}
+        </ul>
+      )}
+      {result.cost !== undefined && (
+        <p className="text-muted-foreground text-xs">
+          It cost {result.cost} base units of the settlement token
+          {result.route?.payAt === undefined ? '' : `, paid at ${result.route.payAt}`}.
+        </p>
+      )}
+      <Button size="sm" variant="outline" onClick={workloads.dismissAction}>
         Dismiss
       </Button>
     </div>
@@ -182,24 +247,44 @@ function ForwardedPort({
 
 /* -------------------------------------------------------------------------- */
 
-/** Every lease this account holds, from its own relays (ADR 0021). */
-function Vault({ leases }: { leases: LeasesState }) {
+/**
+ * Every lease this account holds, and what each one is doing.
+ *
+ * Two reads behind one card, and they are not the same read. The **vault** is
+ * what this account owns — recovered from its own relays, which is what makes
+ * a lease follow it to another machine (ADR 0021). The **dashboard** is what
+ * each provider says about those leases right now (§6.5). A lease with a
+ * record and no answer is a provider that has gone quiet, not a lease that has
+ * gone away, and the two reads being separate is what lets the card say so.
+ */
+function Vault({ leases, workloads }: { leases: LeasesState; workloads: WorkloadsState }) {
   const vault = leases.vault;
   const rows = vault?.leases ?? [];
+  const cards = workloads.dashboard?.cards ?? [];
 
   return (
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center justify-between gap-3">
           <span>Workloads</span>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={leases.recover}
-            disabled={leases.loading}
-          >
-            {leases.loading ? 'Reading the vault…' : 'Read from my relays'}
-          </Button>
+          <span className="flex gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={workloads.refresh}
+              disabled={workloads.loading}
+            >
+              {workloads.loading ? 'Asking the providers…' : 'Refresh'}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={leases.recover}
+              disabled={leases.loading}
+            >
+              {leases.loading ? 'Reading the vault…' : 'Read from my relays'}
+            </Button>
+          </span>
         </CardTitle>
         <CardDescription>
           Each lease&rsquo;s Root Secret is sealed to this account and written to{' '}
@@ -222,9 +307,18 @@ function Vault({ leases }: { leases: LeasesState }) {
               : 'No leases yet. Spawn one below.'}
           </p>
         )}
-        {rows.map((lease) => (
-          <LeaseCard key={lease.workloadId} lease={lease} />
+        {cards.map((card) => (
+          <WorkloadCard key={card.workloadId} card={card} workloads={workloads} />
         ))}
+        {/* A vault record the dashboard has not caught up with yet — a spawn
+            a moment ago, or a lease recovered from the relays since the last
+            refresh. Shown rather than hidden: a workload that exists and is
+            missing from this list is the one thing this page must never do. */}
+        {rows
+          .filter((lease) => !cards.some((card) => card.workloadId === lease.workloadId))
+          .map((lease) => (
+            <LeaseCard key={lease.workloadId} lease={lease} />
+          ))}
         {(vault?.unreadable ?? 0) > 0 && (
           <p className="text-muted-foreground text-xs">
             {vault?.unreadable} record(s) on these relays did not open with this

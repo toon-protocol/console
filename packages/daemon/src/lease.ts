@@ -1,6 +1,6 @@
 import type { ChannelStore } from '@toon-protocol/client';
 
-import { channelStoreFor } from './channel-store.js';
+import { channelStoreFor, findChannelBinding } from './channel-store.js';
 import type { ChainSeedStore, PayerKeys } from './chain-seed.js';
 import type { ConnectorHealth } from './connector-health.js';
 import { continuationFor, mintRequestId, mintRootSecret } from './continuation.js';
@@ -806,14 +806,8 @@ export class LeaseStore {
     }
 
     const channels = channelStoreFor(this.#deps.paths, profile.id);
-    const bindings = channels.store.listBindings?.() ?? [];
     for (const settlement of settlements) {
-      const binding = bindings.find(
-        (entry) =>
-          entry.binding.supersededAt === undefined &&
-          entry.key.split('|')[1] === settlement.chain &&
-          sameConnector(entry.key.split('|')[0] ?? '', payAt)
-      );
+      const binding = findChannelBinding(channels.store, payAt, settlement.chain);
       if (!binding) continue;
       const rpc = resolveRpc(profile, settlement.kind);
       return {
@@ -826,7 +820,7 @@ export class LeaseStore {
           via,
           reason,
           chain: settlement.chain,
-          channelId: binding.binding.channelId,
+          channelId: binding.channelId,
           ...(routePrice === undefined ? {} : { routePrice }),
         },
       };
@@ -1194,12 +1188,6 @@ export function isHiddenServiceUrl(url: string): boolean {
   } catch {
     return false;
   }
-}
-
-/** `https://node.example` and `https://node.example/ilp` are the same node. */
-function sameConnector(a: string, b: string): boolean {
-  const base = (url: string) => url.replace(/\/+$/u, '').replace(/\/ilp$/u, '');
-  return base(a) === base(b);
 }
 
 function describeRefusal(outcome: Extract<PacketOutcome, { kind: 'refused' }>): string {

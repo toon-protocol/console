@@ -762,6 +762,150 @@ export interface SpawnRequestBody {
   chain?: string;
 }
 
+/**
+ * The dashboard (TOON_Network#93, spec §6.3, §6.5, §6.6, §6.7).
+ *
+ * The same hand-kept mirror as everything above, and two things about these
+ * shapes are load-bearing in the window rather than merely descriptive.
+ *
+ * **`WorkloadStatus` has four kinds**, and the page must branch on all four. A
+ * provider that has gone `silent` has told us nothing about the lease; one
+ * that `refused` has told us something definite; `unread` is this console's
+ * own failure to ask. Collapsing them into "error" is the bug this type
+ * exists to prevent.
+ *
+ * **`LeaseLife` keeps §6.7's three endings apart.** Expiry is nobody paying,
+ * Termination is the tenant, Eviction is the provider — three different things
+ * that happened, and a card that said "gone" for all three would be hiding the
+ * only part worth knowing.
+ *
+ * And what is NOT here: a Root Secret, and a Continuation Token. The token is
+ * derived in the daemon for the length of one packet. Nothing sends one to
+ * this window and nothing could, because none of these types has a field for
+ * one.
+ */
+
+export type LeaseEnding = 'expiry' | 'termination' | 'eviction' | 'unstated';
+
+export type LeaseLife =
+  | { phase: 'provisioning' | 'reserved' | 'running' | 'stopped' }
+  | { phase: 'ended'; ending: LeaseEnding; word?: string };
+
+export type WorkloadStatus =
+  | {
+      kind: 'read';
+      life: LeaseLife;
+      role?: string;
+      expiresAt?: number;
+      access?: LeaseAccess;
+      template?: string;
+      takeover?: { winner: string };
+      cost?: string;
+      readAt: string;
+    }
+  | { kind: 'silent'; reason: string; cost?: string; readAt: string }
+  | { kind: 'refused'; code: string; message: string; cost?: string; readAt: string }
+  | { kind: 'unread'; reason: string; readAt: string };
+
+export interface RunwayView {
+  state: 'computed' | 'unbounded' | 'unknown';
+  reason?: string;
+  /** µUSDC per Lease Interval, as the Listing priced it. */
+  listingPrice: number;
+  leaseIntervalSeconds: number;
+  /** What one extension costs where it would be paid. The connector's figure. */
+  pricePerInterval?: string;
+  payAt?: string;
+  chain?: string;
+  channelId?: string;
+  available?: string;
+  affordableIntervals?: number;
+  paidSeconds?: number;
+  paidUntil?: string;
+  expirySource?: 'provider' | 'vault';
+  seconds?: number;
+  until?: string;
+  readAt: string;
+}
+
+export interface OpRouteView {
+  route: string;
+  payAt: string;
+  via: 'profile-connector' | 'provider-connector';
+  reason: string;
+  price?: string;
+  chain?: string;
+  channelId?: string;
+}
+
+export interface AutoExtendView {
+  armed: boolean;
+  budget: string;
+  spent: string;
+  remaining: string;
+  extensions: number;
+  agreedPrice: string;
+  leadSeconds: number;
+  armedAt: string;
+  lastRun?: {
+    at: string;
+    outcome: 'extended' | 'waited' | 'stopped';
+    reason: string;
+    cost?: string;
+  };
+  stoppedBecause?: string;
+}
+
+export interface WorkloadCard {
+  workloadId: string;
+  lease: LeaseView;
+  provider: {
+    pubkey: string;
+    ilpAddress: string;
+    connectorUrl: string;
+    hidden: boolean;
+    liveness?: string;
+    inDirectory: boolean;
+  };
+  status: WorkloadStatus;
+  runway: RunwayView;
+  extend: { ok: boolean; problems: string[]; route?: OpRouteView };
+  autoExtend?: AutoExtendView;
+  endedAs?: LeaseEnding;
+}
+
+export interface Dashboard {
+  state: 'signed_out' | 'unknown' | 'ready';
+  pubkey?: string;
+  profileId: string;
+  cards: WorkloadCard[];
+  unreadable: number;
+  checkedAt: string;
+}
+
+export interface ExtendResult {
+  /** `false` means nothing was sent and nothing was paid. */
+  sent: boolean;
+  problems: string[];
+  route?: OpRouteView;
+  cost?: string;
+  expiresAt?: number;
+  providerError?: string;
+  message?: string;
+  card: WorkloadCard;
+}
+
+export interface TerminateResult {
+  sent: boolean;
+  problems: string[];
+  route?: OpRouteView;
+  cost?: string;
+  ended?: LeaseEnding;
+  providerError?: string;
+  message?: string;
+  card: WorkloadCard;
+}
+
 export class DaemonError extends Error {
   readonly status: number;
   /** The daemon's machine-readable code, e.g. `passphrase_required`. */
@@ -919,6 +1063,50 @@ export const daemon = {
    * publishes the Root Secret to the Lease Vault before it sends anything.
    */
   spawn: (request: SpawnRequestBody) => post<SpawnResult>('/api/leases/spawn', request),
+
+  /**
+   * The dashboard (TOON_Network#93).
+   *
+   * `refresh` asks every provider what its lease is doing. That is free at the
+   * provider (§5) and the daemon buys it where it is free, so a window may
+   * poll it — but it IS a packet, so it happens on a refresh rather than on
+   * every render.
+   */
+  workloads: (options: { refresh?: boolean } = {}) =>
+    call<Dashboard>(`/api/workloads${options.refresh ? '?refresh=1' : ''}`),
+  workload: (workloadId: string, options: { refresh?: boolean } = {}) =>
+    call<WorkloadCard>(
+      `/api/workloads/${encodeURIComponent(workloadId)}${options.refresh ? '?refresh=1' : ''}`
+    ),
+  /**
+   * Buy one Lease Interval. This **spends money**, and a refusal is billed
+   * exactly like an acceptance (ADR 0003, spec §5). The daemon checks
+   * everything checkable first and answers `sent: false` — having paid nothing
+   * — when any of it fails.
+   */
+  extendWorkload: (workloadId: string, options: { maxPrice?: string } = {}) =>
+    post<ExtendResult>(`/api/workloads/${encodeURIComponent(workloadId)}/extend`, options),
+  /** End the lease now. Free, immediate and irreversible: there is no refund. */
+  terminateWorkload: (workloadId: string) =>
+    post<TerminateResult>(`/api/workloads/${encodeURIComponent(workloadId)}/terminate`),
+  /**
+   * Arm a budget: a standing instruction to keep extending while nobody is
+   * watching. `confirm` is the whole of the consent, and `agreedPrice` is
+   * checked against what the connector quotes right now — so a stale tab can
+   * never arm a budget at a price that has moved.
+   */
+  armAutoExtend: (
+    workloadId: string,
+    request: { budget: string; agreedPrice: string; leadSeconds?: number }
+  ) =>
+    post<WorkloadCard>(`/api/workloads/${encodeURIComponent(workloadId)}/auto-extend`, {
+      ...request,
+      confirm: true,
+    }),
+  disarmAutoExtend: (workloadId: string) =>
+    call<WorkloadCard>(`/api/workloads/${encodeURIComponent(workloadId)}/auto-extend`, {
+      method: 'DELETE',
+    }),
 };
 
 /** The filters, as the daemon's query string spells them. */

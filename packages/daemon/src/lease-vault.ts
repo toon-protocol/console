@@ -1,3 +1,4 @@
+import { continuationFor } from './continuation.js';
 import type { LeaseVaultCache } from './lease-vault-cache.js';
 import { supersedes, tagValue, type NostrEvent } from './nostr.js';
 import { NO_RELAY_LIST, readRelayListOf, type RelayList } from './relay-list.js';
@@ -626,6 +627,56 @@ export class LeaseVault {
         reason: error instanceof Error ? error.message : String(error),
       };
     }
+  }
+
+  /**
+   * Borrow one lease's **Continuation Token** for the length of one request.
+   *
+   * The only way anything outside this module reaches a value derived from a
+   * Root Secret, and it is shaped as a borrow for the same reason
+   * `ChainSeedStore.usePayerKeys` is: the secret is derived, used for one
+   * packet, and gone when the call returns. There is no getter, and there must
+   * never be one — a token that can be fetched is a token that can be logged,
+   * echoed into an API answer or held in a variable that outlives the request
+   * it was for (§6.1.1 forbids all three).
+   *
+   * The token is per PROVIDER, so the member of the Standby Set to address is
+   * named by the caller. A member that is not in this lease's `standby_set` is
+   * refused rather than derived for: the derivation would succeed and produce a
+   * token that provider does not hold, and presenting it is `not_tenant` — on
+   * `extend`, after being billed.
+   *
+   * @throws {LeaseVaultError} when no account is signed in, when this account
+   *   holds no such lease, or when that provider is not in its Standby Set.
+   */
+  async withContinuation<T>(
+    workloadId: string,
+    providerPubkey: string,
+    use: (continuation: string) => Promise<T>
+  ): Promise<T> {
+    this.#require();
+    const held = this.#open.get(leaseVaultD(workloadId));
+    if (!held || held.record.state === 'retracted') {
+      throw new LeaseVaultError(
+        'unknown_lease',
+        `This account holds no vault record for workload ${workloadId}, so it holds no Root ` +
+          `Secret for it and can derive no Continuation Token. Read the vault from this ` +
+          `account's relays first; if it is not there either, the lease cannot be read, ` +
+          `extended or stopped by anyone (spec §6.1.1).`,
+        404
+      );
+    }
+    if (!held.record.standby_set.includes(providerPubkey)) {
+      throw new LeaseVaultError(
+        'not_a_member',
+        `${providerPubkey.slice(0, 12)}… is not a member of this lease's Standby Set, so this ` +
+          `lease holds no token for it. A token is derived per provider (spec §6.1.1): one ` +
+          `derived for a provider that holds a different one is refused \`not_tenant\`, and on ` +
+          `a paid route that refusal is billed.`,
+        400
+      );
+    }
+    return use(continuationFor(held.record.root_secret, providerPubkey));
   }
 
   /** Forget this session's leases — a sign-out, not a deletion. */
