@@ -8,7 +8,8 @@
   "main": "dist/main.js",
   "bin": {
     "toon-console-daemon": "dist/main.js",
-    "toon-docs-publish": "dist/main-docs-publish.js"
+    "toon-docs-publish": "dist/main-docs-publish.js",
+    "toon-smoke-console": "dist/main-smoke-console.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
@@ -16,7 +17,8 @@
     "dev": "node --watch dist/main.js",
     "docs:publish": "node dist/main-docs-publish.js",
     "test": "vitest run",
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "tsc -p tsconfig.json",
+    "smoke:console": "node dist/main-smoke-console.js"
   },
   "dependencies": {
     "@noble/curves": "^2.4.0",

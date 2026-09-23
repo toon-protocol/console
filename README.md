@@ -650,6 +650,120 @@ CI deploys, and nothing in this repository touches a box's settlement key.
 npm run dev:site          # the public site, against the bundled Markdown
 ```
 
+## `smoke-console`: the whole thing, on a live network
+
+One command drives everything above end to end against a real network ([#101][i101]): it
+starts a daemon of its own, signs in with a local key, seals a Chain Seed, opens every
+channel that will collect, publishes a Template, spawns from it, extends, rotates, hands
+the workload to a gateway, terminates — and then starts a **second daemon on a data
+directory made seconds ago**, signs in as the same account, and recovers every lease from
+the Lease Vault.
+
+```bash
+# The local docker sandbox (`infra/sandbox`, `make up`):
+npm run smoke:console -- --chain solana
+
+# The public test network, re-using one channel run after run:
+TOON_SMOKE_CHAIN_SEED="<a phrase you keep>" \
+  npm run smoke:console -- --profile devnet --deposit 6000 --state-dir ~/.cache/toon-smoke
+
+npm run smoke:console -- --help    # every flag, and what it costs
+npm run smoke:console -- --stages  # the seventeen stages, in order
+```
+
+**The sandbox is the default** because it is cheap and repeatable: anvil's money, a
+Solana validator on loopback, providers in containers. `--profile devnet` points the same
+run at the public network. Nothing else differs — the chains, prices, providers, Listings
+and gateway are read from whichever network it was pointed at, so the difference between
+the two runs is only what those answers say.
+
+It does not install, uninstall, enable, disable or restart anything. `XDG_DATA_HOME`,
+`XDG_CONFIG_HOME` and `XDG_RUNTIME_DIR` point at a temporary tree, the port is `0`, and
+`TOON_CONSOLE_KEYSTORE=file` keeps this run's keys inside that tree — so a machine already
+running a console ends the run exactly as it began.
+
+### What it will not claim
+
+A stage is **proved**, **skipped** or **failed**, and a skip is never a pass. What one
+network cannot carry it says so by name, with the reason:
+
+| | Local sandbox | Devnet |
+| --- | --- | --- |
+| Standby Set (§7) | proved — two providers sell a `standby_price` | **skipped**: one provider publishes one |
+| Hidden Provider (§10) | proved — the `hs` profile publishes one | **skipped**: no Profile here is `hidden` |
+| Gateway handover (§12) | **skipped** unless `make up-gateway` ran | proved against the devnet gateway |
+
+The ending lists every skipped stage, and — when a failure stopped the run — every stage
+it never reached, because a stage that did not run is not a stage that passed.
+
+Two stages are deliberately *free* proofs rather than purchases. The Standby Set is a
+`POST /api/leases/standby-set/preflight`, which prices and routes every member and sends
+nothing: buying a second lease to watch a **Takeover** would mean stopping a provider, and
+this smoke does not arrange that. The Hidden Provider stage asserts the other half of
+[ADR 0008][adr8] when no circuit is configured — that the console **refuses** to dial a
+`.anyone` address rather than leaking the lookup.
+
+### What it costs, and what it leaves
+
+Every stage reports what it spent and the ending adds it up. One run buys one lease:
+
+| | Local sandbox | Devnet |
+| --- | --- | --- |
+| spawn / extend | 1100 + 1100 (the hub adds its own fee) | 1000 + 1000 at the provider's connector |
+| status, rotate, terminate | 100 each at the hub — **the sandbox providers publish docker-internal connector URLs**, so a free route is bought through a hop that charges for carrying it | 0: the provider's own connector terminates them |
+| relay writes | 1 each: the Chain Seed, the Image Registry entry, the Template, the vault record, the rotation | the same |
+| **one run** | **2605 base units** | **2005 µUSDC** |
+
+It leaves no lease running — the teardown ends one even when a stage failed — and it says
+what is left in each channel.
+
+Spending that rather than stranding it takes **both** `TOON_SMOKE_CHAIN_SEED` and
+`--state-dir`, and the second is the one that is easy to miss. The seed decides which
+address the channel belongs to; the state directory carries that channel's **watermark**,
+which is local bookkeeping the connector also keeps. Re-use the seed with a fresh
+directory and the console signs a claim the connector has already seen — `F01 … nonce does
+not advance this channel's watermark (replay)` — and is billed for the refusal. With both,
+the funding stage finds the channel open and sends nothing: a second devnet run took 18s
+instead of 42s and funded nothing at all.
+
+The **recovery** daemon always gets a fresh directory, whatever `--state-dir` says. That is
+the assertion the whole smoke exists for.
+
+`TOON_SMOKE_FUNDER_MNEMONIC` is the phrase whose account 0 the payer is topped up from. It
+defaults to the development phrase every local chain in this fleet is seeded with, and it
+**never opens a channel and never signs a claim** — it sends two transfers to an address
+this run derived and is done. Funding a fresh address rather than re-using a shared one is
+not politeness: a shared payer's channels carry a nonce watermark that earlier runs have
+moved on, and the loser of that race has every later claim refused.
+
+### Which chain, when a connector settles on two
+
+`--chain` picks the settlement chain. It matters where a connector forwards to a peer that
+settles in a **different token**: the hop has to convert, and it refuses a packet whose
+amount converts to nothing at the rate it declares — at full price ([ADR 0003][adr3]). The
+sandbox hub settles EVM in one token and Solana in another, and only the Solana one is what
+its provider peers take, so `--chain solana` is the sandbox's spelling. Without it the
+spawn is refused, billed, and the failure says so along with the other chain to try.
+
+### It is not in CI, and this is why
+
+Milestone 8 asked for the reason rather than the fact. Three, each sufficient alone:
+
+1. **It spends.** Every run buys a lease, an extension and five relay writes on a live
+   network. A test that moves money on every push is a test that will one day move money
+   nobody meant to move.
+2. **Its sandbox is not a container this repository can start.** `make up` in
+   `infra/sandbox` builds images from four sibling checkouts — the provider, the gateway,
+   the store and anytoon — none of which CI has.
+3. **Devnet is shared and single-threaded.** One provider, and one channel per payer; two
+   runs at once share a nonce watermark and the loser has every later claim refused. A
+   merge queue is exactly the thing that would run two at once.
+
+What CI *does* run is `packages/daemon/src/smoke-console.test.ts`: the report, the skip
+policy, the summary's obligations and the image mapping, driven with fixtures. The
+judgement about what counts as proved is tested on every push even though the network is
+not.
+
 ## Development
 
 ```bash
@@ -657,6 +771,7 @@ npm run lint         # eslint 9, flat config
 npm run typecheck    # tsc, every package
 npm test             # vitest, every package
 npm run test:packaging  # node --test, guards on the install bundle
+npm run smoke:console   # the end-to-end acceptance test; it SPENDS (see above)
 ```
 
 The vocabulary — **Console**, **Account**, **Signer**, **Chain Seed**, **Lease Vault** — is
@@ -680,8 +795,10 @@ published identity; nothing in this repository should suggest otherwise.
 [i94]: https://github.com/toon-protocol/TOON_Network/issues/94
 [i115]: https://github.com/toon-protocol/TOON_Network/issues/115
 [adr5]: https://github.com/toon-protocol/TOON_Network/blob/main/docs/adr/0005-tenant-identity-comes-from-the-request-not-payment-headers.md
+[adr8]: https://github.com/toon-protocol/TOON_Network/blob/main/docs/adr/0008-a-hidden-provider-hides-ingress-egress-and-settlement.md
 [adr9]: https://github.com/toon-protocol/TOON_Network/blob/main/docs/adr/0009-a-price-change-is-a-new-listing-version.md
 [i82]: https://github.com/toon-protocol/TOON_Network/issues/82
+[i101]: https://github.com/toon-protocol/TOON_Network/issues/101
 [i102]: https://github.com/toon-protocol/TOON_Network/issues/102
 [i120]: https://github.com/toon-protocol/TOON_Network/issues/120
 [nip23]: https://github.com/nostr-protocol/nips/blob/master/23.md
