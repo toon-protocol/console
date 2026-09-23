@@ -1,6 +1,7 @@
 import { ToonClient } from '@toon-protocol/client';
 
 import { carriageRefusal } from './hidden-transport.js';
+import { checkLeaseBody } from './lease-body.js';
 import type { LeasePacket, PacketOutcome, ProviderPort } from './lease.js';
 
 /**
@@ -11,7 +12,7 @@ import type { LeasePacket, PacketOutcome, ProviderPort } from './lease.js';
  * which connector collects — is next door where it can be tested without a
  * connector, a chain or a provider.
  *
- * Three things this does and no more.
+ * Four things this does and no more.
  *
  * **It never opens a channel.** `autoOpenChannel: false`, deliberately: the
  * library's default is to open one on the first send, and an open locks
@@ -26,6 +27,17 @@ import type { LeasePacket, PacketOutcome, ProviderPort } from './lease.js';
  * the two are the same connector, and passing the key explicitly is still
  * right: it is the provider's Profile that says which key, not whoever
  * answered.
+ *
+ * **It checks the body's shape against the route's.** §5 has two shapes —
+ * the §6.1 Lease Request envelope for the five routes that act on a lease
+ * under the tenant's authority, and a bare `{ "workload_id": "…" }` for the
+ * two extension routes, which present no Continuation Token because paying
+ * them is their whole authority (ADR 0005, ADR 0025). A connector collects a
+ * paid route's price before the provider app reads a byte, so the wrong shape
+ * is `invalid_request` AFTER a full Lease Interval has been spent, with no
+ * refund (ADR 0003, TOON_Network#115). `checkLeaseBody` is the standing check
+ * that this console never bills a person for its own malformed request, and,
+ * like `carriageRefusal`, it throws rather than sending.
  *
  * **A refusal is an outcome, not an error.** The client throws only for things
  * that happened before the packet left or on chain; a reject comes back as a
@@ -63,6 +75,11 @@ export class LiveProviderPort implements ProviderPort {
     // a condition a person can act on.
     const refusal = carriageRefusal({ socksProxy: packet.socksProxy });
     if (refusal !== null) throw new Error(refusal);
+    // And the body's shape against the route's, for the same reason one step
+    // along: a paid route bills for a refusal too, so a body this console
+    // already knows is wrong must never become a signed claim
+    // (TOON_Network#115, spec §5, ADR 0003, ADR 0025).
+    checkLeaseBody(packet.route, packet.body);
     let client: ToonClient | undefined;
     try {
       client = await ToonClient.create({
