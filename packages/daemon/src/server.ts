@@ -1,9 +1,15 @@
-import { createReadStream, existsSync, statSync } from 'node:fs';
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
+import {
+  createServer,
+  type IncomingMessage,
+  type Server,
+  type ServerResponse,
+} from 'node:http';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 
 import { handleApi, type ApiDeps } from './api.js';
 import { bearerToken, tokenMatches } from './launch-token.js';
+import { THEME_STYLE_ID } from './theme.js';
 
 /**
  * The daemon's HTTP surface: the UI's files and the local JSON API, on
@@ -33,6 +39,13 @@ export interface ServerOptions {
   readonly token: string;
   /** The built UI to serve. When absent, the daemon still serves its API. */
   readonly uiRoot?: string | undefined;
+  /**
+   * This machine's theme, as a `:root` rule, put into the shell so that the
+   * first paint is already the desktop's colours (TOON_Network#99). Read on
+   * each navigation rather than captured: a theme set while the window was
+   * closed is the theme the next one opens with.
+   */
+  readonly themeCss?: (() => string) | undefined;
   readonly host?: string | undefined;
   readonly port?: number | undefined;
 }
@@ -152,7 +165,7 @@ async function route(
     return;
   }
 
-  serveStatic(uiRoot, path, response);
+  serveStatic(uiRoot, path, response, options.themeCss);
 }
 
 function hostIsLoopback(header: string | undefined): boolean {
@@ -163,13 +176,23 @@ function hostIsLoopback(header: string | undefined): boolean {
   return ALLOWED_HOSTNAMES.has(hostname);
 }
 
-function serveStatic(uiRoot: string, path: string, response: ServerResponse): void {
+function serveStatic(
+  uiRoot: string,
+  path: string,
+  response: ServerResponse,
+  themeCss: (() => string) | undefined
+): void {
   const file = resolveWithin(uiRoot, path);
   // Anything that is not a file on disk is the SPA's own routing, so the shell
   // answers for it. A traversal attempt lands here too, which is the point.
-  const target = file && existsSync(file) && statSync(file).isFile() ? file : join(uiRoot, 'index.html');
+  const target =
+    file && existsSync(file) && statSync(file).isFile() ? file : join(uiRoot, 'index.html');
   if (!existsSync(target)) {
     sendJson(response, 404, { error: 'not_found', message: 'No such file.' });
+    return;
+  }
+  if (target.endsWith('index.html') && themeCss !== undefined) {
+    sendIndex(target, themeCss(), response);
     return;
   }
   response.writeHead(200, {
@@ -180,6 +203,32 @@ function serveStatic(uiRoot: string, path: string, response: ServerResponse): vo
     'x-content-type-options': 'nosniff',
   });
   createReadStream(target).pipe(response);
+}
+
+/**
+ * The shell, with this machine's theme already in it (TOON_Network#99).
+ *
+ * The UI ships no colours at all, so a window that painted before its first
+ * `/api/desktop` answered would flash white on a dark desktop. Putting the
+ * `:root` rule into the document that carries the script removes the gap
+ * entirely: the first paint is already themed. The window still watches
+ * `/api/desktop` afterwards, and replaces this rule whenever the theme moves.
+ *
+ * The rule is built by `theme.ts` out of properties it recognises and values
+ * it has checked, so nothing a theme file contains can become markup here.
+ */
+function sendIndex(target: string, themeCss: string, response: ServerResponse): void {
+  const html = readFileSync(target, 'utf8').replace(
+    '</head>',
+    `  <style id="${THEME_STYLE_ID}">\n${themeCss}  </style>\n  </head>`
+  );
+  response.writeHead(200, {
+    'content-type': 'text/html; charset=utf-8',
+    'content-length': Buffer.byteLength(html),
+    'cache-control': 'no-store',
+    'x-content-type-options': 'nosniff',
+  });
+  response.end(html);
 }
 
 function resolveWithin(root: string, path: string): string | undefined {

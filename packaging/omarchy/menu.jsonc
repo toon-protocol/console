@@ -1,0 +1,23 @@
+// The console's entries in the Omarchy menu (TOON_Network#99).
+//
+// toon-console-install copies these lines into
+// ~/.config/omarchy/extensions/omarchy-menu.jsonc between its own markers,
+// with @BIN@ replaced by the launcher's absolute path, and
+// toon-console-uninstall takes exactly those lines out again. The rest of
+// that file — which belongs to the person, not to this package — is never
+// read, parsed or rewritten.
+//
+// Three entries, because there are three things a person opens the console
+// for: what is running, starting something new, and the money. Each runs the
+// launcher with a view, which posts the view to the daemon and then hands the
+// window to omarchy-launch-or-focus-webapp. The post is what makes the entry
+// open the right VIEW when the window is already open: focusing is the only
+// thing Omarchy can do to a window that exists, so the window is told
+// separately (packages/daemon/src/desktop.ts).
+//
+// The ids sit under "toon", so the three appear together in one submenu and
+// `omarchy menu summon toon` opens it.
+"toon": {"icon":"󱘖","label":"TOON Console","description":"Workloads on TOON Network","aliases":["toon-console","workloads"]},
+"toon.workloads": {"icon":"󰒋","label":"Workloads","description":"What is running, its runway, extend and terminate","action":"@BIN@ --view workloads"},
+"toon.new": {"icon":"󰐕","label":"New workload","description":"Start one from a Template","action":"@BIN@ --view new-workload"},
+"toon.funds": {"icon":"󰃬","label":"Funds","description":"Deposits, channels and balances","action":"@BIN@ --view funds"},

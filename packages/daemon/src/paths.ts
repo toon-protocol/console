@@ -105,6 +105,19 @@ export function accountAutoExtendPath(paths: ConsolePaths, pubkey: string): stri
 }
 
 /**
+ * Which desktop notifications this account has already been sent
+ * (TOON_Network#99).
+ *
+ * One line per event, not per observation: an Eviction announced once must not
+ * be announced again after a restart, and this file is what remembers that.
+ * It holds nothing but keys and timestamps, and losing it costs at most one
+ * repeated toast per open event.
+ */
+export function accountAlertsPath(paths: ConsolePaths, pubkey: string): string {
+  return join(accountDataDir(paths, pubkey), 'alerts.json');
+}
+
+/**
  * A pubkey is 64 hex characters, but it arrives from a signer rather than
  * from this process, and a value that reaches `join` decides which file is
  * written. Anything that is not the shape of a pubkey never becomes a path.

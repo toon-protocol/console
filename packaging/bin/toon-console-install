@@ -8,12 +8,21 @@
 # (ADR 0019). The AUR package (TOON_Network#99) will place the same files from
 # a package-owned prefix; this script is what a checkout uses.
 #
-# Usage: packaging/bin/toon-console-install [--repo <dir>] [--no-webapp]
+# The Omarchy half is TOON_Network#99: the themed template the console's
+# colours come from, the theme-set hook that re-themes an open window, and the
+# three menu entries. Each is one file under ~/.config/omarchy, each is removed
+# again by toon-console-uninstall, and the menu file — which belongs to the
+# person — is edited only between this package's own markers.
+#
+# Usage: packaging/bin/toon-console-install [--repo <dir>] [--no-webapp] [--no-omarchy] [--no-retheme]
 
 set -euo pipefail
 
 REPO=""
 INSTALL_WEBAPP=true
+INSTALL_OMARCHY=true
+RETHEME=true
+OMARCHY_ONLY=false
 APP_NAME="TOON Console"
 
 while (($#)); do
@@ -26,8 +35,24 @@ while (($#)); do
     INSTALL_WEBAPP=false
     shift
     ;;
+  --no-omarchy)
+    INSTALL_OMARCHY=false
+    shift
+    ;;
+  --no-retheme)
+    RETHEME=false
+    shift
+    ;;
+  --omarchy-only)
+    # The desktop integration alone: the themed template, the theme-set hook
+    # and the menu entries, with the service and the launcher left exactly as
+    # they are. What a post-update hook wants, and what a checkout that is
+    # already running wants when only these three files have changed.
+    OMARCHY_ONLY=true
+    shift
+    ;;
   *)
-    echo "usage: toon-console-install [--repo <dir>] [--no-webapp]" >&2
+    echo "usage: toon-console-install [--repo <dir>] [--no-webapp] [--no-omarchy] [--no-retheme] [--omarchy-only]" >&2
     exit 1
     ;;
   esac
@@ -42,11 +67,118 @@ UI_ROOT="$REPO/packages/ui/dist"
 BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 ICON_SOURCE="$REPO/packaging/icons/toon-console.png"
+OMARCHY_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy"
+THEME_STATE="$HOME/.local/state/omarchy/current"
 
 die() {
   echo "toon-console-install: $1" >&2
   exit 1
 }
+
+
+# --------------------------------------------------------------------------
+# The Omarchy half (TOON_Network#99)
+# --------------------------------------------------------------------------
+
+# The console's colours come from the current theme through a template in
+# ~/.config/omarchy/themed/, and an open window is re-themed by a hook in
+# hooks/theme-set.d/. Both are ordinary user files with the conventions the
+# samples beside them document; neither is generated and neither is a copy of
+# anything Omarchy owns.
+install_omarchy() {
+  [[ -d $OMARCHY_DIR ]] || {
+    echo "No $OMARCHY_DIR — skipping the Omarchy integration."
+    return 0
+  }
+
+  mkdir -p "$OMARCHY_DIR/themed" "$OMARCHY_DIR/hooks/theme-set.d" "$OMARCHY_DIR/extensions"
+
+  install -m 0644 "$REPO/packaging/omarchy/toon-console.css.tpl" \
+    "$OMARCHY_DIR/themed/toon-console.css.tpl"
+
+  # The hook runs from omarchy-theme-set, whose PATH is not this shell's, so
+  # the launcher is named absolutely -- the same reason the unit is.
+  sed -e "s|@BIN@|$BIN_DIR/toon-console|g" \
+    "$REPO/packaging/omarchy/theme-set.d/toon-console" \
+    >"$OMARCHY_DIR/hooks/theme-set.d/toon-console"
+  chmod 0644 "$OMARCHY_DIR/hooks/theme-set.d/toon-console"
+
+  merge_menu
+
+  if [[ $RETHEME == true ]] && command -v omarchy-theme-set >/dev/null 2>&1 &&
+    [[ -r $THEME_STATE/theme.name ]]; then
+    # A template is rendered when a theme is SET, so until the next theme
+    # change there is nothing for the daemon to read. Setting the current
+    # theme again is the supported way to render one now; it is the same code
+    # path a theme switch takes and it is idempotent.
+    omarchy-theme-set "$(cat "$THEME_STATE/theme.name")" >/dev/null || true
+  fi
+
+  echo "Omarchy: themed template, theme-set hook and menu entries installed."
+}
+
+# The menu file belongs to the person: it is JSONC with their comments in it,
+# and parsing and rewriting it would lose them. So the entries go in as LINES,
+# between markers, and come out again the same way. Nothing else in the file is
+# read or changed.
+#
+# The block goes in at the TOP, straight after the opening brace, and every one
+# of its entries ends in a comma. That is what makes removing it a plain
+# deletion: appending at the bottom would mean putting a comma on whatever
+# entry was last, and the uninstaller could never know whether that comma had
+# been theirs. Omarchy's own reader strips a trailing comma before a closing
+# brace, so a file that held nothing but this block parses too.
+merge_menu() {
+  local menu="$OMARCHY_DIR/extensions/omarchy-menu.jsonc"
+  local block
+  block=$(sed -e "s|@BIN@|$BIN_DIR/toon-console|g" "$REPO/packaging/omarchy/menu.jsonc")
+
+  MENU_FILE="$menu" MENU_BLOCK="$block" node -e '
+    const { readFileSync, writeFileSync } = require("node:fs");
+    const file = process.env.MENU_FILE;
+    const start = "  // >>> toon-console (managed by toon-console-install; edits here are lost)";
+    const end = "  // <<< toon-console";
+    const block = process.env.MENU_BLOCK
+      .split("\n")
+      .map((line) => (line === "" ? "" : `  ${line}`))
+      .join("\n");
+
+    let text = "";
+    try {
+      text = readFileSync(file, "utf8");
+    } catch {
+      text = "{\n}\n";
+    }
+
+    // Idempotent: whatever this package put here last time comes out first.
+    const held = new RegExp(`${escape(start)}[\\s\\S]*?${escape(end)}\n`, "g");
+    text = text.replace(held, "");
+
+    const lines = text.split("\n");
+    let at = 0;
+    while (at < lines.length && (lines[at].trim() === "" || lines[at].trim().startsWith("//"))) {
+      at += 1;
+    }
+    if (lines[at] === undefined || !lines[at].trim().startsWith("{")) {
+      throw new Error(`${file} does not open with an object; leaving it alone.`);
+    }
+
+    lines.splice(at + 1, 0, start, block, end);
+    writeFileSync(file, lines.join("\n"));
+
+    function escape(value) {
+      return value.replace(/[.*+?^${}()|[\]\\\/]/g, "\\$&");
+    }
+  '
+  echo "Menu: three entries in $menu, between this package's own markers."
+}
+
+if [[ $OMARCHY_ONLY == true ]]; then
+  if [[ $INSTALL_OMARCHY == true ]]; then
+    install_omarchy
+  fi
+  exit 0
+fi
 
 [[ -f $DAEMON_ENTRY ]] || die "no built daemon at $DAEMON_ENTRY — run 'npm run build' first"
 [[ -d $UI_ROOT ]] || die "no built UI at $UI_ROOT — run 'npm run build' first"
@@ -100,6 +232,10 @@ StartupNotify=true
 Categories=Development;Network;
 EOF
   echo "Installed $DESKTOP_DIR/toon-console.desktop."
+fi
+
+if [[ $INSTALL_OMARCHY == true ]]; then
+  install_omarchy
 fi
 
 echo "Daemon: systemctl --user status toon-console.service"
