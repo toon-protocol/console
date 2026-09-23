@@ -386,6 +386,12 @@ export async function main(): Promise<void> {
     clearInterval(alerts);
     process.stdout.write(`\n${signal} — stopping\n`);
     removeLaunchRecord(recordPath);
+    // A window's `/api/desktop` long poll is in flight by design (TOON_Network#99)
+    // and `running.close()` below waits for it like any other request — so it
+    // is answered here, at once, rather than left to its own deadline (up to
+    // sixty seconds away). Nothing this daemon owns is written by that route,
+    // so answering it early loses nothing (TOON_Network#128).
+    desktop.shutdown();
     // The carriage holds an undici pool and a websocket agent's sockets.
     void hidden.close().catch(() => undefined);
     void running.close().then(
