@@ -1554,6 +1554,13 @@ async function publishTemplate(input: {
   const writer = new PaidRelayWriter({
     profile: () => options.profile,
     readHealth: (profile) => readConnectorHealth(profile, defaultConnectorReader()),
+    // A relay names its own paid write edge now (TOON_Network#121), and that
+    // edge is routinely a connector other than the profile's. This smoke
+    // publishes no NIP-65 list, so `writeRelays` stays empty and the write set
+    // is exactly #120's one relay — but that relay is entitled to name a
+    // connector of its own, and this is how it would be reached.
+    readHealthAt: (connectorUrl) =>
+      readConnectorHealth({ ...options.profile, connectorUrl }, defaultConnectorReader()),
     // Borrowed for one packet and wiped when it returns, exactly as the daemon
     // does it (ADR 0020). Nothing holds a key between writes.
     payerKeys: async (use) => {
