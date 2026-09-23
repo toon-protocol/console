@@ -58,6 +58,12 @@ yay -S toon-console      # or: paru -S toon-console
 toon-console-install     # once, as yourself
 ```
 
+> The package is `packaging/aur` in this repository and is **not published yet**: it is
+> built from the tag `v$pkgver`, and this repository has no tags. Until one exists, build
+> it yourself — `makepkg -si` in a copy of `packaging/aur` with `pkgver` pointing at a tag
+> you made — or use the checkout path below. What publishing needs is in
+> [`packaging/aur/README.md`](packaging/aur/README.md).
+
 The package installs the daemon, the UI, the docs, the launcher, the desktop entry and the
 `systemd --user` unit. `toon-console-install` does the half a package cannot: it enables
 and starts the service for **your** user, and — on Omarchy — installs the themed template,
