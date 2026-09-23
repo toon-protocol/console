@@ -70,6 +70,29 @@ describe('DesktopState', () => {
     await expect(state.wait(before, 20)).resolves.toMatchObject({ seq: before });
   });
 
+  it('answers a held wait at once when the daemon is stopping', async () => {
+    const state = new DesktopState({ read: () => theme('aaaaaa'), recheckMs: 60_000 });
+    const held = state.wait(state.current().seq, 30_000);
+
+    state.shutdown();
+
+    // Resolved by `shutdown()`, not by the 30-second deadline still armed on
+    // the same promise — nothing here changed, so the answer is the same
+    // `seq` the window already had (TOON_Network#128).
+    const answer = await held;
+    expect(answer.seq).toBe(state.current().seq);
+  });
+
+  it('answers a wait started after shutdown without holding it', async () => {
+    const state = new DesktopState({ read: () => theme('aaaaaa') });
+    const seq = state.current().seq;
+
+    state.shutdown();
+
+    const answer = await state.wait(seq, 30_000);
+    expect(answer.seq).toBe(seq);
+  });
+
   it('forgets a menu request too old for the window it was meant to open', () => {
     let at = new Date('2026-09-23T10:00:00Z');
     const state = new DesktopState({ read: () => theme('aaaaaa'), now: () => at });
