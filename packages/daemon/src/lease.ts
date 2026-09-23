@@ -397,6 +397,7 @@ export class LeaseStore {
         ...(ready.provider.profile.hidden ? { hidden: true } : {}),
       },
       paid_at: ready.payAt,
+      ...(ready.chain === undefined ? {} : { paid_chain: ready.chain }),
       listing: {
         name: ready.listing.name,
         version: ready.listing.version,
@@ -723,6 +724,7 @@ export class LeaseStore {
         route,
         content,
         payAt: payment.payAt,
+        ...(payment.view.chain === undefined ? {} : { chain: payment.view.chain }),
         sealTo: provider.profile.connectorSealKey,
         chainKind: payment.chainKind,
         rpcUrl: payment.rpcUrl,
@@ -887,6 +889,8 @@ interface ReadyPlan {
   readonly route: string;
   readonly content: SpawnContent;
   readonly payAt: string;
+  /** The settlement chain this spawn pays on. An extension must use the same. */
+  readonly chain?: string | undefined;
   readonly sealTo: string;
   readonly chainKind: 'evm' | 'solana';
   readonly rpcUrl: string;

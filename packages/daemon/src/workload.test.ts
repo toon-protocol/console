@@ -104,6 +104,13 @@ describe('the workload dashboard', () => {
     }
   };
 
+  /** The vault's view of the one lease under test. */
+  const fixture = () => {
+    const lease = leases.vault.find(workloadId);
+    if (lease === undefined) throw new Error('no lease');
+    return { lease };
+  };
+
   /** The body the fake provider was handed, for the last packet it took. */
   const lastBody = () => port.sent.at(-1)?.body as Record<string, unknown> | undefined;
 
@@ -343,6 +350,29 @@ describe('the workload dashboard', () => {
       expect(card.runway.seconds).toBeUndefined();
     });
 
+    it('reports the seconds and no date when the funds outlast the calendar', async () => {
+      // Not a contrivance: a channel holding 1e17 base units against a route
+      // priced at four figures really does buy more intervals than there are
+      // milliseconds in the date range, and this console met one on the local
+      // sandbox. A card that threw there would be a card that fell over on a
+      // well-funded account.
+      giveChannel(paths, SANDBOX.id, PROVIDER_CONNECTOR, 'evm:31337', '0xrich');
+      const { store } = channelStoreFor(paths, SANDBOX.id);
+      store.saveBinding?.(`${PROVIDER_CONNECTOR}|evm:31337|network`, {
+        channelId: '0xrich',
+        context: { chainType: 'evm', chainId: 31337, tokenNetworkAddress: 'network' },
+        depositTotal: 10n ** 17n,
+        openedAt: '2026-09-22T00:00:00.000Z',
+      });
+      store.save('0xrich', { nonce: 0, cumulativeAmount: 0n });
+
+      const card = await workloads.card(workloadId, { refresh: true });
+
+      expect(card.runway.state).toBe('computed');
+      expect(card.runway.seconds).toBeGreaterThan(1e15);
+      expect(card.runway.until).toBeUndefined();
+    });
+
     it('says it cannot be computed when nothing knows the expiry', async () => {
       port.answer = silence();
       const card = await workloads.card(workloadId, { refresh: true });
@@ -409,6 +439,55 @@ describe('the workload dashboard', () => {
       expect(result.problems.join(' ')).toContain('wrong_listing_version');
       // A free `status` may have gone out; the PAID packet never did.
       expect(port.sent.some((packet) => packet.route.endsWith('.extend'))).toBe(false);
+    });
+
+    it('pays on the chain the lease was BOUGHT on, not the first one offered', async () => {
+      // A connector forwarding to a provider's has to convert, and refuses a
+      // packet whose amount converts to nothing at the rate it declares — at
+      // full price. This console met exactly that on the local sandbox, where
+      // the hub's peer settles in Solana and the same account also held an EVM
+      // channel there. So the chain the SPAWN paid on is recorded and used,
+      // and the order a connector happens to list its settlements in decides
+      // nothing.
+      expect(fixture().lease.paidChain).toBe('evm:31337');
+      await build({
+        health: (asked) =>
+          Promise.resolve(
+            connectorHealth({
+              endpoint: asked.connectorUrl,
+              routes: asked.connectorUrl.includes('provider.example')
+                ? [
+                    { prefix: 'g.toon.provider.basic.v1.extend', price: '1000' },
+                    { prefix: 'g.toon.provider.status', price: '0' },
+                  ]
+                : [],
+              // Solana FIRST. A plan that took "the first settlement with a
+              // channel" would pick it and buy a refusal.
+              settlements: [
+                {
+                  chain: 'solana',
+                  kind: 'solana',
+                  settlementAddress: 'sol1',
+                  tokenAddress: 'sol2',
+                  decimals: 6,
+                },
+                {
+                  chain: 'evm:31337',
+                  kind: 'evm',
+                  settlementAddress: '0xaaa',
+                  tokenAddress: '0xbbb',
+                  decimals: 18,
+                },
+              ],
+            })
+          ),
+      });
+      giveChannel(paths, SANDBOX.id, PROVIDER_CONNECTOR, 'solana', 'solchan');
+
+      const card = await workloads.card(workloadId, { refresh: true });
+
+      expect(card.extend.route?.chain).toBe('evm:31337');
+      expect(card.extend.route?.channelId).toBe('0xchannel');
     });
 
     it('sends NOTHING for a lease that has ended', async () => {

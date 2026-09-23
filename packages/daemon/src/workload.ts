@@ -368,7 +368,7 @@ export class WorkloadStore {
    * `workload-cache.ts` keeps.
    */
   async dashboard(options: { refresh?: boolean } = {}): Promise<DashboardView> {
-    const vault = this.#deps.vault.status();
+    const vault = await this.#vault();
     const checkedAt = this.#at().toISOString();
     const profileId = this.#deps.profile().id;
     if (vault.state === 'signed_out' || vault.pubkey === undefined) {
@@ -426,11 +426,11 @@ export class WorkloadStore {
    */
   async extend(
     workloadId: string,
-    options: { maxPrice?: string | undefined; agreedPrice?: string | undefined } = {}
+    options: { maxPrice?: string | undefined; chain?: string | undefined } = {}
   ): Promise<ExtendResult> {
     const lease = this.#lease(workloadId);
     const problems: string[] = [];
-    const planned = await this.#plan(lease, 'extend', problems);
+    const planned = await this.#plan(lease, 'extend', problems, options.chain);
     const status = await this.#readStatus(lease);
     this.#checkExtendable(status, problems);
 
@@ -680,7 +680,11 @@ export class WorkloadStore {
           'is simply not keeping this workload alive any more.',
         ...(expiry === undefined
           ? {}
-          : { paidUntil: isoOf(expiry.at), expirySource: expiry.source, paidSeconds: 0 }),
+          : {
+              ...optional('paidUntil', isoOf(expiry.at)),
+              expirySource: expiry.source,
+              paidSeconds: 0,
+            }),
       };
     }
 
@@ -695,7 +699,7 @@ export class WorkloadStore {
       ...(paidSeconds === undefined ? {} : { paidSeconds }),
       ...(expiry === undefined
         ? {}
-        : { paidUntil: isoOf(expiry.at), expirySource: expiry.source }),
+        : { ...optional('paidUntil', isoOf(expiry.at)), expirySource: expiry.source }),
     };
 
     if (plan === undefined || plan.price === undefined) {
@@ -777,7 +781,7 @@ export class WorkloadStore {
       state: 'computed',
       affordableIntervals,
       seconds,
-      until: isoOf(this.#seconds() + seconds),
+      ...optional('until', isoOf(this.#seconds() + seconds)),
     };
   }
 
@@ -953,7 +957,8 @@ export class WorkloadStore {
   async #plan(
     lease: LeaseView,
     op: 'status' | 'terminate' | 'extend',
-    problems: string[]
+    problems: string[],
+    wanted?: string | undefined
   ): Promise<OpPlan | undefined> {
     const profile = this.#deps.profile();
     if (lease.profileId !== profile.id) {
@@ -961,6 +966,24 @@ export class WorkloadStore {
         `This lease was bought on ${lease.profileId} and the console is on ${profile.id}. ` +
           `Switch networks to act on it: its channel, its connector and its provider are all ` +
           `that network's.`
+      );
+      return undefined;
+    }
+
+    // The payer keys come from the Chain Seed, and a store that has not
+    // LOOKED for one yet reports `unknown` — which is not `absent`. Asking
+    // here is what makes a freshly started daemon show cards instead of
+    // failing every packet with "this account has no Chain Seed": the same
+    // care `lease.ts` and `funding.ts` take, for the same reason (ADR 0020).
+    const seed = await this.#seed();
+    if (seed.state !== 'ready' && seed.state !== 'not_yet_recoverable') {
+      problems.push(
+        seed.state === 'signed_out'
+          ? 'No account is signed in, so there is no key to pay with and no lease to act on.'
+          : (seed.reason ??
+              'This account has no readable Chain Seed, so it has no payer key on any chain — ' +
+                'and every packet, free route included, is signed by one. Mint or import one on ' +
+                'the Account tab.')
       );
       return undefined;
     }
@@ -1103,7 +1126,15 @@ export class WorkloadStore {
       channelStore: channels.store,
     };
 
-    for (const settlement of chosen.health.settlements) {
+    // The chain a lease was BOUGHT on comes first, and it is not a preference.
+    // A connector forwarding to a provider's has to convert, and it refuses a
+    // packet whose amount converts to nothing at the rate it declares — at
+    // full price. On this machine's sandbox the hub's peer settles in Solana
+    // while the same account also holds an EVM channel there, so an extension
+    // that picked "the first chain with a channel" would be refused and billed
+    // for a lease the spawn had paid for perfectly well.
+    const settlements = orderChains(chosen.health.settlements, wanted ?? lease.paidChain);
+    for (const settlement of settlements) {
       const binding = findChannelBinding(channels.store, chosen.url, settlement.chain);
       if (!binding) continue;
       return {
@@ -1116,7 +1147,7 @@ export class WorkloadStore {
       } as OpPlan;
     }
 
-    const first = chosen.health.settlements[0];
+    const first = settlements[0];
     if (chosen.price !== '0') {
       // A paid route with nothing to pay from. Said here, before a packet, and
       // with somewhere to go about it.
@@ -1193,6 +1224,42 @@ export class WorkloadStore {
       (candidate) => candidate.pubkey === lease.provider.pubkey
     );
     return provider === undefined ? undefined : { provider };
+  }
+
+  /**
+   * The vault — having actually LOOKED at this account's relays, once.
+   *
+   * `unknown` means nothing has read them yet, which is not the same as "this
+   * account has no workloads", and a dashboard that showed an empty page for
+   * the second would be the worst answer this screen can give. Reading a relay
+   * is free (spec §5 prices a provider's routes, never a relay's reads), so
+   * looking costs nothing but the wait.
+   */
+  async #vault() {
+    const held = this.#deps.vault.status();
+    if (held.state !== 'unknown') return held;
+    try {
+      return await this.#deps.vault.refresh();
+    } catch {
+      return this.#deps.vault.status();
+    }
+  }
+
+  /**
+   * The Chain Seed's state — having actually LOOKED for it.
+   *
+   * `unknown` is not `absent`, and a console that told somebody they had no
+   * Chain Seed because nothing had asked their relays yet would be refusing to
+   * show them workloads they are paying for.
+   */
+  async #seed() {
+    const held = this.#deps.chainSeed.status();
+    if (held.state !== 'unknown') return held;
+    try {
+      return await this.#deps.chainSeed.refresh();
+    } catch {
+      return this.#deps.chainSeed.status();
+    }
   }
 
   #lease(workloadId: string): LeaseView {
@@ -1371,8 +1438,38 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-function isoOf(seconds: number): string {
-  return new Date(seconds * 1000).toISOString();
+/**
+ * A unix second as an ISO instant, or nothing at all.
+ *
+ * `undefined` rather than a throw for a moment no calendar has, because one
+ * arrives honestly: a channel holding 1e17 base units against a route priced
+ * at four figures really does buy more intervals than there are milliseconds
+ * in the ECMAScript date range, and a dashboard must not fall over on an
+ * account that is well funded. The seconds are still reported; only the date
+ * is missing, which is the part that has no meaning.
+ */
+function isoOf(seconds: number): string | undefined {
+  if (!Number.isFinite(seconds)) return undefined;
+  const at = new Date(seconds * 1000);
+  return Number.isNaN(at.getTime()) ? undefined : at.toISOString();
+}
+
+/**
+ * The chains this connector settles on, with the one this lease is paid on
+ * first.
+ *
+ * A reorder and never a filter: naming a chain this account holds no channel
+ * on must degrade to "some other chain, and here is which", not to "no channel
+ * at all".
+ */
+function orderChains<T extends { chain: string }>(
+  settlements: readonly T[],
+  wanted: string | undefined
+): readonly T[] {
+  if (wanted === undefined) return settlements;
+  return [...settlements].sort((left, right) =>
+    left.chain === wanted ? -1 : right.chain === wanted ? 1 : 0
+  );
 }
 
 function messageOf(error: unknown): string {

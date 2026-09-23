@@ -133,6 +133,20 @@ export interface VaultedLease {
   };
   /** The connector the spawn was PAID at, which may not be the provider's. */
   readonly paid_at: string;
+  /**
+   * The settlement chain the spawn was paid on, as the connector names it.
+   *
+   * Recorded because an EXTENSION has to be paid the same way, and which chain
+   * that is cannot be worked out afterwards: an account may hold channels with
+   * one connector on two chains, and a connector forwarding to a provider's
+   * refuses a packet whose amount converts to nothing at the rate it declares
+   * — at full price (TOON_Network#93, found on this machine's sandbox, where
+   * the hub's peer settles in Solana and the same account also holds an EVM
+   * channel there). Absent on a record written before this field existed; the
+   * dashboard then falls back to the first chain it holds a channel on and
+   * says which it chose.
+   */
+  readonly paid_chain?: string | undefined;
   readonly listing: {
     readonly name: string;
     readonly version: number;
@@ -178,6 +192,8 @@ export interface LeaseView {
   readonly standbySet: readonly string[];
   readonly provider: VaultedLease['provider'];
   readonly paidAt: string;
+  /** The chain the spawn was paid on, when the record names one. */
+  readonly paidChain?: string | undefined;
   readonly listing: VaultedLease['listing'];
   readonly profileId: string;
   readonly image: LeaseImage;
@@ -834,6 +850,7 @@ function toView(held: OpenLease): LeaseView {
     standbySet: record.standby_set,
     provider: record.provider,
     paidAt: record.paid_at,
+    ...(record.paid_chain === undefined ? {} : { paidChain: record.paid_chain }),
     listing: record.listing,
     profileId: record.profile_id,
     image: record.image,

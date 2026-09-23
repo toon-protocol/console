@@ -108,7 +108,7 @@ export interface WorkloadPort {
   card(workloadId: string, options?: { refresh?: boolean }): Promise<WorkloadCard>;
   extend(
     workloadId: string,
-    options?: { maxPrice?: string | undefined }
+    options?: { maxPrice?: string | undefined; chain?: string | undefined }
   ): Promise<ExtendResult>;
   terminate(workloadId: string): Promise<TerminateResult>;
 }
@@ -709,8 +709,15 @@ async function handleWorkloads(
       return ok(await workloads.card(workloadId, { refresh: true }));
     }
     if (action === 'extend' && method === 'POST') {
-      const maxPrice = string(asRecord(body), 'maxPrice');
-      return ok(await workloads.extend(workloadId, { ...optional('maxPrice', maxPrice) }));
+      const fields = asRecord(body);
+      return ok(
+        await workloads.extend(workloadId, {
+          ...optional('maxPrice', string(fields, 'maxPrice')),
+          // Which settlement chain to pay on, when this lease's record does
+          // not say and the account holds channels on more than one.
+          ...optional('chain', string(fields, 'chain')),
+        })
+      );
     }
     if (action === 'terminate' && method === 'POST') {
       return ok(await workloads.terminate(workloadId));
