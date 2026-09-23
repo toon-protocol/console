@@ -87,6 +87,7 @@ export class DesktopState {
   #open?: MenuView;
   #openedAt?: Date;
   #changedAt: Date;
+  #stopped = false;
 
   constructor(options: DesktopStateOptions = {}) {
     this.#read = options.read ?? (() => readTheme());
@@ -132,6 +133,22 @@ export class DesktopState {
   }
 
   /**
+   * The daemon is stopping (TOON_Network#128).
+   *
+   * Every window currently held in `wait()` is answered at once, with
+   * whatever is true right now — not left to time out on its own deadline,
+   * which is up to sixty seconds away and is exactly what kept
+   * `server.close()` from finishing. Nothing about the state itself changes
+   * (`seq` does not move, and a real theme or menu change still bumps it as
+   * usual up to this point): this is the poll giving up on waiting, not an
+   * event.
+   */
+  shutdown(): void {
+    this.#stopped = true;
+    for (const wake of [...this.#waiting]) wake();
+  }
+
+  /**
    * Wait until something changes, or until `timeoutMs` has passed.
    *
    * `since` is the `seq` the window last saw. A window that is behind is
@@ -139,7 +156,10 @@ export class DesktopState {
    * that happened between two polls is lost.
    */
   async wait(since: number | undefined, timeoutMs: number): Promise<DesktopView> {
-    if (since === undefined || since !== this.#seq) return this.current();
+    // Once `shutdown()` has run, nothing holds — a poll that lands after the
+    // daemon started stopping is answered exactly like one that arrived too
+    // late to wait in the first place (TOON_Network#128).
+    if (this.#stopped || since === undefined || since !== this.#seq) return this.current();
 
     return new Promise<DesktopView>((resolve) => {
       let settled = false;

@@ -105,9 +105,28 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
     server,
     url,
     port: boundPort,
+    // `server.close()` stops accepting new connections but waits for every
+    // one it already has — and a keep-alive socket does not end just because
+    // its current response did: Node leaves it open, idle, for the caller to
+    // reuse. `/api/desktop`'s long poll answers itself on shutdown (see
+    // `desktop.ts`'s `shutdown()`), which lets the response finish, but the
+    // now-idle socket underneath it is still there, and the window on the
+    // other end may already be reconnecting it for another poll before we
+    // get to this. `closeIdleConnections()` drops anything with no request
+    // actually in flight; it never touches a socket mid-write, so an ordinary
+    // API call — the one this daemon must let finish — is never cut off
+    // (TOON_Network#128). Swept once immediately and then on a short tick
+    // until `close()` itself reports done, so a reconnect racing the first
+    // sweep is caught by the next one instead of outliving it.
     close: () =>
       new Promise<void>((done, fail) => {
-        server.close((error) => (error ? fail(error) : done()));
+        const sweep = setInterval(() => server.closeIdleConnections(), 10);
+        server.close((error) => {
+          clearInterval(sweep);
+          if (error) fail(error);
+          else done();
+        });
+        server.closeIdleConnections();
       }),
   };
 }
