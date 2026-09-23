@@ -463,11 +463,21 @@ export class AutoExtender implements AutoExtendReader {
       );
     }
     if (compareAmounts(setPrice, policy.agreedPrice) > 0) {
+      // A round gets dearer two ways, and both are the same answer: stop and
+      // say so. A Listing that was republished is a new offer (ADR 0009). A
+      // **Takeover** is not a price change at all — it is the set costing
+      // more, because the standby that won is a running lease from that
+      // moment and is paid at `price` on `.extend` rather than at
+      // `standby_price` (§7.1 step 4). Either way the figure is no longer the
+      // one the account agreed to, and spending past it unattended is
+      // precisely what a budget exists to prevent.
       return stopped(
         `One round of extensions for this workload now costs ${setPrice} base units, above ` +
-          `the ${policy.agreedPrice} this budget agreed to. A price change is a new Listing ` +
-          `version (ADR 0009), so this is a different offer from the one that was agreed to ` +
-          `and nothing was bought.`
+          `the ${policy.agreedPrice} this budget agreed to, so nothing was bought. Either a ` +
+          `Listing was republished — a price change is a new Listing version (ADR 0009) — or ` +
+          `a Takeover has made this Standby Set dearer: the member that won runs the workload ` +
+          `now and is paid at the running price, not at the standby price (§7.1). Read the ` +
+          `figure again and arm against what it actually is.`
       );
     }
 

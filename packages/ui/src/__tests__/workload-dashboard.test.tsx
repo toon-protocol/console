@@ -520,6 +520,193 @@ describe('the workload dashboard', () => {
     expect(await screen.findByText(/Extending automatically/u)).toBeInTheDocument();
   });
 
+  /* ------------------------------------------------------------------- */
+  /* A Standby Set (TOON_Network#95, spec §7)                             */
+  /* ------------------------------------------------------------------- */
+
+  const STANDBY = 'f'.repeat(64);
+
+  /** The same card, as a set of two with the standby still Reserved. */
+  function warmSet(overrides: Partial<WorkloadCard> = {}): WorkloadCard {
+    const base = card();
+    const reserved: WorkloadCard['members'][number] = {
+      pubkey: STANDBY,
+      index: 1,
+      role: 'standby',
+      provider: {
+        ilpAddress: 'g.toon.provider2',
+        connectorUrl: 'https://provider2.test/ilp',
+        hidden: false,
+        liveness: 'live',
+        inDirectory: true,
+      },
+      listing: {
+        name: 'warm',
+        version: 1,
+        address: `30432:${STANDBY}:warm`,
+        lease_interval_s: 600,
+        price: 1000,
+      },
+      status: {
+        kind: 'read',
+        life: { phase: 'reserved' },
+        role: 'standby',
+        expiresAt: 1_790_003_600,
+        readAt: '2026-09-23T10:00:00.000Z',
+      },
+      extend: {
+        ok: true,
+        op: 'standby.extend',
+        problems: [],
+        route: {
+          route: 'g.toon.provider2.warm.v1.standby.extend',
+          payAt: 'https://provider2.test/ilp',
+          via: 'provider-connector',
+          reason: 'x',
+          price: '400',
+        },
+      },
+      runningNow: false,
+      selfStopped: false,
+      vaultState: 'live',
+      known: true,
+    };
+    const primary = base.members[0];
+    if (primary === undefined) throw new Error('no primary');
+    return {
+      ...base,
+      members: [{ ...primary, role: 'primary' }, reserved],
+      set: { members: 2, warm: true, pricePerInterval: '1400', runningMember: PROVIDER },
+      ...overrides,
+    };
+  }
+
+  it('lists a Standby Set’s members, and prices each on its own route', async () => {
+    dashboard = dashboardOf(warmSet());
+    await open();
+
+    expect(await screen.findByText('2 members')).toBeInTheDocument();
+    expect(screen.getByText('reserved')).toBeInTheDocument();
+    // §6.3: a reservation is paid on `.standby.extend` at the standby price,
+    // never on `.extend` — which refuses it and bills at the running price.
+    expect(
+      screen.getByRole('button', { name: /Extend on \.standby\.extend — 400 base units/u })
+    ).toBeEnabled();
+    expect(
+      screen.getByText(/holds capacity for this workload and runs nothing/u)
+    ).toBeInTheDocument();
+  });
+
+  it('extends the RESERVATION at the member the button names', async () => {
+    dashboard = dashboardOf(warmSet());
+    extendAnswer = {
+      sent: true,
+      problems: [],
+      member: STANDBY,
+      op: 'standby.extend',
+      cost: '400',
+      expiresAt: 1_790_004_200,
+      card: warmSet(),
+    };
+    const person = await open();
+
+    await person.click(
+      await screen.findByRole('button', { name: /Extend on \.standby\.extend/u })
+    );
+
+    await waitFor(() => {
+      expect(posted.some((call) => call.path.endsWith('/extend'))).toBe(true);
+    });
+    expect(posted.find((call) => call.path.endsWith('/extend'))?.body).toEqual({
+      maxPrice: '400',
+      member: STANDBY,
+    });
+  });
+
+  it('shows a Takeover: who runs it now, and when it was announced', async () => {
+    dashboard = dashboardOf(
+      warmSet({
+        set: {
+          members: 2,
+          warm: true,
+          pricePerInterval: '2000',
+          runningMember: STANDBY,
+          takeover: {
+            winner: STANDBY,
+            from: PROVIDER,
+            rounds: 1,
+            announcedAt: '2026-09-23T10:15:23.000Z',
+            firstSeenAt: '2026-09-23T10:20:00.000Z',
+            seenBy: 'claim',
+          },
+        },
+      })
+    );
+    await open();
+
+    expect(await screen.findByText('Takeover.')).toBeInTheDocument();
+    expect(screen.getByText(/runs this workload now/u)).toBeInTheDocument();
+    expect(screen.getByText(/in the winner’s own signed claim/u)).toBeInTheDocument();
+    // ADR 0010: the standby starts from the image, and no state moves.
+    expect(screen.getByText(/No workload state moved/u)).toBeInTheDocument();
+  });
+
+  it('tells a SELF-STOPPED primary from an expired lease', async () => {
+    const set = warmSet();
+    const primary = set.members[0];
+    if (primary === undefined) throw new Error('no primary');
+    const stoppedStatus: WorkloadCard['status'] = {
+      kind: 'read',
+      life: { phase: 'stopped' },
+      role: 'primary',
+      expiresAt: 1_790_003_600,
+      readAt: '2026-09-23T10:00:00.000Z',
+    };
+    dashboard = dashboardOf({
+      ...set,
+      status: stoppedStatus,
+      members: [
+        { ...primary, status: stoppedStatus, selfStopped: true, runningNow: false },
+        set.members[1] as WorkloadCard['members'][number],
+      ],
+    });
+    await open();
+
+    // The lease STANDS: paid to its expiry, extendable at the running price,
+    // swept like any other. An expired lease is over and cannot be restarted,
+    // and the card must never show one as the other (§6.7, §7.1).
+    expect(await screen.findByText(/This is a self-stop, not an ending/u)).toBeInTheDocument();
+    expect(screen.getByText(/still paid to its expiry/u)).toBeInTheDocument();
+    expect(screen.getByText('self-stopped')).toBeInTheDocument();
+    expect(screen.queryByText(/no payment bought another Lease Interval/u)).toBeNull();
+  });
+
+  it('counts the runway across the whole set, and names what bounds it', async () => {
+    dashboard = dashboardOf(
+      warmSet({
+        runway: {
+          state: 'computed',
+          listingPrice: 1000,
+          leaseIntervalSeconds: 600,
+          paidSeconds: 300,
+          setPricePerInterval: '1400',
+          rounds: 5,
+          boundBy: STANDBY,
+          seconds: 300 + 5 * 600,
+          until: '2026-09-23T11:00:00.000Z',
+          readAt: '2026-09-23T10:00:00.000Z',
+        },
+      })
+    );
+    await open();
+
+    expect(await screen.findByText(/Runway 55 min/u)).toBeInTheDocument();
+    expect(
+      screen.getByText(/for the whole Standby Set: 5 more round\(s\)/u)
+    ).toBeInTheDocument();
+    expect(screen.getByText(/EVERY member is paid/u)).toBeInTheDocument();
+  });
+
   it('shows a budget that stopped, and why', async () => {
     dashboard = dashboardOf(
       card({
