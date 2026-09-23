@@ -27,6 +27,7 @@ export interface ProfileView {
   relayUrl: string;
   gatewayDomain: string;
   faucetUrl?: string;
+  rpc: { evm?: string; solana?: string };
   origin: 'built-in' | 'user';
   configured: boolean;
   active: boolean;
@@ -316,6 +317,124 @@ export interface ChainSeedStatus {
   checkedAt: string;
 }
 
+/**
+ * Funding: deposits, gas, balances and payment channels (TOON_Network#90).
+ *
+ * The same hand-kept mirror as everything above, and the same rule as the
+ * Chain Seed's: nothing here is a mnemonic or a key, and there is no route
+ * that would answer one. What an account sees is an address, the path it came
+ * from, what the chains say it holds, and what its channel is worth.
+ *
+ * Note the three shapes that exist so that the UI cannot round a bad answer
+ * up into a good one. `BalanceView.state` is `unknown` for a chain that could
+ * not be read, and carries no figures at all rather than zeroes.
+ * `ChannelView.phase` has `opening`, which is neither open nor failed.
+ * `GasView.verdict` has `unknown`, which is neither "you are fine" nor "you
+ * are stuck".
+ */
+
+export interface Amount {
+  /** Base units, as a decimal string. Big enough to need one. */
+  amount: string;
+  decimals?: number;
+  symbol?: string;
+  address?: string;
+}
+
+export interface BalanceView {
+  state: 'unknown' | 'read';
+  native?: Amount;
+  token?: Amount;
+  reason?: string;
+  readAt?: string;
+}
+
+export interface GasView {
+  verdict: 'unknown' | 'none' | 'present';
+  symbol?: string;
+  headline: string;
+  detail: string;
+  command?: string;
+  faucetGivesGas: boolean;
+}
+
+export type ChannelPhase = 'none' | 'opening' | 'open' | 'closing' | 'settled' | 'failed';
+
+export interface ChannelView {
+  phase: ChannelPhase;
+  channelId?: string;
+  deposit?: string;
+  spent?: string;
+  available?: string;
+  nonce?: number;
+  openedAt?: string;
+  startedAt?: string;
+  txHash?: string;
+  reason?: string;
+  outOfGas?: boolean;
+  watermarkUncertain?: boolean;
+}
+
+export interface ChainFundingView {
+  /** `evm:84532`, or `solana` — the connector's own word for it. */
+  chain: string;
+  kind: 'evm' | 'solana';
+  counterparty: string;
+  token: { address: string; decimals: number };
+  deposit: ChainAddress;
+  rpc: { url: string; source: 'profile' | 'client-default' };
+  balances: BalanceView;
+  gas: GasView;
+  channel: ChannelView;
+  canOpen: boolean;
+  blockedBy?: string;
+  suggestedDeposit?: string;
+}
+
+export interface QuoteView {
+  route: string;
+  price: string;
+  pricePerKib?: string;
+  packets: number;
+}
+
+export interface FaucetChainView {
+  kind: 'evm' | 'solana';
+  name: string;
+  ready: boolean;
+  route?: string;
+  drips: { asset: string; amount: string }[];
+  cooldownHours?: string;
+}
+
+export interface FaucetView {
+  url: string;
+  state: 'unknown' | 'ready' | 'unreachable';
+  reason?: string;
+  chains: FaucetChainView[];
+  givesGas: boolean;
+  lastDrip?: {
+    chain: string;
+    at: string;
+    state: 'delivered' | 'refused';
+    message: string;
+  };
+}
+
+export interface FundingStatus {
+  state: 'signed_out' | 'unconfigured' | 'connector_unreachable' | 'no_seed' | 'ready';
+  profile: { id: string; label: string };
+  pubkey?: string;
+  custody: { text: string; acknowledgedAt?: string };
+  supersededSeeds: number;
+  chains: ChainFundingView[];
+  quote?: QuoteView;
+  faucet?: FaucetView;
+  channelStorePath?: string;
+  reason?: string;
+  checkedAt: string;
+}
+
 export class DaemonError extends Error {
   readonly status: number;
   /** The daemon's machine-readable code, e.g. `passphrase_required`. */
@@ -412,6 +531,23 @@ export const daemon = {
   // One way only: the words go to the daemon, and the answer is addresses.
   importChainSeed: (mnemonic: string) =>
     post<ChainSeedStatus>('/api/chain-seed/import', { mnemonic }),
+
+  funding: (options: { refresh?: boolean } = {}) =>
+    call<FundingStatus>(`/api/funding${options.refresh ? '?refresh=1' : ''}`),
+  /**
+   * Opens a channel, which **spends money**: it locks collateral on chain and
+   * pays the chain's own gas for the transaction. It answers as soon as the
+   * transaction is in flight, with the channel reported as `opening` — so the
+   * window polls rather than waiting on a confirmation it cannot hurry.
+   *
+   * `deposit` is a whole number of the token's base units, as a string. It is
+   * not a decimal fraction: how many decimals the token has is the connector's
+   * to state, and rounding it in the browser as well is how a figure stops
+   * matching.
+   */
+  openChannel: (request: { chain: string; deposit?: string }) =>
+    post<FundingStatus>('/api/funding/channel', request),
+  faucetDrip: (chain: string) => post<FundingStatus>('/api/funding/faucet', { chain }),
 };
 
 /** The filters, as the daemon's query string spells them. */

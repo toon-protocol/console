@@ -39,6 +39,7 @@ const profile = (id: string, label: string, active: boolean, configured = true) 
   connectorUrl: configured ? 'https://connector.example/ilp' : '',
   relayUrl: '',
   gatewayDomain: '',
+  rpc: {},
   origin: 'built-in' as const,
   configured,
   active,

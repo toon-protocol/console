@@ -10,6 +10,7 @@ import {
   type DirectoryFilters,
   type DirectoryResult,
 } from './directory.js';
+import { FundingError, type FundingStore } from './funding.js';
 import {
   KeystoreUnavailableError,
   PassphraseRequiredError,
@@ -35,7 +36,8 @@ import type { DaemonVersion } from './version.js';
  * Health, the profile list and the switch came with the skeleton (#87); the
  * Provider Directory joins them here (#91); `/api/account/*` is sign-in (#88):
  * the Account, its Signer and the local keystore. `/api/chain-seed/*` is the
- * Chain Seed (#89). Channels and balances (#90 onward) add their own.
+ * Chain Seed (#89), and `/api/funding/*` is deposits, gas, balances and
+ * payment channels (#90).
  *
  * Every route here is already behind the per-launch token — `server.ts` checks
  * it before anything in this file runs — and that matters more now than it did
@@ -51,6 +53,7 @@ export interface ApiDeps {
   readonly profiles: ProfileStore;
   readonly session: AccountSession;
   readonly chainSeed: ChainSeedStore;
+  readonly funding: FundingStore;
   readonly readHealth: (
     profile: NetworkProfile,
     options?: { forceRefresh?: boolean }
@@ -145,6 +148,14 @@ export async function handleApi(deps: ApiDeps, request: ApiRequest): Promise<Api
   if (path === '/api/chain-seed' || path.startsWith('/api/chain-seed/')) {
     try {
       return await handleChainSeed(deps.chainSeed, method, path, request.body);
+    } catch (error) {
+      return accountProblem(error);
+    }
+  }
+
+  if (path === '/api/funding' || path.startsWith('/api/funding/')) {
+    try {
+      return await handleFunding(deps.funding, method, path, request.query, request.body);
     } catch (error) {
       return accountProblem(error);
     }
@@ -310,6 +321,84 @@ async function handleChainSeed(
   return problem(404, 'unknown_route', `No route ${method} ${path}.`);
 }
 
+/**
+ * Funding: deposits, gas, balances and payment channels (TOON_Network#90).
+ *
+ * `GET` is the state; each `POST` is one thing an account can decide to do
+ * about it, and every one of them answers with the whole state again — so a
+ * window that pressed a button and a window that merely polled see the same
+ * thing, which matters most for the open, whose whole story is a state that
+ * changes underneath both of them.
+ *
+ * `POST /api/funding/channel` **spends money**: it locks collateral on chain
+ * and pays gas for the privilege. It returns as soon as the transaction is in
+ * flight rather than holding the request open for a confirmation, and the
+ * answer reports the channel as `opening`. A caller that waited on this route
+ * would have no way to tell a slow chain from a dead daemon, which is the
+ * distinction the pending state exists to draw.
+ *
+ * No request body here carries key material, and no answer does either: the
+ * payer keys are derived inside `chain-seed.ts` for the length of one open and
+ * wiped after it. `api-funding.test.ts` is the test that says so.
+ */
+async function handleFunding(
+  funding: FundingStore,
+  method: string,
+  path: string,
+  query: URLSearchParams,
+  body: unknown
+): Promise<ApiResponse> {
+  const at = (route: string, verb: string) => path === route && method === verb;
+
+  if (at('/api/funding', 'GET')) {
+    return ok(await funding.status({ refresh: query.get('refresh') === '1' }));
+  }
+
+  if (at('/api/funding/channel', 'POST')) {
+    const chain = string(asRecord(body), 'chain');
+    if (!chain) {
+      return problem(
+        400,
+        'invalid_request',
+        'Body must name the `chain` to open on, exactly as the connector published it in ' +
+          '`GET /ilp` — `evm:<chain id>`, or `solana`.'
+      );
+    }
+    try {
+      return ok(
+        await funding.openChannel({
+          chain,
+          ...optional('deposit', string(asRecord(body), 'deposit')),
+        })
+      );
+    } catch (error) {
+      if (error instanceof FundingError)
+        return problem(error.status, error.code, error.message);
+      throw error;
+    }
+  }
+
+  if (at('/api/funding/faucet', 'POST')) {
+    const chain = string(asRecord(body), 'chain');
+    if (!chain) {
+      return problem(
+        400,
+        'invalid_request',
+        'Body must name the `chain` to ask the faucet for.'
+      );
+    }
+    try {
+      return ok(await funding.drip({ chain }));
+    } catch (error) {
+      if (error instanceof FundingError)
+        return problem(error.status, error.code, error.message);
+      throw error;
+    }
+  }
+
+  return problem(404, 'unknown_route', `No route ${method} ${path}.`);
+}
+
 /** `{ "relays": [{ "url": "wss://…", "mode": "read" | "write" | "both" }] }`. */
 function readRelayEntries(
   body: unknown
@@ -349,6 +438,7 @@ function accountProblem(error: unknown): ApiResponse {
   if (error instanceof RemoteSignerError) return problem(502, error.code, error.message);
   if (error instanceof SessionError) return problem(error.status, error.code, error.message);
   if (error instanceof RelayListError) return problem(400, error.code, error.message);
+  if (error instanceof FundingError) return problem(error.status, error.code, error.message);
   if (error instanceof SealingError) return problem(409, error.code, error.message);
   if (error instanceof ChainSeedError) {
     // The per-relay detail travels with the problem, because "it was not

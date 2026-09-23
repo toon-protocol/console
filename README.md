@@ -7,9 +7,10 @@ this one — holds the account's keys and manages its workloads. Nothing about a
 lives on a server anyone else operates ([ADR 0019][adr19]).
 
 It installs, starts and opens, it knows which network it is pointed at, it can tell you what
-that network's connector says about itself, it browses the Provider Directory, and an
-**Account** can sign in with its **Signer**. Funds ([#89][i89]) and the workload dashboard
-([#90][i90] onward) build on it.
+that network's connector says about itself, it browses the Provider Directory, an
+**Account** can sign in with its **Signer** and seal itself a **Chain Seed** ([#89][i89]),
+and that account can deposit, open a payment channel and watch its balances
+([#90][i90]). The workload dashboard ([#93][i93] onward) builds on it.
 
 ## What is here
 
@@ -103,6 +104,88 @@ settles in, what a route costs — is read from that connector's own free `GET /
 health view is opened. There is no chain id, token address or settlement address anywhere
 in this repository, and `packages/daemon/src/profiles.test.ts` fails if one appears.
 
+## Funds
+
+The **Funds** view takes an account from empty to a payment channel it can pay a provider
+from ([#90][i90]). One card per chain the active connector settles on, and every chain fact
+on it — which chains those are, in which token, at how many decimals, against which
+settlement address — is read from that connector's own `GET /ilp`.
+
+- **A deposit address per chain, with a QR code**, derived from the Chain Seed at the paths
+  `@toon-protocol/client` owns. The address and its derivation path are shown; the phrase
+  is not, and there is no route in this daemon that would answer one ([ADR 0020][adr20]).
+- **The faucet**, on a network that has one. The console reads its `/api/info` and repeats
+  what it says about itself — what it drips, on which chains, how often — rather than
+  describing it from memory, and asks it for a drip in place.
+- **Balances**, on chain and in the channel, re-read on demand.
+- **Open a channel** to the active profile's connector, through `@toon-protocol/client`.
+  Channel state goes into the console's own data directory through the client's
+  `channelStore` seam, one store per network: `~/.local/share/toon-console/channels/<profile>/`.
+- **Prices are the connector's**, repeated. The suggested collateral is *n* packets at the
+  price the connector quoted for its dearest route, and a route that meters by size carries
+  its per-kibibyte rate unmultiplied. The console never works a price out for itself: the
+  client and the connector round that charge differently and the connector is the one that
+  decides ([TOON_Network#82][i82]).
+
+### Native gas is the obstacle, and the view says so first
+
+Opening a payment channel is a **transaction on a chain**, so it is paid for in that
+chain's own coin — ETH on Base, SOL on Solana — which is not the token this network is
+priced in and which no part of TOON Network can mint. A fresh Chain Seed has none of it on
+either chain, and today nothing can hand it over:
+
+- the devnet faucet gives the settlement token and **reports no ETH of its own to give**
+  (`faucetBalances.eth: null`, which the console reads rather than assuming);
+- the public Solana devnet airdrop is capped per day and answers `429` once it is;
+- Base Sepolia has no ungated faucet.
+
+So the daemon reaches a **gas verdict per chain before anything else**, and the view leads
+with it — above the deposit address, not below a failed transaction. The Open button is
+disabled with `blockedBy` written beside it whenever the chain cannot pay for the
+transaction, and the sentence that goes with it is built from what the chains and the
+faucet actually reported, so a network whose faucet started giving gas changes it without
+anyone editing a screen.
+
+The one thing that always works is the same address both sums go to: send a little of the
+chain's own coin to the deposit address from a wallet that already holds some. The view
+says that in those words, and hands a Solana account the `solana airdrop` command to copy.
+
+### A reading that would be a lie says "unknown" instead
+
+Three shapes exist so a bad answer cannot be rounded up into a good one:
+
+| It happened | It reads as | It never reads as |
+| --- | --- | --- |
+| The RPC endpoint did not answer | `unknown`, with no figures at all | `0` |
+| The opening transaction is in flight | `opening`, with the reason that waiting is the remedy | `failed` |
+| This console holds no channel here | `none` — *no record of one* | "you have nothing" |
+| Nobody has asked this account's relays for its Chain Seed yet | a look, and then whatever the look found | "you have no Chain Seed, mint one" |
+
+That last row is the costly one: telling an account with a sealed seed on a relay that it has
+none is how it ends up minting a second, and ADR 0020 says the console must never merge or
+recover the loser. So the view looks before it says, and a look that could not happen leaves
+the question open rather than closing it the wrong way.
+
+A `watermarkUncertain` channel shows its figures and is not called a balance. The Open
+button is off for an `unknown` chain as well as an empty one: not knowing whether a
+transaction can be paid for is not permission to try.
+
+Refreshing this view **uses no key material at all** — balances are address reads and
+channel state comes from the console's own store — so an account on a NIP-46 remote signer
+can leave it open without being asked to approve anything. The payer keys are derived
+inside one call frame for one open and zeroed when it returns.
+
+```bash
+curl -H "authorization: Bearer $TOKEN" 'http://127.0.0.1:7797/api/funding?refresh=1'
+curl -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"chain":"evm:31337","deposit":"100000"}' \
+  http://127.0.0.1:7797/api/funding/channel
+```
+
+`POST /api/funding/channel` answers as soon as the transaction is in flight, with the
+channel reported as `opening`. A request held open for the length of a confirmation would
+leave a caller unable to tell a slow chain from a dead daemon.
+
 ## The Provider Directory
 
 The **Providers** view reads the directory — **Provider Profiles** (kind `10432`),
@@ -125,7 +208,8 @@ free, so browsing costs nothing and the console holds no lease to do it.
   own `expiration` down in the browser and flips itself over when it passes, with no
   refetch and no new event (ADR 0007).
 
-Choosing a tier and spawning on it is [#90][i90].
+Paying a provider needs a channel, which is **Funds** above; choosing a tier and
+spawning on it is [#92][i92].
 
 ```bash
 curl -H "authorization: Bearer $TOKEN" \
@@ -145,8 +229,15 @@ key never appears in an API response, in a log line, or in the UI's storage** �
 thing the window keeps is the launch token, in `sessionStorage`. An nsec, a mnemonic and a
 keystore passphrase travel one way: typed into a form, posted once over loopback under the
 launch token, and sealed. `api-account.test.ts` and `sign-in.test.tsx` are the tests that
-say so. The Chain Seed and the Lease Vault arrive with [ADR 0020][adr20] / [ADR 0021][adr21]
-and [#89][i89] onward.
+say so.
+
+The **Chain Seed** is held the same way ([ADR 0020][adr20]). It is sealed to the account
+and never revealed: there is no route that exports it, no answer that carries it, and
+recovery is the Nostr key alone. The payer keys an open needs are derived inside one call
+frame, lent to that one transaction and zeroed when it returns —
+`packages/daemon/src/api-funding.test.ts` is the test that says no funding answer carries
+key material, and `funding.test.ts` is the one that says the keys come back wiped. The
+Lease Vault arrives with [ADR 0021][adr21].
 
 ## Development
 
@@ -170,3 +261,6 @@ published identity; nothing in this repository should suggest otherwise.
 [i89]: https://github.com/toon-protocol/TOON_Network/issues/89
 [i90]: https://github.com/toon-protocol/TOON_Network/issues/90
 [i91]: https://github.com/toon-protocol/TOON_Network/issues/91
+[i92]: https://github.com/toon-protocol/TOON_Network/issues/92
+[i93]: https://github.com/toon-protocol/TOON_Network/issues/93
+[i82]: https://github.com/toon-protocol/TOON_Network/issues/82

@@ -12,6 +12,7 @@ import { activeProfileFilePath, consolePaths } from './paths.js';
 import { ProfileStore } from './profile-store.js';
 import { ChainSeedStore } from './chain-seed.js';
 import { InMemoryChainSeedCache } from './chain-seed-cache.js';
+import { fakeChainPort, fundingStoreFor } from './funding.testkit.js';
 import { startServer, type RunningServer } from './server.js';
 import { SignerIndex, signerIndexPath } from './signer-index.js';
 
@@ -59,6 +60,15 @@ describe('the daemon server', () => {
         signer: () => session.signingPort(),
         seedRelays: () => [],
         cache: new InMemoryChainSeedCache(),
+      }),
+      funding: fundingStoreFor({
+        chainSeed: new ChainSeedStore({
+          signer: () => undefined,
+          seedRelays: () => [],
+          cache: new InMemoryChainSeedCache(),
+        }),
+        paths,
+        chains: fakeChainPort(),
       }),
       version: { name: '@toon-protocol/console-daemon', version: '0.1.0' },
       paths,

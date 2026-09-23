@@ -35,6 +35,7 @@ const network: NetworkProfile = {
   connectorUrl: 'https://connector.test/ilp',
   relayUrl: SEED,
   gatewayDomain: 'gw.test',
+  rpc: {},
   origin: 'built-in',
 };
 

@@ -107,6 +107,26 @@ export interface ChainAddresses {
   readonly solana: ChainAddress;
 }
 
+/**
+ * The account's payer keys, for as long as one call needs them.
+ *
+ * The only thing derived from a Chain Seed that leaves this module besides an
+ * address, and the narrowest such thing there is: opening a payment channel is
+ * a transaction, a transaction needs a signature, and a signature needs a key.
+ * What does NOT leave is the mnemonic — `usePayerKeys` unseals it, derives
+ * these two keys inside one call frame, and drops it there. A caller that held
+ * the phrase could derive any account index and any other chain forever; a
+ * caller that holds these has exactly what it was lent, and the bytes are
+ * zeroed the moment its work returns.
+ *
+ * ADR 0020's ruling stands either way: there is no route, and no return value
+ * anywhere in this console, that yields the phrase itself.
+ */
+export interface PayerKeys {
+  readonly evm: { readonly privateKey: Uint8Array; readonly address: string };
+  readonly solana: { readonly secretKey: Uint8Array; readonly publicKey: string };
+}
+
 export interface SeedRecordView {
   readonly eventId: string;
   readonly publishedAt: string;
@@ -392,6 +412,46 @@ export class ChainSeedStore {
     return this.#sealAndPublish(signer, mnemonic, 'imported');
   }
 
+  /**
+   * Lend this account's payer keys to `use`, and zero them afterwards.
+   *
+   * The funding path's one door into the seed (TOON_Network#90). It requires a
+   * seed that is already OPEN — `refresh` has run and this signer unsealed the
+   * record — so there is no route here that mints, imports or publishes
+   * anything: asking for a key cannot become a way to create one.
+   *
+   * The mnemonic is unsealed, derived from and dropped inside this call. The
+   * two keys live for exactly as long as `use` takes, and are wiped whether it
+   * returns or throws.
+   *
+   * @throws {ChainSeedError} when nobody is signed in, or the account has no
+   *   readable Chain Seed to derive from.
+   */
+  async usePayerKeys<T>(use: (keys: PayerKeys) => Promise<T>): Promise<T> {
+    const signer = this.#require();
+    const open = this.#open;
+    if (!open) {
+      throw new ChainSeedError(
+        this.#state() === 'unreadable' ? 'seed_unreadable' : 'no_seed',
+        this.#state() === 'unreadable'
+          ? `This account has a Chain Seed record, but this signer did not open it, so no payer ` +
+              `key can be derived. ${this.#reason ?? ''}`.trim()
+          : 'This account has no Chain Seed yet, so it has no payer key on any chain. Mint or ' +
+              'import one first.',
+        409
+      );
+    }
+    const identity = deriveFullIdentity(await this.#mnemonicOf(signer, open.event), {
+      accountIndex: ACCOUNT_INDEX,
+    });
+    try {
+      return await use(identity);
+    } finally {
+      identity.evm.privateKey.fill(0);
+      identity.solana.secretKey.fill(0);
+    }
+  }
+
   /** The once-only warning, taken as read. Per account, and it persists. */
   acknowledgeWarning(): ChainSeedStatus {
     const signer = this.#require();
@@ -644,6 +704,28 @@ export class ChainSeedStore {
     signer: ChainSeedSigner,
     event: NostrEvent
   ): Promise<{ addresses: ChainAddresses; origin: SeedOrigin }> {
+    const record = await this.#unseal(signer, event);
+    return {
+      addresses: deriveAddresses(record.mnemonic),
+      origin: record.origin,
+    };
+  }
+
+  /**
+   * The mnemonic in one record, for one caller's call frame.
+   *
+   * Private, and the only two callers are `#openSeed` (which turns it straight
+   * into addresses) and `usePayerKeys` (which turns it straight into keys).
+   * Neither hands it any further.
+   */
+  async #mnemonicOf(signer: ChainSeedSigner, event: NostrEvent): Promise<string> {
+    return (await this.#unseal(signer, event)).mnemonic;
+  }
+
+  async #unseal(
+    signer: ChainSeedSigner,
+    event: NostrEvent
+  ): Promise<{ mnemonic: string; origin: SeedOrigin }> {
     const plaintext = await signer.unsealFromSelf(event.content);
     let parsed: unknown;
     try {
@@ -663,10 +745,7 @@ export class ChainSeedStore {
         'That Chain Seed record does not hold valid BIP-39 words.'
       );
     }
-    return {
-      addresses: deriveAddresses(mnemonic),
-      origin: record.origin === 'imported' ? 'imported' : 'minted',
-    };
+    return { mnemonic, origin: record.origin === 'imported' ? 'imported' : 'minted' };
   }
 
   /**
