@@ -1311,22 +1311,36 @@ export class LeaseStore {
       return undefined;
     }
 
+    // From here on the connector is named by what it SAYS about itself, never
+    // by the URL this console happened to dial. `@toon-protocol/client` keys a
+    // channel binding by the string it was configured with, so a connector
+    // reached at `http://localhost:3200/ilp` that publishes
+    // `http://127.0.0.1:3200` records the channel under the second name and is
+    // never found under the first — the rule `connector-health.ts` states and
+    // the relay writer already follows (TOON_Network#126). `payAt` was the URL
+    // dialled to READ the self-description; it is the self-description that
+    // says where to pay.
+    //
+    // `smoke-console` is what found this half of #126: on the sandbox a spawn
+    // was refused `no_channel` while the vault plan in the same answer named
+    // the open channel it would write from (TOON_Network#101).
+    const payFrom = health.selfEndpoint;
     const channels = channelStoreFor(this.#deps.paths, profile.id);
     for (const settlement of settlements) {
-      const binding = findChannelBinding(channels.store, payAt, settlement.chain);
+      const binding = findChannelBinding(channels.store, payFrom, settlement.chain);
       if (!binding) continue;
       const rpc = resolveRpc(profile, settlement.kind);
       // The chain the channel lives on rides the same circuit unless it is
       // already private, where `anon` would build no circuit at all.
       const proxyRpc = anon === undefined ? undefined : await proxyRpcFor(rpc.url);
       return {
-        payAt,
+        payAt: payFrom,
         chainKind: settlement.kind,
         rpcUrl: rpc.url,
         channelStore: channels.store,
         ...(anon === undefined ? {} : { socksProxy: anon.socksProxy, proxyRpc }),
         view: {
-          connectorUrl: payAt,
+          connectorUrl: payFrom,
           via,
           reason,
           chain: settlement.chain,
@@ -1338,7 +1352,7 @@ export class LeaseStore {
     }
 
     problems.push(
-      `No payment channel with the connector at ${payAt}. A spawn pays from a channel and must ` +
+      `No payment channel with the connector at ${payFrom}. A spawn pays from a channel and must ` +
         `never open one for you — opening locks collateral on chain and costs the chain's own ` +
         `gas. Open one on ${settlements.map((entry) => entry.chain).join(' or ')} from ` +
         `the Funds tab, naming this connector.`
@@ -1346,7 +1360,7 @@ export class LeaseStore {
     const fallbackRpc = resolveRpc(profile, settlements[0]?.kind ?? 'evm').url;
     const fallbackProxyRpc = anon === undefined ? undefined : await proxyRpcFor(fallbackRpc);
     return {
-      payAt,
+      payAt: payFrom,
       chainKind: settlements[0]?.kind ?? 'evm',
       rpcUrl: fallbackRpc,
       channelStore: channels.store,
@@ -1354,7 +1368,7 @@ export class LeaseStore {
         ? {}
         : { socksProxy: anon.socksProxy, proxyRpc: fallbackProxyRpc }),
       view: {
-        connectorUrl: payAt,
+        connectorUrl: payFrom,
         via,
         reason,
         ...(routePrice === undefined ? {} : { routePrice }),

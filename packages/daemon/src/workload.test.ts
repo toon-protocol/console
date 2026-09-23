@@ -36,6 +36,7 @@ import { InMemoryWorkloadNoteStore } from './workload-cache.js';
 import { readLife, type WorkloadStore } from './workload.js';
 import {
   extendOk,
+  providerRoutes,
   refusal,
   silence,
   statusOk,
@@ -180,6 +181,35 @@ describe('the workload dashboard', () => {
       // The provider's own connector prices `status` at nothing (§5). A hop
       // that charges to carry it is not where a free route is bought.
       expect(port.sent.at(-1)?.payAt).toBe(PROVIDER_CONNECTOR);
+      expect(port.sent.at(-1)?.route).toBe('g.toon.provider.status');
+    });
+
+    /**
+     * TOON_Network#129: the same shape #126 fixed for a relay write, here for
+     * the provider's connector. The sandbox's `provider-connector` calls
+     * ITSELF `http://127.0.0.1:3240/ilp` — never the Provider Profile's own
+     * `http://provider-connector:3000/ilp` (a docker-internal name this
+     * console cannot even dial). A `status` read must find the channel by
+     * what the connector says about itself, never by the Profile's string,
+     * and pay under that same identity too.
+     */
+    it('finds its channel by what the provider’s connector calls itself, not by its Profile (#129)', async () => {
+      const selfEndpoint = 'http://127.0.0.1:3240';
+      await build({
+        health: (asked) =>
+          Promise.resolve(
+            connectorHealth({
+              endpoint: asked.connectorUrl,
+              ...(asked.connectorUrl === PROVIDER_CONNECTOR ? { selfEndpoint } : {}),
+              routes: asked.connectorUrl === PROVIDER_CONNECTOR ? providerRoutes({}) : [],
+            })
+          ),
+        channelAt: selfEndpoint,
+      });
+
+      await workloads.readStatus(workloadId);
+
+      expect(port.sent.at(-1)?.payAt).toBe(selfEndpoint);
       expect(port.sent.at(-1)?.route).toBe('g.toon.provider.status');
     });
 

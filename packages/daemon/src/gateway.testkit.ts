@@ -54,7 +54,17 @@ export function gatewayProfile(overrides: Partial<NetworkProfile> = {}): Network
  * terminates its one route at nothing, as §12.1's deployments all do.
  */
 export function gatewayHealth(
-  input: { price?: string; routes?: readonly { prefix: string; price: string }[] } = {}
+  input: {
+    price?: string;
+    routes?: readonly { prefix: string; price: string }[];
+    /**
+     * What the gateway's connector says about ITSELF — defaults to
+     * `GATEWAY_CONNECTOR`. Give a different value to simulate the sandbox's
+     * shape (TOON_Network#129): the connector reached under one spelling of
+     * its host that publishes another.
+     */
+    selfEndpoint?: string;
+  } = {}
 ) {
   return (asked: NetworkProfile): Promise<ConnectorHealth> => {
     if (asked.connectorUrl !== GATEWAY_CONNECTOR) {
@@ -65,6 +75,7 @@ export function gatewayHealth(
     return Promise.resolve(
       connectorHealth({
         endpoint: asked.connectorUrl,
+        ...(input.selfEndpoint === undefined ? {} : { selfEndpoint: input.selfEndpoint }),
         ilpAddresses: [GATEWAY_ADDRESS],
         edgeSealKey: GATEWAY_SEAL_KEY,
         routes: input.routes ?? [{ prefix: GATEWAY_ROUTE, price: input.price ?? '0' }],

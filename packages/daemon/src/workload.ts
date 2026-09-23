@@ -4,6 +4,7 @@ import { channelAvailable, channelStoreFor, findChannelBinding } from './channel
 import type { ChainSeedStore } from './chain-seed.js';
 import type { ConnectorHealth } from './connector-health.js';
 import { mintRequestId } from './continuation.js';
+import { extendBody } from './lease-body.js';
 import type { DirectoryResult, ProviderView } from './directory.js';
 import { resolveRpc } from './funding.js';
 import {
@@ -71,7 +72,9 @@ import type { WorkloadMemberNote, WorkloadNote, WorkloadNoteStore } from './work
  * the full §6.1 Lease Request and MUST present the lease's token. Wrapping the
  * extension like its neighbours is `invalid_request` at full price, which is
  * why the three bodies are built by three named functions rather than one
- * clever one.
+ * clever one — and why `lease-body.ts` builds this one and checks every lease
+ * packet's shape before `lease-route.ts` signs anything (TOON_Network#115,
+ * ADR 0025).
  *
  * **Expiry, Termination and Eviction are three different endings** (§6.7,
  * CONTEXT.md). Nothing here flattens them into "gone": the provider's own word
@@ -713,7 +716,7 @@ export class WorkloadStore {
       };
     }
 
-    const outcome = await this.#send(planned, { workload_id: lease.workloadId });
+    const outcome = await this.#send(planned, extendBody(lease.workloadId));
     const read = readAnswer(outcome);
     const cost = costOf(outcome);
 
@@ -1701,7 +1704,12 @@ export class WorkloadStore {
       rpcUrl?: string;
     } = {
       route,
-      payAt: chosen.url,
+      // Where to pay is the connector's OWN name for itself, not the URL
+      // this console dialled: the client keys a channel binding by the
+      // string it is configured with, and a connector that answers on
+      // `localhost` and `127.0.0.1` alike publishes only one of them
+      // (TOON_Network#126, found again on this path by #101).
+      payAt: chosen.health.selfEndpoint,
       via: chosen.via,
       reason,
       price: chosen.price,
@@ -1719,7 +1727,11 @@ export class WorkloadStore {
     // for a lease the spawn had paid for perfectly well.
     const settlements = orderChains(chosen.health.settlements, wanted ?? lease.paidChain);
     for (const settlement of settlements) {
-      const binding = findChannelBinding(channels.store, chosen.url, settlement.chain);
+      const binding = findChannelBinding(
+        channels.store,
+        chosen.health.selfEndpoint,
+        settlement.chain
+      );
       if (!binding) continue;
       const rpcUrl = resolveRpc(profile, settlement.kind).url;
       return {
