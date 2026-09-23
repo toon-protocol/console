@@ -33,16 +33,50 @@ network.
 
 ## What you do differently
 
-Almost nothing.
+One thing, once: you run an `anon` daemon and tell the Console where its SOCKS port is.
 
-In the Console, tick **hidden** in the Provider Directory filters and you see the hidden
-providers. Spawn on one exactly as you would on any other. The daemon reaches its
-`.anyone` address through the client library's hidden-service transport; you do not
-configure a proxy and you do not install anything extra.
+```sh
+# in the Console's systemd unit, or wherever its environment is set
+TOON_CONSOLE_SOCKS_PROXY=socks5h://127.0.0.1:9050
+```
 
-This is one of the three reasons the Console is a local daemon and not a hosted website: a
-browser cannot reach an `.anyone` address at all. See [ADR 0019] in the specification
-repository for the other two.
+`socks5h`, not `socks5`. The trailing `h` is what makes the **proxy** resolve the
+destination's name. Under plain `socks5` your own machine resolves it first, which for an
+`.anyone` address means putting the hidden service you are about to talk to into a
+plaintext DNS query — the one fact the address exists to withhold.
+
+The Console does not start the daemon for you and never will. A background process it
+cannot supervise, holding the circuits every packet depends on, is not something to spawn
+behind your back; and a console that half-started one would be a console that sometimes
+worked. **Health** says whether a circuit is available before you pick a provider.
+
+After that, almost nothing. Tick **hidden** in the Provider Directory filters and you see
+the hidden providers. Spawn on one exactly as you would on any other: the daemon reaches
+its `.anyone` address through the client library's hidden-service transport, and the
+lease's status, extensions and termination all go the same way for as long as it lives.
+
+**If no circuit can be built, the Console refuses.** It does not try the clearnet, and it
+does not try whatever host a profile happened to leak. A silent fallback would be a
+deanonymisation rather than a convenience, and it is the one thing this part of the
+Console may never do. You will see the reason and what to start.
+
+This is also one of the three reasons the Console is a local daemon and not a hosted
+website: a browser cannot reach an `.anyone` address at all. See [ADR 0019] in the
+specification repository for the other two.
+
+## Your own chain reads ride the circuit too
+
+Paying a hidden provider means opening a payment channel with **its** connector, on the
+chain that connector settles on. The Console sends that chain traffic through the same
+proxy as the packets — because a console that paid over a circuit while reading its own
+channel on the clearnet would broadcast your settlement address, from your own IP, timed
+either side of every paid request.
+
+The exception is a chain endpoint that is already private: your own node on loopback, or
+the local sandbox's. `anon` builds no circuit to such an address, so proxying it would fail
+rather than hide anything — the packet never crosses a network anyone outside can watch.
+The Console decides that by where the endpoint **is**, not by a setting, so no flag can
+leave it uncovered by mistake.
 
 ## What it costs
 
@@ -70,12 +104,35 @@ gateway reaches the member the way that member's profile says to — over the hi
 transport — and serves your hostname on the clearnet. The workload gets a public name; the
 machine running it keeps its address.
 
+## What the Console shows, and what it never shows
+
+A Hidden Provider's Profile publishes no host, and where one is published anyway — §4.1
+forbids it, and nothing enforces it — the Console **drops it**. It is not displayed, not
+stored in your Lease Vault record, not written to a log and not returned by the local API.
+
+What the Console does show is your lease's **own** address: the per-lease `.anyone` host
+the provider gave it at spawn, on the same SSH and forwarded ports the access details name.
+That is not a leak, it is the whole point — §10 says a tenant dials it exactly as it would
+an IP.
+
+Two of the five conditions above are visible from your side: the connector a Profile
+publishes, and the address your lease answers on. Where either contradicts a `hidden: true`
+declaration, the workload card says so plainly. The other three — egress, the settlement
+RPC, and whether the provider also answers somewhere else — nobody outside the provider can
+check, and the Console does not pretend to.
+
 ## On devnet
 
-Devnet's provider is not hidden. The Console's filter, the directory's flag and the
-client's hidden transport are all wired and testable; what is missing is somebody running a
-hidden provider for you to lease from. If you run one, publish its profile to the devnet
-relay and it will appear.
+Devnet has no hidden provider. The Console's filter, the directory's flag and the hidden
+transport are all wired and tested, but there is nothing on devnet to lease from — so the
+end-to-end path is proven against the **local docker sandbox**, whose `hs` profile runs a
+whole hidden provider behind its own `anon` daemon (`make up-hs` in `infra/sandbox`). Point
+the Console at the Local sandbox profile, set `TOON_CONSOLE_SOCKS_PROXY` to that sandbox's
+buyer proxy, and the directory, the spawn, the status, the extension and the termination
+all work over the overlay.
+
+If you run a hidden provider on devnet, publish its Profile to the devnet relay and it will
+appear.
 
 ## Next
 

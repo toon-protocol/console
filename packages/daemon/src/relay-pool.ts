@@ -1,5 +1,6 @@
 import WebSocket from 'ws';
 
+import { isHiddenServiceUrl, type AnonCarriage } from './hidden-transport.js';
 import { verifyEvent, type NostrEvent, type NostrFilter } from './nostr.js';
 
 /**
@@ -86,8 +87,46 @@ const DEFAULT_TIMEOUT_MS = 8_000;
 const DEFAULT_MAX_EVENTS = 5_000;
 
 /** The default dialer: a plain `ws` client, one socket per relay per query. */
-export const dialWebSocket: RelayDialer = (url, handlers) => {
-  const socket = new WebSocket(url, { handshakeTimeout: 5_000 });
+export const dialWebSocket: RelayDialer = (url, handlers) =>
+  attach(new WebSocket(url, { handshakeTimeout: 5_000 }), handlers);
+
+/**
+ * The dialer for a relay set that may name a `.anyone` relay (spec §10).
+ *
+ * A Hidden Provider's own Relay Set is on the overlay — it reaches every relay
+ * through `anon`, so the URLs its Profile publishes are `.anyone` ones — and a
+ * console reading them has the same two choices this repository keeps making:
+ * over a circuit, or not at all.
+ *
+ * NOT AT ALL IS NOT "FAILED TO CONNECT". `ws` would resolve the name first,
+ * and a plaintext DNS query naming the hidden service is the fact the address
+ * exists to withhold — so a `.anyone` relay with no carriage is refused BEFORE
+ * the socket, and reported as a relay that did not answer. The directory reads
+ * perfectly well from the relays that did: a provider's Profile is on the seed
+ * relay or it is not purchasable at all (§4.2).
+ */
+export function hiddenAwareDialer(carriage: AnonCarriage | undefined): RelayDialer {
+  return (url, handlers) => {
+    if (!isHiddenServiceUrl(url)) return dialWebSocket(url, handlers);
+    if (carriage === undefined) {
+      // A microtask, not a synchronous call: the caller is still wiring up its
+      // own state when `dial` returns.
+      queueMicrotask(() => {
+        handlers.onError(
+          'this relay is a hidden service, and reaching one needs a running Anyone Protocol ' +
+            'daemon to proxy through. Nothing was dialled: resolving the name here would put ' +
+            'it in a plaintext DNS query (spec §10).'
+        );
+        handlers.onClose();
+      });
+      return { send: () => undefined, close: () => undefined };
+    }
+    return attach(carriage.createWebSocket(url) as WebSocket, handlers);
+  };
+}
+
+/** The handlers, wired onto a `ws` socket however it was created. */
+function attach(socket: WebSocket, handlers: RelayHandlers): RelayConnection {
   socket.on('open', () => handlers.onOpen());
   socket.on('message', (raw) => handlers.onMessage(String(raw)));
   socket.on('error', (error: Error) => handlers.onError(error.message));
@@ -99,7 +138,7 @@ export const dialWebSocket: RelayDialer = (url, handlers) => {
       socket.terminate();
     },
   };
-};
+}
 
 let nextSubscriptionId = 0;
 

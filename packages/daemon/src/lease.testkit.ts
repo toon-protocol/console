@@ -5,6 +5,11 @@ import type { ConnectorHealth, SettlementView } from './connector-health.js';
 import { channelStoreFor } from './channel-store.js';
 import type { DirectoryResult, ProviderView } from './directory.js';
 import {
+  HiddenTransportError,
+  type AnonCarriage,
+  type HiddenTransportPort,
+} from './hidden-transport.js';
+import {
   LeaseStore,
   type LeasePacket,
   type PacketOutcome,
@@ -96,6 +101,12 @@ export function fakeProvider(
     connectorUrl?: string;
     listing?: Partial<ProviderView['listings'][number]>;
     hidden?: boolean;
+    /**
+     * A `host` in the Profile. §4.1 forbids one on a Hidden Provider and
+     * nothing enforces it, so a test can put one here to prove the console
+     * never repeats it (#98).
+     */
+    host?: string;
   } = {}
 ): ProviderView {
   const pubkey = overrides.pubkey ?? 'd'.repeat(64);
@@ -126,6 +137,7 @@ export function fakeProvider(
       settlement: [],
       isolation: 'shared-kernel',
       hidden: overrides.hidden === true,
+      ...(overrides.host === undefined ? {} : { host: overrides.host }),
       publishedAt: '2026-09-22T00:00:00.000Z',
       eventId: 'f'.repeat(64),
     },
@@ -188,6 +200,49 @@ export function giveChannel(
   store.save(channelId, { nonce: 0, cumulativeAmount: 0n });
 }
 
+/**
+ * A hidden-service carriage that dials nothing.
+ *
+ * The real one probes a SOCKS port and builds an undici dispatcher; a test
+ * that did either would be testing `anon`. What a test here needs is the two
+ * answers a caller must tell apart — a circuit, or a refusal — and a count of
+ * how often one was asked for, because "the carriage was never opened" is how
+ * a leak would show.
+ */
+export function fakeAnon(
+  input: { socksProxy?: string; fails?: string } = {}
+): HiddenTransportPort & { opens: number } {
+  const socksProxy = input.socksProxy ?? 'socks5h://127.0.0.1:19050';
+  const port = {
+    opens: 0,
+    configured: () => (input.fails === undefined ? socksProxy : undefined),
+    open(): Promise<AnonCarriage> {
+      port.opens += 1;
+      if (input.fails !== undefined) {
+        return Promise.reject(new HiddenTransportError('anon_unreachable', input.fails));
+      }
+      return Promise.resolve({
+        socksProxy,
+        fetch: (() =>
+          Promise.reject(
+            new Error('the fake carriage dials nothing')
+          )) as unknown as typeof fetch,
+        createWebSocket: () => {
+          throw new Error('the fake carriage dials nothing');
+        },
+      });
+    },
+    describe: () =>
+      Promise.resolve(
+        input.fails === undefined
+          ? { state: 'ready' as const, socksProxy, reason: 'a fake carriage' }
+          : { state: 'unreachable' as const, socksProxy, reason: input.fails }
+      ),
+    close: () => Promise.resolve(),
+  };
+  return port;
+}
+
 export interface LeaseFixture {
   readonly vault: LeaseVault;
   readonly leases: LeaseStore;
@@ -210,6 +265,7 @@ export function leaseFixture(input: {
   directory?: () => Promise<DirectoryResult>;
   health?: (profile: NetworkProfile) => Promise<ConnectorHealth>;
   provider?: FakeProviderPort;
+  hidden?: HiddenTransportPort;
   cache?: LeaseVaultCache;
   writer?: FakeWriter;
   now?: () => Date;
@@ -250,6 +306,7 @@ export function leaseFixture(input: {
           readAt: '2026-09-22T00:00:00.000Z',
         })),
     provider,
+    ...(input.hidden === undefined ? {} : { hidden: input.hidden }),
     paths: input.paths,
     ...(input.now === undefined ? {} : { now: input.now }),
   });

@@ -1,7 +1,12 @@
 import type { NodeSelfDescription } from '@toon-protocol/client';
 import { describe, expect, it } from 'vitest';
 
-import { readConnectorHealth, type ConnectorReader } from './connector-health.js';
+import {
+  defaultConnectorReader,
+  readConnectorHealth,
+  type ConnectorReader,
+} from './connector-health.js';
+import { HiddenTransportError } from './hidden-transport.js';
 import { DEVNET, MAINNET } from './profiles.js';
 
 /** A connector's answer, shaped as the devnet relay edge really answers. */
@@ -78,5 +83,36 @@ describe('readConnectorHealth', () => {
     expect(health.state).toBe('unreachable');
     if (health.state !== 'unreachable') return;
     expect(health.reason).toContain('ECONNREFUSED');
+  });
+});
+
+/**
+ * Reading a Hidden Provider's connector (TOON_Network#98, spec §10, ADR 0008).
+ *
+ * `GET /ilp` is the FIRST thing this console does to a provider's connector,
+ * and it is a dial: it carries this machine's address to whatever it asks. So
+ * it is the first place a `.anyone` address could be leaked, and the reader is
+ * where that is settled once for every caller above it.
+ */
+describe('the default connector reader', () => {
+  const HIDDEN = `http://${'a'.repeat(56)}.anyone/ilp`;
+
+  it('will not describe a `.anyone` endpoint without a carriage', async () => {
+    const reader = defaultConnectorReader({
+      hidden: {
+        configured: () => undefined,
+        open: () =>
+          Promise.reject(new HiddenTransportError('no_anon_proxy', 'no proxy is set')),
+        describe: () =>
+          Promise.resolve({ state: 'unconfigured' as const, reason: 'no proxy is set' }),
+        close: () => Promise.resolve(),
+      },
+    });
+
+    const health = await readConnectorHealth({ ...DEVNET, connectorUrl: HIDDEN }, reader);
+
+    expect(health.state).toBe('unreachable');
+    if (health.state !== 'unreachable') return;
+    expect(health.reason).toMatch(/no proxy is set/u);
   });
 });

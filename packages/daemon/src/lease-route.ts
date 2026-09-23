@@ -1,5 +1,6 @@
 import { ToonClient } from '@toon-protocol/client';
 
+import { carriageRefusal } from './hidden-transport.js';
 import type { LeasePacket, PacketOutcome, ProviderPort } from './lease.js';
 
 /**
@@ -32,6 +33,19 @@ import type { LeasePacket, PacketOutcome, ProviderPort } from './lease.js';
  * distinguishes, and the distinction it must not blur is `refused` (definitive
  * — the vault record is taken back) against `unknown` (a fate nobody reported
  * — the record is kept, because a workload may be running behind it).
+ *
+ * **A Hidden Provider's packet carries `socksProxy` and NOTHING ELSE**
+ * (TOON_Network#98, spec §10, ADR 0008). Handed that, the client builds the
+ * whole carriage itself — the `fetch` behind its client edge, the undici
+ * dispatcher behind viem's chain RPC, and the `ws` agent behind the BTP
+ * carriage — which is what makes a websocket safe here where it was a leak for
+ * the provider's publisher: there the proxy was installed as the process's own
+ * `fetch`, which a websocket never passes through (`tools/publisher/proxy.mjs`,
+ * `transportRefusal`). The trap that remains is the other direction, and it is
+ * silent: the client resolves `config.fetch ?? transport.fetch`, so anything
+ * injected here WINS and every request would leave this machine's own address
+ * with the proxy sitting unused. `carriageRefusal` is the standing check that
+ * it never does, and it throws rather than sending.
  */
 export class LiveProviderPort implements ProviderPort {
   readonly #timeoutMs: number;
@@ -44,6 +58,11 @@ export class LiveProviderPort implements ProviderPort {
 
   async send(packet: LeasePacket): Promise<PacketOutcome> {
     const timeoutMs = packet.timeoutMs ?? this.#timeoutMs;
+    // Before anything is built, and it throws rather than refusing: a packet
+    // that would silently bypass the circuit is a bug in this repository, not
+    // a condition a person can act on.
+    const refusal = carriageRefusal({ socksProxy: packet.socksProxy });
+    if (refusal !== null) throw new Error(refusal);
     let client: ToonClient | undefined;
     try {
       client = await ToonClient.create({
@@ -55,6 +74,8 @@ export class LiveProviderPort implements ProviderPort {
         channelStore: packet.channelStore,
         autoOpenChannel: false,
         timeoutMs,
+        ...(packet.socksProxy === undefined ? {} : { socksProxy: packet.socksProxy }),
+        ...(packet.proxyRpc === undefined ? {} : { proxyRpc: packet.proxyRpc }),
       });
     } catch (error) {
       // Nothing was sent and nothing was signed: the client could not be
