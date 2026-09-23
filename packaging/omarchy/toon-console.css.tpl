@@ -11,10 +11,17 @@
  * Two rules were followed here.
  *
  * Surfaces are MIXES and never named shades. `{{ mix background foreground
- * 4% }}` is four per cent of the way from the page towards its text, which is
- * a slightly raised card on a dark theme and a slightly recessed one on a
- * light theme. `lighter_background` would have been one of those and the wrong
- * one on the other, and half of Omarchy's themes are light.
+ * 6% }}` is six per cent of the way from the page towards its text, which is a
+ * slightly raised card on a dark theme and a slightly recessed one on a light
+ * theme. `lighter_background` would have been one of those and the wrong one on
+ * the other, and half of Omarchy's themes are light.
+ *
+ * The percentages lean towards the foreground a little more than a dark theme
+ * needs, because a light theme compresses the whole scale into a narrower range
+ * and a card that is plainly a card on one becomes invisible on the other.
+ * `--muted-foreground` at 65% is firmer than most themes' own dim text
+ * (`dark_foreground` sits nearer 45%), because a label in a console is read
+ * rather than glanced at.
  *
  * Meaning comes from the theme's own semantic colours. A destructive button is
  * the theme's red and a warning is its yellow, so a person who chose a theme
@@ -33,11 +40,11 @@
   --background: {{ background }};
   --foreground: {{ foreground }};
 
-  --card: {{ mix background foreground 4% }};
+  --card: {{ mix background foreground 6% }};
   --card-foreground: {{ foreground }};
 
-  --muted: {{ mix background foreground 8% }};
-  --muted-foreground: {{ mix background foreground 55% }};
+  --muted: {{ mix background foreground 10% }};
+  --muted-foreground: {{ mix background foreground 65% }};
 
   --accent: {{ mix background accent 22% }};
   --accent-foreground: {{ bright_foreground }};
@@ -45,7 +52,7 @@
   --primary: {{ accent }};
   --primary-foreground: {{ background }};
 
-  --secondary: {{ mix background foreground 14% }};
+  --secondary: {{ mix background foreground 16% }};
   --secondary-foreground: {{ foreground }};
 
   --destructive: {{ red }};
@@ -57,7 +64,7 @@
   --warning: {{ yellow }};
   --warning-foreground: {{ background }};
 
-  --border: {{ mix background foreground 18% }};
-  --input: {{ mix background foreground 26% }};
+  --border: {{ mix background foreground 24% }};
+  --input: {{ mix background foreground 32% }};
   --ring: {{ accent }};
 }
