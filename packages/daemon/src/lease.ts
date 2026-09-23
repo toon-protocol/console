@@ -7,6 +7,12 @@ import { continuationFor, mintRequestId, mintRootSecret } from './continuation.j
 import type { DirectoryResult, ListingView, ProviderView } from './directory.js';
 import { resolveRpc } from './funding.js';
 import {
+  HiddenTransportError,
+  isHiddenServiceUrl,
+  proxyRpcFor,
+  type HiddenTransportPort,
+} from './hidden-transport.js';
+import {
   LeaseVaultError,
   type LeaseAccess,
   type LeaseVault,
@@ -184,6 +190,14 @@ export interface LeasePacket {
   readonly keys: PayerKeys;
   readonly channelStore: ChannelStore;
   readonly timeoutMs?: number | undefined;
+  /**
+   * The `socks5h://` proxy this packet rides, when `payAt` is a `.anyone`
+   * address (spec §10). Absent for every clearnet connector, and the client
+   * refuses it there as pointless misdirection.
+   */
+  readonly socksProxy?: string | undefined;
+  /** Whether the chain RPC rides the same circuit. See `hidden-transport.ts`. */
+  readonly proxyRpc?: boolean | undefined;
 }
 
 /**
@@ -256,6 +270,15 @@ export interface PreflightView {
         readonly chain?: string | undefined;
         readonly channelId?: string | undefined;
         readonly routePrice?: string | undefined;
+        /**
+         * This packet rides an Anyone Protocol circuit, because the connector
+         * it is paid at is a `.anyone` address (§10). The proxy's own port is
+         * NOT repeated here: it is this machine's business, and the health
+         * view is where it is named once.
+         */
+        readonly overAnon?: boolean | undefined;
+        /** Whether the chain RPC rides the same circuit (ADR 0008's third leg). */
+        readonly rpcOverAnon?: boolean | undefined;
       }
     | undefined;
   /**
@@ -370,6 +393,13 @@ export interface LeaseStoreDeps {
   readonly readHealth: (profile: NetworkProfile) => Promise<ConnectorHealth>;
   readonly readDirectory: (profile: NetworkProfile) => Promise<DirectoryResult>;
   readonly provider: ProviderPort;
+  /**
+   * The Anyone Protocol carriage, for a Hidden Provider (#98, spec §10).
+   *
+   * Absent means this build can reach no `.anyone` address at all, and a spawn
+   * on a Hidden Provider then says so — it never becomes a direct dial.
+   */
+  readonly hidden?: HiddenTransportPort | undefined;
   readonly paths: ConsolePaths;
   readonly now?: (() => Date) | undefined;
   readonly timeoutMs?: number | undefined;
@@ -890,6 +920,8 @@ export class LeaseStore {
           rpcUrl: ready.rpcUrl,
           keys,
           channelStore: ready.channelStore,
+          ...(ready.socksProxy === undefined ? {} : { socksProxy: ready.socksProxy }),
+          ...(ready.proxyRpc === undefined ? {} : { proxyRpc: ready.proxyRpc }),
           ...(this.#deps.timeoutMs === undefined ? {} : { timeoutMs: this.#deps.timeoutMs }),
         })
       );
@@ -1180,6 +1212,8 @@ export class LeaseStore {
         chainKind: payment.chainKind,
         rpcUrl: payment.rpcUrl,
         channelStore: payment.channelStore,
+        ...(payment.socksProxy === undefined ? {} : { socksProxy: payment.socksProxy }),
+        ...(payment.proxyRpc === undefined ? {} : { proxyRpc: payment.proxyRpc }),
       },
     };
   }
@@ -1219,16 +1253,35 @@ export class LeaseStore {
       problems.push('That provider publishes no connector URL, so there is nowhere to pay.');
       return undefined;
     }
+    // A `.anyone` connector is a Hidden Provider's (spec §10, ADR 0008), and
+    // it is reached over a circuit or not at all. The carriage is resolved
+    // HERE, before anything is read or paid, so that "no circuit" is a problem
+    // on a preflight rather than a packet that cannot leave — and so that the
+    // one thing it must never become, a direct dial at whatever host leaked,
+    // has nowhere to happen. `hidden-transport.ts` says why there is no
+    // fallback.
+    let anon: { socksProxy: string } | undefined;
     if (isHiddenServiceUrl(payAt)) {
-      // The client reaches a `.anyone` connector only through a running Anyone
-      // Protocol daemon's SOCKS port, which this console does not start yet
-      // (TOON_Network#96). Saying so is better than a packet that cannot leave.
-      problems.push(
-        `The connector at ${payAt} is a hidden service, and reaching one needs a running ` +
-          `Anyone Protocol daemon to proxy through. The console does not start one yet, so ` +
-          `spawning on a Hidden Provider is not available on this build (spec §10).`
-      );
-      return undefined;
+      const carriage = this.#deps.hidden;
+      if (carriage === undefined) {
+        problems.push(
+          `The connector at ${payAt} is a Hidden Provider's, reachable only over an Anyone ` +
+            `Protocol circuit, and this build has no carriage for one (spec §10).`
+        );
+        return undefined;
+      }
+      try {
+        anon = { socksProxy: (await carriage.open()).socksProxy };
+      } catch (error) {
+        problems.push(
+          error instanceof HiddenTransportError
+            ? error.message
+            : `The Anyone Protocol carriage could not be opened: ${
+                error instanceof Error ? error.message : String(error)
+              }`
+        );
+        return undefined;
+      }
     }
 
     const health = carries
@@ -1263,11 +1316,15 @@ export class LeaseStore {
       const binding = findChannelBinding(channels.store, payAt, settlement.chain);
       if (!binding) continue;
       const rpc = resolveRpc(profile, settlement.kind);
+      // The chain the channel lives on rides the same circuit unless it is
+      // already private, where `anon` would build no circuit at all.
+      const proxyRpc = anon === undefined ? undefined : await proxyRpcFor(rpc.url);
       return {
         payAt,
         chainKind: settlement.kind,
         rpcUrl: rpc.url,
         channelStore: channels.store,
+        ...(anon === undefined ? {} : { socksProxy: anon.socksProxy, proxyRpc }),
         view: {
           connectorUrl: payAt,
           via,
@@ -1275,6 +1332,7 @@ export class LeaseStore {
           chain: settlement.chain,
           channelId: binding.channelId,
           ...(routePrice === undefined ? {} : { routePrice }),
+          ...(anon === undefined ? {} : { overAnon: true, rpcOverAnon: proxyRpc }),
         },
       };
     }
@@ -1285,16 +1343,22 @@ export class LeaseStore {
         `gas. Open one on ${settlements.map((entry) => entry.chain).join(' or ')} from ` +
         `the Funds tab, naming this connector.`
     );
+    const fallbackRpc = resolveRpc(profile, settlements[0]?.kind ?? 'evm').url;
+    const fallbackProxyRpc = anon === undefined ? undefined : await proxyRpcFor(fallbackRpc);
     return {
       payAt,
       chainKind: settlements[0]?.kind ?? 'evm',
-      rpcUrl: resolveRpc(profile, settlements[0]?.kind ?? 'evm').url,
+      rpcUrl: fallbackRpc,
       channelStore: channels.store,
+      ...(anon === undefined
+        ? {}
+        : { socksProxy: anon.socksProxy, proxyRpc: fallbackProxyRpc }),
       view: {
         connectorUrl: payAt,
         via,
         reason,
         ...(routePrice === undefined ? {} : { routePrice }),
+        ...(anon === undefined ? {} : { overAnon: true, rpcOverAnon: fallbackProxyRpc }),
       },
     };
   }
@@ -1331,6 +1395,8 @@ interface ResolvedPayment {
   readonly chainKind: 'evm' | 'solana';
   readonly rpcUrl: string;
   readonly channelStore: ChannelStore;
+  readonly socksProxy?: string | undefined;
+  readonly proxyRpc?: boolean | undefined;
   readonly view: NonNullable<PreflightView['payment']>;
 }
 
@@ -1346,6 +1412,9 @@ interface ReadyPlan {
   readonly chainKind: 'evm' | 'solana';
   readonly rpcUrl: string;
   readonly channelStore: ChannelStore;
+  /** Set only when this packet rides a circuit to a `.anyone` connector (§10). */
+  readonly socksProxy?: string | undefined;
+  readonly proxyRpc?: boolean | undefined;
 }
 
 interface Plan {
@@ -1756,15 +1825,6 @@ export function readSpawnAnswer(body: unknown): {
  */
 export function routeCarries(prefix: string, destination: string): boolean {
   return destination === prefix || destination.startsWith(`${prefix}.`);
-}
-
-/** A `.anyone` connector: reachable only through a SOCKS proxy (spec §10). */
-export function isHiddenServiceUrl(url: string): boolean {
-  try {
-    return new URL(url).hostname.endsWith('.anyone');
-  } catch {
-    return false;
-  }
 }
 
 function messageOf(error: unknown): string {

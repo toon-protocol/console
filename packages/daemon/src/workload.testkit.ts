@@ -1,6 +1,7 @@
 import type { ChainSeedStore } from './chain-seed.js';
 import type { ConnectorHealth } from './connector-health.js';
 import type { DirectoryResult } from './directory.js';
+import type { HiddenTransportPort } from './hidden-transport.js';
 import { connectorHealth, fakeProvider, fakeProviderPort } from './lease.testkit.js';
 import type { FakeProviderPort } from './lease.testkit.js';
 import type { LeaseVault } from './lease-vault.js';
@@ -182,6 +183,7 @@ export function workloadFixture(input: {
   paths: ConsolePaths;
   profile?: NetworkProfile;
   provider?: FakeProviderPort;
+  hidden?: HiddenTransportPort;
   notes?: WorkloadNoteStore;
   directory?: () => Promise<DirectoryResult>;
   health?: (profile: NetworkProfile) => Promise<ConnectorHealth>;
@@ -214,6 +216,7 @@ export function workloadFixture(input: {
           readAt: '2026-09-22T00:00:00.000Z',
         })),
     provider: port,
+    ...(input.hidden === undefined ? {} : { hidden: input.hidden }),
     paths: input.paths,
     notes,
     ...(input.autoExtend === undefined ? {} : { autoExtend: input.autoExtend }),

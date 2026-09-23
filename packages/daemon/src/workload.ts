@@ -7,7 +7,12 @@ import { mintRequestId } from './continuation.js';
 import type { DirectoryResult, ProviderView } from './directory.js';
 import { resolveRpc } from './funding.js';
 import {
+  HiddenTransportError,
   isHiddenServiceUrl,
+  proxyRpcFor,
+  type HiddenTransportPort,
+} from './hidden-transport.js';
+import {
   REQUEST_TTL_S,
   routeCarries,
   type PacketOutcome,
@@ -344,6 +349,14 @@ export interface OpRouteView {
   readonly price?: string | undefined;
   readonly chain?: string | undefined;
   readonly channelId?: string | undefined;
+  /**
+   * This packet rides an Anyone Protocol circuit, because the connector it is
+   * paid at is a Hidden Provider's `.anyone` address (§10). The proxy's own
+   * port is not repeated here; `/api/health` names it once.
+   */
+  readonly overAnon?: boolean | undefined;
+  /** Whether the chain RPC rides the same circuit (ADR 0008's third leg). */
+  readonly rpcOverAnon?: boolean | undefined;
 }
 
 export interface WorkloadCard {
@@ -358,6 +371,18 @@ export interface WorkloadCard {
     readonly liveness?: string | undefined;
     /** Whether a current Profile for it was on the relays just read. */
     readonly inDirectory: boolean;
+    /**
+     * Why a provider that declares itself hidden is not (spec §10, ADR 0008).
+     *
+     * `hidden` is a self-assertion that nobody outside can verify — but two of
+     * its conditions are visible from HERE, and a tenant reading them is
+     * entitled to be told. A Profile that carries a `host`, or a lease whose
+     * access names something other than a per-lease `.anyone` address, is a
+     * clearnet provider with an onion front door. The lease still works and
+     * the console still shows what it needs to reach it; what it does not do
+     * is keep calling it hidden without comment.
+     */
+    readonly notHidden?: string | undefined;
   };
   readonly status: WorkloadStatus;
   readonly runway: RunwayView;
@@ -477,6 +502,12 @@ export interface WorkloadStoreDeps {
   readonly readHealth: (profile: NetworkProfile) => Promise<ConnectorHealth>;
   readonly readDirectory: (profile: NetworkProfile) => Promise<DirectoryResult>;
   readonly provider: ProviderPort;
+  /**
+   * The Anyone Protocol carriage (#98, spec §10). A lease on a Hidden Provider
+   * is statused, extended and terminated over a circuit, and without one every
+   * op on such a lease says so rather than dialling anything.
+   */
+  readonly hidden?: HiddenTransportPort | undefined;
   readonly paths: ConsolePaths;
   readonly notes: WorkloadNoteStore;
   /** The budgets, when they are wired. A dashboard reads fine without them. */
@@ -894,6 +925,18 @@ export class WorkloadStore {
           ? {}
           : { liveness: primary.provider.liveness }),
         inDirectory: primary?.provider.inDirectory ?? false,
+        // #98's check, asked of the PRIMARY's own Profile and its own answer:
+        // a provider that says it is hidden and then hands out a clearnet
+        // address has contradicted itself, and every member of a Standby Set
+        // is a provider that could (§4.1, §10).
+        ...optional(
+          'notHidden',
+          hiddenContradiction(
+            primary?.provider.hidden ?? lease.provider.hidden === true,
+            primary?.provider.connectorUrl ?? lease.provider.connector_url,
+            status.kind === 'read' ? status.access : lease.access
+          )
+        ),
       },
       status,
       runway: this.#runway(
@@ -1370,6 +1413,8 @@ export class WorkloadStore {
         rpcUrl: plan.rpcUrl,
         keys,
         channelStore: plan.channelStore,
+        ...(plan.socksProxy === undefined ? {} : { socksProxy: plan.socksProxy }),
+        ...(plan.proxyRpc === undefined ? {} : { proxyRpc: plan.proxyRpc }),
         ...(this.#deps.timeoutMs === undefined ? {} : { timeoutMs: this.#deps.timeoutMs }),
       })
     );
@@ -1519,16 +1564,38 @@ export class WorkloadStore {
       via: OpRouteView['via'];
       price: string;
       health: Extract<ConnectorHealth, { state: 'ok' }>;
+      socksProxy?: string | undefined;
     }[] = [];
     const refusals: string[] = [];
     for (const candidate of candidates) {
+      // A `.anyone` connector is a Hidden Provider's, and it is reached over a
+      // circuit or not at all (spec §10, ADR 0008). Resolved BEFORE the health
+      // read, because the health read is itself a dial: `readHealth` carries
+      // this console's own address to whatever it asks. A carriage that will
+      // not open takes this candidate out of the running with a reason — it
+      // never demotes it to a direct dial. See `hidden-transport.ts`.
+      let socksProxy: string | undefined;
       if (isHiddenServiceUrl(candidate.url)) {
-        refusals.push(
-          `${candidate.url} is a hidden service, and reaching one needs a running Anyone ` +
-            `Protocol daemon to proxy through. The console does not start one yet ` +
-            `(TOON_Network#96, spec §10).`
-        );
-        continue;
+        const carriage = this.#deps.hidden;
+        if (carriage === undefined) {
+          refusals.push(
+            `${candidate.url} is a Hidden Provider's connector, reachable only over an Anyone ` +
+              `Protocol circuit, and this build has no carriage for one (spec §10).`
+          );
+          continue;
+        }
+        try {
+          socksProxy = (await carriage.open()).socksProxy;
+        } catch (error) {
+          refusals.push(
+            error instanceof HiddenTransportError
+              ? error.message
+              : `The Anyone Protocol carriage could not be opened: ${
+                  error instanceof Error ? error.message : String(error)
+                }`
+          );
+          continue;
+        }
       }
       const health = await this.#deps.readHealth({ ...profile, connectorUrl: candidate.url });
       if (health.state !== 'ok') {
@@ -1549,7 +1616,7 @@ export class WorkloadStore {
         );
         continue;
       }
-      priced.push({ ...candidate, price: quoted, health });
+      priced.push({ ...candidate, price: quoted, health, socksProxy });
     }
 
     if (priced.length === 0) {
@@ -1590,6 +1657,7 @@ export class WorkloadStore {
       price: chosen.price,
       sealTo,
       channelStore: channels.store,
+      ...(chosen.socksProxy === undefined ? {} : { socksProxy: chosen.socksProxy }),
     };
 
     // The chain a lease was BOUGHT on comes first, and it is not a preference.
@@ -1603,12 +1671,16 @@ export class WorkloadStore {
     for (const settlement of settlements) {
       const binding = findChannelBinding(channels.store, chosen.url, settlement.chain);
       if (!binding) continue;
+      const rpcUrl = resolveRpc(profile, settlement.kind).url;
       return {
         ...plan,
         chain: settlement.chain,
         channelId: binding.channelId,
         chainKind: settlement.kind,
-        rpcUrl: resolveRpc(profile, settlement.kind).url,
+        rpcUrl,
+        // The chain rides the circuit beside the packets unless it is already
+        // private, where `anon` would build no circuit at all.
+        ...(chosen.socksProxy === undefined ? {} : { proxyRpc: await proxyRpcFor(rpcUrl) }),
         ...optional('available', channelAvailable(channels.store, binding)),
       } as OpPlan;
     }
@@ -1625,10 +1697,12 @@ export class WorkloadStore {
           `collateral on chain and costs the chain's own gas.`
       );
     }
+    const fallbackRpc = resolveRpc(profile, first?.kind ?? 'evm').url;
     return {
       ...plan,
       chainKind: first?.kind ?? 'evm',
-      rpcUrl: resolveRpc(profile, first?.kind ?? 'evm').url,
+      rpcUrl: fallbackRpc,
+      ...(chosen.socksProxy === undefined ? {} : { proxyRpc: await proxyRpcFor(fallbackRpc) }),
     } as OpPlan;
   }
 
@@ -1893,6 +1967,9 @@ interface OpPlan {
   readonly chainKind: 'evm' | 'solana';
   readonly rpcUrl: string;
   readonly channelStore: ChannelStore;
+  /** Set only when this packet rides a circuit to a `.anyone` connector (§10). */
+  readonly socksProxy?: string | undefined;
+  readonly proxyRpc?: boolean | undefined;
 }
 
 /** §6.7's state, reduced to what the routes and the card branch on. */
@@ -1953,7 +2030,43 @@ function viewOf(plan: OpPlan): OpRouteView {
     ...optional('price', plan.price),
     ...optional('chain', plan.chain),
     ...optional('channelId', plan.channelId),
+    ...(plan.socksProxy === undefined
+      ? {}
+      : { overAnon: true, rpcOverAnon: plan.proxyRpc === true }),
   };
+}
+
+/**
+ * What this console can see that contradicts `hidden: true` (spec §10).
+ *
+ * Three of ADR 0008's five conditions are invisible from a tenant's side —
+ * workload egress, the settlement RPC, and whether the provider also answers
+ * somewhere else. Two are not: the connector it publishes, and the address a
+ * lease answers on. Those are checked here, and nothing else is guessed at.
+ */
+export function hiddenContradiction(
+  hidden: boolean,
+  connectorUrl: string,
+  access: LeaseAccess | undefined
+): string | undefined {
+  if (!hidden) return undefined;
+  if (connectorUrl.length > 0 && !isHiddenServiceUrl(connectorUrl)) {
+    return (
+      `This provider declares itself hidden, but the connector its Profile publishes ` +
+      `(${connectorUrl}) is a clearnet address. §10 requires a Hidden Provider's connector ` +
+      `to be reachable only at an \`.anyone\` address, so it is not hidden in any sense this ` +
+      `console can honour.`
+    );
+  }
+  const host = access?.host;
+  if (host !== undefined && host.length > 0 && !host.endsWith('.anyone')) {
+    return (
+      `This provider declares itself hidden, but this lease answers at ${host} rather than a ` +
+      `per-lease \`.anyone\` address (§10). Its location is not hidden from you, and this ` +
+      `console makes no claim that it is hidden from anybody else.`
+    );
+  }
+  return undefined;
 }
 
 /** A provider's answer on any of the three routes, read defensively. */

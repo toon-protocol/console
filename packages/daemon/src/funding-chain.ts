@@ -8,6 +8,11 @@ import {
 } from '@toon-protocol/client';
 
 import {
+  carriageRefusal,
+  isHiddenServiceUrl,
+  type HiddenTransportPort,
+} from './hidden-transport.js';
+import {
   ChainOpenError,
   type Amount,
   type ChainPort,
@@ -38,10 +43,42 @@ import {
 export class LiveChainPort implements ChainPort {
   readonly #edge: ConnectorEdgeClient;
   readonly #timeoutMs: number;
+  readonly #hidden: HiddenTransportPort | undefined;
+  #overAnon: { proxy: string; edge: ConnectorEdgeClient } | undefined;
 
-  constructor(options: { timeoutMs?: number } = {}) {
+  constructor(options: { timeoutMs?: number; hidden?: HiddenTransportPort } = {}) {
     this.#timeoutMs = options.timeoutMs ?? 20_000;
     this.#edge = new ConnectorEdgeClient({ timeout: this.#timeoutMs });
+    this.#hidden = options.hidden;
+  }
+
+  /**
+   * The edge client for one connector — over a circuit when it is a Hidden
+   * Provider's (TOON_Network#98, spec §10, ADR 0008).
+   *
+   * A `.anyone` name must never reach `fetch` unproxied, and the reason is not
+   * that the request would fail. It is that resolving one locally puts the
+   * hidden service this console is about to talk to into a plaintext DNS
+   * query — the single fact the address exists to withhold. `socks5h` exists
+   * so the PROXY resolves it, and no carriage means no dial at all.
+   */
+  async #edgeFor(connectorUrl: string): Promise<ConnectorEdgeClient> {
+    if (!isHiddenServiceUrl(connectorUrl)) return this.#edge;
+    if (this.#hidden === undefined) {
+      throw new ChainOpenError(
+        `${connectorUrl} is a Hidden Provider's connector and this build has no Anyone ` +
+          `Protocol carriage to reach one through, so nothing was dialled (spec §10).`,
+        { outOfGas: false }
+      );
+    }
+    const carriage = await this.#hidden.open();
+    if (this.#overAnon?.proxy !== carriage.socksProxy) {
+      this.#overAnon = {
+        proxy: carriage.socksProxy,
+        edge: new ConnectorEdgeClient({ fetch: carriage.fetch, timeout: 120_000 }),
+      };
+    }
+    return this.#overAnon.edge;
   }
 
   /**
@@ -56,6 +93,18 @@ export class LiveChainPort implements ChainPort {
    * not have.
    */
   async readWallet(request: WalletReadRequest): Promise<WalletReadResult> {
+    // A `.anyone` RPC endpoint is not read here, and it is not read DIRECTLY
+    // either: resolving the name locally would put it in a plaintext DNS query
+    // (spec §10). No shipped profile names one; a hand-written one might, and
+    // an unreadable balance is the honest answer rather than a leak.
+    if (isHiddenServiceUrl(request.rpcUrl)) {
+      return {
+        unreadable: true,
+        error:
+          `${request.rpcUrl} is a hidden-service endpoint, and this console reads balances ` +
+          `on clearnet only. Nothing was dialled (spec §10).`,
+      };
+    }
     const [chain] = await readWalletBalances(
       request.kind === 'evm'
         ? {
@@ -103,6 +152,11 @@ export class LiveChainPort implements ChainPort {
    */
   async openChannel(request: OpenChannelRequest): Promise<OpenedChannel> {
     let client: ToonClient | undefined;
+    // `socksProxy` and nothing beside it: the client builds the whole carriage
+    // from it, and anything this console injected would win over the proxy in
+    // silence. See `hidden-transport.ts`.
+    const refusal = carriageRefusal({ socksProxy: request.socksProxy });
+    if (refusal !== null) throw new ChainOpenError(refusal, { outOfGas: false });
     try {
       client = await ToonClient.create({
         connector: request.connectorUrl,
@@ -111,7 +165,9 @@ export class LiveChainPort implements ChainPort {
         chain: request.kind,
         rpcUrl: request.rpcUrl,
         channelStore: request.channelStore,
-        timeoutMs: this.#timeoutMs,
+        timeoutMs: request.socksProxy === undefined ? this.#timeoutMs : 120_000,
+        ...(request.socksProxy === undefined ? {} : { socksProxy: request.socksProxy }),
+        ...(request.proxyRpc === undefined ? {} : { proxyRpc: request.proxyRpc }),
         // Opening is what this call IS, so it is never a side effect of
         // something else here.
         autoOpenChannel: true,
@@ -201,7 +257,7 @@ export class LiveChainPort implements ChainPort {
   async quote(connectorUrl: string): Promise<QuoteView | undefined> {
     let described: NodeSelfDescription;
     try {
-      described = await this.#edge.describe(connectorUrl);
+      described = await (await this.#edgeFor(connectorUrl)).describe(connectorUrl);
     } catch {
       return undefined;
     }

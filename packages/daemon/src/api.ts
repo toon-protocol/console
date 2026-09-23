@@ -20,6 +20,7 @@ import {
   type HandoverResult,
   type WithdrawalResult,
 } from './gateway.js';
+import { HiddenTransportError, type HiddenTransportPort } from './hidden-transport.js';
 import {
   LeaseError,
   type LeaseStore,
@@ -131,6 +132,12 @@ export interface ApiDeps {
    * build that did not wire it, and the route says so rather than pretending.
    */
   readonly desktop?: DesktopPort | undefined;
+  /**
+   * The Anyone Protocol carriage (TOON_Network#98, spec §10). Reported by
+   * `/api/health` so a person can see, before they pick a Hidden Provider,
+   * whether this console can reach one at all.
+   */
+  readonly hidden?: HiddenTransportPort | undefined;
   readonly now?: (() => Date) | undefined;
 }
 
@@ -1283,6 +1290,12 @@ function accountProblem(error: unknown): ApiResponse {
     };
   }
   if (error instanceof FundingError) return problem(error.status, error.code, error.message);
+  // No circuit, and therefore no packet (TOON_Network#98, spec §10). It is a
+  // 503 and it carries the whole reason, because the fix is always somewhere
+  // else on this machine — an `anon` daemon that is not running, or a proxy
+  // that is not set.
+  if (error instanceof HiddenTransportError)
+    return problem(error.status, error.code, error.message);
   if (error instanceof SealingError) return problem(409, error.code, error.message);
   if (error instanceof WorkloadError) return problem(error.status, error.code, error.message);
   if (error instanceof LeaseVaultError) {
@@ -1358,6 +1371,9 @@ async function healthBody(deps: ApiDeps, request: ApiRequest) {
   const refresh = request.query.get('refresh') === '1';
   const connector = await deps.readHealth(profile, { forceRefresh: refresh });
   const channels = channelStoreFor(deps.paths, profile.id);
+  // A loopback SOCKS port, not a secret, and the one place it is named: the
+  // views that ride it say "over a circuit" and leave the port alone.
+  const anon = await deps.hidden?.describe();
   return {
     daemon: {
       name: deps.version.name,
@@ -1372,6 +1388,7 @@ async function healthBody(deps: ApiDeps, request: ApiRequest) {
     },
     profile: toProfileView(profile, profile),
     connector,
+    ...(anon === undefined ? {} : { anon }),
     storage: {
       data: deps.paths.data,
       config: deps.paths.config,

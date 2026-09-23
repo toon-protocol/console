@@ -22,6 +22,7 @@ import {
   GOOD_SPAWN,
   connectorHealth,
   fakeProvider,
+  fakeAnon,
   fakeProviderPort,
   giveChannel,
   leaseFixture,
@@ -76,6 +77,7 @@ describe('spawning a workload', () => {
       directory?: () => Promise<DirectoryResult>;
       health?: (profile: NetworkProfile) => Promise<ReturnType<typeof connectorHealth>>;
       channelAt?: string | null;
+      hidden?: ReturnType<typeof fakeAnon> | null;
     } = {}
   ) => {
     port = fakeProviderPort();
@@ -90,6 +92,7 @@ describe('spawning a workload', () => {
       cache: new InMemoryLeaseVaultCache(),
       ...(input.directory === undefined ? {} : { directory: input.directory }),
       ...(input.health === undefined ? {} : { health: input.health }),
+      ...(input.hidden === undefined || input.hidden === null ? {} : { hidden: input.hidden }),
     });
     // A rebuild starts from no channel at all: the binding lives in a file
     // under `paths`, and one left over from the default build would make the
@@ -590,27 +593,140 @@ describe('spawning a workload', () => {
       expect(port.sent).toHaveLength(0);
     });
 
-    it('will not spawn on a Hidden Provider it cannot reach yet', async () => {
-      await build({
-        directory: () =>
-          Promise.resolve({
-            state: 'ok',
-            relays: { seed: [], read: [] },
-            filters: {},
-            providers: [
-              fakeProvider({
-                hidden: true,
-                connectorUrl: 'http://abcdefg.anyone/ilp',
-              }),
-            ],
-            listingsWithoutProfile: 0,
-            rejectedEvents: 0,
-            readAt: '2026-09-22T00:00:00.000Z',
-          }),
+    /**
+     * A Hidden Provider (TOON_Network#98, spec §10, ADR 0008).
+     *
+     * Its connector IS the `.anyone` address; there is no second one and no
+     * host to fall back to, which is the whole of ADR 0008. So the three cases
+     * are: a circuit, no circuit at all, and a circuit that would not build —
+     * and the second and third must look identical from the outside, because
+     * the one thing neither may become is a direct dial.
+     */
+    describe('a Hidden Provider', () => {
+      const HIDDEN_CONNECTOR = `http://${'a'.repeat(56)}.anyone/ilp`;
+      /** §10: a lease's access names a per-lease `.anyone` host, never an IP. */
+      const hiddenSpawnOk = (packet: Parameters<typeof spawnOk>[0]) => {
+        const ok = spawnOk(packet) as Extract<
+          ReturnType<typeof spawnOk>,
+          { kind: 'answered' }
+        >;
+        const body = {
+          ...(ok.body as Record<string, unknown>),
+          access: {
+            host: `${'b'.repeat(56)}.anyone`,
+            ssh_port: 40000,
+            ports: [{ container_port: 80, host_port: 41000 }],
+          },
+        };
+        return { ...ok, body, text: JSON.stringify(body) };
+      };
+      const hiddenDirectory = () => () =>
+        Promise.resolve({
+          state: 'ok',
+          relays: { seed: [], read: [] },
+          filters: {},
+          providers: [fakeProvider({ hidden: true, connectorUrl: HIDDEN_CONNECTOR })],
+          listingsWithoutProfile: 0,
+          rejectedEvents: 0,
+          readAt: '2026-09-22T00:00:00.000Z',
+        } as DirectoryResult);
+
+      it('pays at its `.anyone` connector over a circuit, and says so', async () => {
+        const anon = fakeAnon();
+        await build({
+          directory: hiddenDirectory(),
+          hidden: anon,
+          channelAt: HIDDEN_CONNECTOR,
+        });
+
+        const view = await fixture.leases.preflight(GOOD_SPAWN as SpawnRequest);
+        expect(view.problems).toEqual([]);
+        expect(view.provider?.hidden).toBe(true);
+        expect(view.payment).toMatchObject({
+          connectorUrl: HIDDEN_CONNECTOR,
+          via: 'provider-connector',
+          overAnon: true,
+        });
+        expect(anon.opens).toBeGreaterThan(0);
       });
 
-      const view = await fixture.leases.preflight(GOOD_SPAWN as SpawnRequest);
-      expect(view.problems.join(' ')).toMatch(/hidden service/u);
+      it('sends the packet with the proxy and nothing else', async () => {
+        await build({
+          directory: hiddenDirectory(),
+          hidden: fakeAnon({ socksProxy: 'socks5h://127.0.0.1:19050' }),
+          channelAt: HIDDEN_CONNECTOR,
+        });
+        port.answer = hiddenSpawnOk;
+
+        await fixture.leases.spawn(GOOD_SPAWN as SpawnRequest);
+        const packet = port.sent[0];
+        expect(packet?.socksProxy).toBe('socks5h://127.0.0.1:19050');
+        // An injected `fetch` or websocket would beat the proxy in silence.
+        expect(packet).not.toHaveProperty('fetch');
+        expect(packet).not.toHaveProperty('createWebSocket');
+      });
+
+      it('vaults the lease with no host for the provider anywhere in it', async () => {
+        await build({
+          directory: hiddenDirectory(),
+          hidden: fakeAnon(),
+          channelAt: HIDDEN_CONNECTOR,
+        });
+        port.answer = hiddenSpawnOk;
+
+        const result = await fixture.leases.spawn(GOOD_SPAWN as SpawnRequest);
+        const record = vaultEvents()[0];
+        const sealed = JSON.stringify(result.lease);
+        // The lease's OWN address is a per-lease `.anyone` host and belongs
+        // here — §10 says a tenant dials it exactly as it would an IP. What
+        // must not be here is a location: an IP, or a `host` for the provider.
+        expect(result.lease?.access?.host).toMatch(/\.anyone$/u);
+        expect(sealed).not.toMatch(/\b\d{1,3}(\.\d{1,3}){3}\b/u);
+        expect(result.lease?.provider).not.toHaveProperty('host');
+        expect(result.lease?.provider.hidden).toBe(true);
+        // And the record on the relay is sealed, so it says nothing either.
+        expect(record?.content ?? '').not.toMatch(/anyone|\d{1,3}(\.\d{1,3}){3}/u);
+      });
+
+      it('leaves the sandbox’s own loopback chain off the circuit', async () => {
+        // `anon` builds no circuit to a private address, so proxying the local
+        // chain would fail rather than hide anything.
+        await build({
+          directory: hiddenDirectory(),
+          hidden: fakeAnon(),
+          channelAt: HIDDEN_CONNECTOR,
+        });
+        const view = await fixture.leases.preflight(GOOD_SPAWN as SpawnRequest);
+        expect(view.payment?.rpcOverAnon).toBe(false);
+      });
+
+      it('refuses when there is no carriage at all, and sends nothing', async () => {
+        await build({ directory: hiddenDirectory(), channelAt: HIDDEN_CONNECTOR });
+
+        const view = await fixture.leases.preflight(GOOD_SPAWN as SpawnRequest);
+        expect(view.problems.join(' ')).toMatch(/Anyone Protocol circuit/u);
+        expect(view.ok).toBe(false);
+        await expect(fixture.leases.spawn(GOOD_SPAWN as SpawnRequest)).rejects.toThrow(
+          LeaseError
+        );
+        expect(port.sent).toHaveLength(0);
+      });
+
+      it('refuses when the circuit will not build, rather than dialling direct', async () => {
+        const anon = fakeAnon({ fails: 'nothing is listening on socks5h://127.0.0.1:19050' });
+        await build({
+          directory: hiddenDirectory(),
+          hidden: anon,
+          channelAt: HIDDEN_CONNECTOR,
+        });
+
+        const view = await fixture.leases.preflight(GOOD_SPAWN as SpawnRequest);
+        expect(view.problems.join(' ')).toMatch(/nothing is listening/u);
+        // The refusal names no connector to try instead, and the payment view
+        // — the only place a second endpoint could appear — was never built.
+        expect(view.payment).toBeUndefined();
+        expect(port.sent).toHaveLength(0);
+      });
     });
   });
 

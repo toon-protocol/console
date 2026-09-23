@@ -10,6 +10,12 @@ import {
   type PayerKeys,
 } from './chain-seed.js';
 import type { ConnectorHealth, SettlementView } from './connector-health.js';
+import {
+  HiddenTransportError,
+  isHiddenServiceUrl,
+  proxyRpcFor,
+  type HiddenTransportPort,
+} from './hidden-transport.js';
 import type { ConsolePaths } from './paths.js';
 import { isConfigured, type NetworkProfile } from './profiles.js';
 
@@ -344,6 +350,13 @@ export interface OpenChannelRequest {
   readonly deposit?: bigint | undefined;
   readonly keys: PayerKeys;
   readonly channelStore: ChannelStore;
+  /**
+   * The `socks5h://` proxy this open rides, when the connector is a Hidden
+   * Provider's `.anyone` address (TOON_Network#98, spec §10).
+   */
+  readonly socksProxy?: string | undefined;
+  /** Whether the chain RPC rides the same circuit (ADR 0008's third leg). */
+  readonly proxyRpc?: boolean | undefined;
 }
 
 export interface OpenedChannel {
@@ -379,6 +392,12 @@ export interface FundingDeps {
   readonly chainSeed: ChainSeedStore;
   readonly readHealth: (profile: NetworkProfile) => Promise<ConnectorHealth>;
   readonly chains: ChainPort;
+  /**
+   * The Anyone Protocol carriage (#98, spec §10). A channel with a Hidden
+   * Provider's own connector is opened over a circuit — it is the only
+   * connector such a provider has — and without one the open says so.
+   */
+  readonly hidden?: HiddenTransportPort | undefined;
   readonly paths: ConsolePaths;
   /** For the tests, and for nothing else. */
   readonly now?: (() => Date) | undefined;
@@ -467,9 +486,9 @@ export class FundingStore {
         chains: [],
         reason:
           health.state === 'unreachable'
-            ? `${profile.label}'s connector did not answer, so which chains it settles on is ` +
-              `unknown — and an address for a chain that may not be settled on is worse than ` +
-              `none. ${health.reason}`
+            ? `The connector at ${profile.connectorUrl} did not answer, so which chains it ` +
+              `settles on is unknown — and an address for a chain that may not be settled on ` +
+              `is worse than none. ${health.reason}`
             : health.reason,
       };
     }
@@ -581,6 +600,36 @@ export class FundingStore {
     }
 
     const deposit = readDeposit(input.deposit);
+
+    // A Hidden Provider's connector is a `.anyone` address, and a channel with
+    // it is opened over a circuit or not at all (spec §10, ADR 0008). Resolved
+    // before the record below, so a missing `anon` daemon is a refusal rather
+    // than an open that shows as pending and never lands.
+    let anon: { socksProxy: string; proxyRpc: boolean } | undefined;
+    if (isHiddenServiceUrl(profile.connectorUrl)) {
+      const carriage = this.#deps.hidden;
+      if (carriage === undefined) {
+        throw new FundingError(
+          'no_anon_carriage',
+          `${profile.connectorUrl} is a Hidden Provider's connector and this build has no ` +
+            `Anyone Protocol carriage to reach one through (spec §10).`,
+          503
+        );
+      }
+      try {
+        anon = {
+          socksProxy: (await carriage.open()).socksProxy,
+          proxyRpc: await proxyRpcFor(chain.rpc.url),
+        };
+      } catch (error) {
+        throw new FundingError(
+          error instanceof HiddenTransportError ? error.code : 'no_anon_carriage',
+          error instanceof Error ? error.message : String(error),
+          error instanceof HiddenTransportError ? error.status : 503
+        );
+      }
+    }
+
     const channels = channelStoreFor(this.#deps.paths, profile.id);
     const record: OpenRecord = {
       chain: chain.chain,
@@ -605,6 +654,9 @@ export class FundingStore {
           keys,
           channelStore: channels.store,
           ...(deposit === undefined ? {} : { deposit }),
+          ...(anon === undefined
+            ? {}
+            : { socksProxy: anon.socksProxy, proxyRpc: anon.proxyRpc }),
         })
       )
       .then((opened) => {

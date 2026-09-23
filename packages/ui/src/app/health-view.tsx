@@ -6,7 +6,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
-import type { ConnectorHealth, Health } from '@/lib/daemon';
+import type { AnonTransportView, ConnectorHealth, Health } from '@/lib/daemon';
 
 /**
  * What the console is, and what it is talking to.
@@ -50,7 +50,48 @@ export function HealthView({ health }: { health: Health }) {
           <ConnectorFacts connector={health.connector} />
         </CardContent>
       </Card>
+
+      {health.anon !== undefined && <AnonCard anon={health.anon} />}
     </div>
+  );
+}
+
+/**
+ * Whether this console can reach a Hidden Provider at all (spec §10).
+ *
+ * Said HERE, before anybody picks one, because the alternative is finding out
+ * at the moment a spawn is refused. It is also the only place the SOCKS port
+ * is printed: a route that rides it says "over a circuit" and no more.
+ */
+function AnonCard({ anon }: { anon: AnonTransportView }) {
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between gap-2">
+          <CardTitle>Hidden Providers</CardTitle>
+          <Badge
+            variant={
+              anon.state === 'ready'
+                ? 'success'
+                : anon.state === 'unconfigured'
+                  ? 'outline'
+                  : 'destructive'
+            }
+          >
+            {anon.state === 'ready' ? 'circuit available' : anon.state.replace(/_/gu, ' ')}
+          </Badge>
+        </div>
+        <CardDescription>
+          A Hidden Provider is reached over an Anyone Protocol circuit, or not at all.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {anon.socksProxy !== undefined && (
+          <Field label="SOCKS proxy" value={anon.socksProxy} mono />
+        )}
+        <p className="text-muted-foreground text-sm">{anon.reason}</p>
+      </CardContent>
+    </Card>
   );
 }
 

@@ -63,10 +63,26 @@ export type ConnectorHealth =
       supportedVersions: number[];
     };
 
+/**
+ * The Anyone Protocol carriage (TOON_Network#98, spec §10).
+ *
+ * Reported here and nowhere else, because this is the one place the SOCKS
+ * port itself is named: everything that rides it says "over a circuit" and
+ * leaves the port alone. `unconfigured` is not a fault — a console with no
+ * proxy works on every clearnet provider and refuses, out loud, on a hidden
+ * one.
+ */
+export interface AnonTransportView {
+  state: 'unconfigured' | 'ready' | 'unreachable' | 'misconfigured';
+  socksProxy?: string;
+  reason: string;
+}
+
 export interface Health {
   daemon: DaemonInfo;
   profile: ProfileView;
   connector: ConnectorHealth;
+  anon?: AnonTransportView;
   storage: { data: string; config: string; runtime: string; channels: string };
   checkedAt: string;
 }
@@ -759,6 +775,8 @@ export interface PreflightView {
     chain?: string;
     channelId?: string;
     routePrice?: string;
+    overAnon?: boolean;
+    rpcOverAnon?: boolean;
   };
   /** Where the Root Secret would be written, and what THAT write costs. */
   vault: { localOnly: boolean; writes: RelayWriteTargets };
@@ -974,6 +992,10 @@ export interface OpRouteView {
   price?: string;
   chain?: string;
   channelId?: string;
+  /** This packet rides an Anyone Protocol circuit (§10). */
+  overAnon?: boolean;
+  /** …and so does the chain RPC behind its channel (ADR 0008). */
+  rpcOverAnon?: boolean;
 }
 
 export interface AutoExtendView {
@@ -1060,6 +1082,8 @@ export interface WorkloadCard {
     hidden: boolean;
     liveness?: string;
     inDirectory: boolean;
+    /** Why a provider that calls itself hidden is not (§10, ADR 0008). */
+    notHidden?: string;
   };
   status: WorkloadStatus;
   runway: RunwayView;
