@@ -9,7 +9,18 @@
 # when the daemon comes up. So: make sure the daemon is running, read the URL
 # it published, and hand that to Omarchy's launch-or-focus.
 #
-# Usage: toon-console [--print-url]
+# The Omarchy menu and the theme-set hook come in here too (TOON_Network#99):
+#
+#   toon-console --view workloads   a menu entry. Posts the view to the daemon,
+#                                   so an ALREADY OPEN window changes tab —
+#                                   focusing is all Omarchy can do to one —
+#                                   then focuses or opens the window.
+#   toon-console --theme-changed    the theme-set hook. One POST, and nothing
+#                                   else: it never starts a daemon and never
+#                                   opens a window, because a theme change is
+#                                   not a reason to open an application.
+#
+# Usage: toon-console [--print-url | --view <view> | --theme-changed]
 
 set -euo pipefail
 
@@ -17,6 +28,7 @@ UNIT="toon-console.service"
 WINDOW_PATTERN="${TOON_CONSOLE_WINDOW_PATTERN:-TOON Console}"
 RUNTIME_DIR="${XDG_RUNTIME_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}}/toon-console"
 LAUNCH_FILE="$RUNTIME_DIR/launch.json"
+VIEWS="workloads new-workload funds"
 
 die() {
   echo "toon-console: $1" >&2
@@ -58,16 +70,47 @@ read_launch_url() {
   ' "$LAUNCH_FILE"
 }
 
-main() {
-  ensure_daemon
-  wait_for_launch_file
-  local url
-  url=$(read_launch_url)
+# One authenticated POST to the running daemon, with the token out of the
+# launch record. The record lives in the runtime directory, which this user
+# alone can read, and it is the only place a live token exists -- which is why
+# the hook and the menu entries can talk to the console without any credential
+# of their own.
+#
+# Prints "ok" on success and nothing on failure, and never fails the script:
+# every caller here would rather do its other half than abort.
+post_api() {
+  local path="$1" body="${2:-}"
+  [[ -s $LAUNCH_FILE ]] || return 0
+  node -e '
+    const { readFileSync } = require("node:fs");
+    const [file, path, body] = process.argv.slice(1);
+    let record;
+    try {
+      record = JSON.parse(readFileSync(file, "utf8"));
+    } catch {
+      process.exit(0);
+    }
+    if (typeof record.url !== "string" || typeof record.token !== "string") process.exit(0);
+    const request = {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${record.token}`,
+        ...(body ? { "content-type": "application/json" } : {}),
+      },
+      ...(body ? { body } : {}),
+      signal: AbortSignal.timeout(5000),
+    };
+    fetch(new URL(path, record.url), request).then(
+      (response) => {
+        if (response.ok) process.stdout.write("ok");
+      },
+      () => {}
+    );
+  ' "$LAUNCH_FILE" "$path" "$body" 2>/dev/null || true
+}
 
-  if [[ ${1:-} == "--print-url" ]]; then
-    printf '%s\n' "$url"
-    return 0
-  fi
+open_window() {
+  local url="$1"
 
   if command -v omarchy-launch-or-focus-webapp >/dev/null 2>&1; then
     # <window-pattern> then the URL: focus the window if it is already open,
@@ -78,6 +121,40 @@ main() {
   # Any other desktop: hand the URL to whatever opens URLs.
   command -v xdg-open >/dev/null 2>&1 || die "no omarchy-launch-or-focus-webapp and no xdg-open"
   exec xdg-open "$url"
+}
+
+main() {
+  # The theme-set hook, and nothing else. Before ensure_daemon on purpose.
+  if [[ ${1:-} == "--theme-changed" ]]; then
+    post_api /api/desktop/theme >/dev/null
+    return 0
+  fi
+
+  local view=""
+  if [[ ${1:-} == "--view" ]]; then
+    view="${2:-}"
+    [[ -n $view ]] || die "--view needs one of: $VIEWS"
+    # shellcheck disable=SC2076
+    [[ " $VIEWS " == *" $view "* ]] || die "unknown view '$view' (one of: $VIEWS)"
+  fi
+
+  ensure_daemon
+  wait_for_launch_file
+  local url
+  url=$(read_launch_url)
+
+  if [[ ${1:-} == "--print-url" ]]; then
+    printf '%s\n' "$url"
+    return 0
+  fi
+
+  # Told before the window is focused, so that a window which is already open
+  # has the answer waiting on the poll it is holding.
+  if [[ -n $view ]]; then
+    post_api /api/desktop/view "{\"view\":\"$view\"}" >/dev/null
+  fi
+
+  open_window "$url"
 }
 
 main "$@"

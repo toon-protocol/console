@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import type { WorkloadsState } from '@/hooks/use-workloads';
+import { GatewayPanel } from './gateway-panel';
 import type {
   LeaseAccess,
   LeaseLife,
@@ -54,6 +55,12 @@ import type {
  *   swept at its expiry — it is not an ending.
  * - **Expiry** is an ending: nobody paid, the lease is over, nothing restarts
  *   it. The card must never show one of these three as another.
+ *
+ * **The hostname is a section, not a tab** (TOON_Network#97). A Workload
+ * Gateway fronts one workload id, so what it serves belongs on that
+ * workload's card and nowhere else — and `gateway-panel.tsx` owns it, with
+ * its own hook, so that a card with no gateway is a card with an empty
+ * section rather than a card that fails.
  */
 
 export function WorkloadCard({ card, workloads }: { card: Card; workloads: WorkloadsState }) {
@@ -107,6 +114,7 @@ export function WorkloadCard({ card, workloads }: { card: Card; workloads: Workl
       <Actions card={card} workloads={workloads} busy={busy} />
       {card.set.warm && <Members card={card} workloads={workloads} busy={busy} />}
       <AutoExtend card={card} workloads={workloads} busy={busy} />
+      <GatewayPanel workloadId={card.workloadId} />
     </article>
   );
 }

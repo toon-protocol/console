@@ -1,0 +1,21 @@
+#!/bin/bash
+#
+# Omarchy has just set a theme. Tell an open console window.
+#
+# Installed as ~/.config/omarchy/hooks/theme-set.d/toon-console, with @BIN@
+# replaced by the launcher's absolute path — the hook runs from
+# omarchy-theme-set, whose PATH is not this login shell's.
+#
+# By the time this runs, Omarchy has already rendered every template and
+# swapped the new theme into ~/.local/state/omarchy/current/theme, so the
+# file the daemon reads is the new one. All this has to say is "look again";
+# `toon-console --theme-changed` does nothing at all if no daemon is running,
+# and in particular never starts one. A theme change is not a reason to open
+# an application.
+#
+# $1 is the snake-cased theme name, which this console does not need: it reads
+# the colours themselves rather than keying off a name.
+
+set -euo pipefail
+
+exec @BIN@ --theme-changed

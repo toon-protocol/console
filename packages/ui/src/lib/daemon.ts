@@ -26,6 +26,8 @@ export interface ProfileView {
   connectorUrl: string;
   relayUrl: string;
   gatewayDomain: string;
+  /** The Workload Gateway's own connector, where a handover is sealed (§12.1). */
+  gatewayConnectorUrl: string;
   faucetUrl?: string;
   rpc: { evm?: string; solana?: string };
   origin: 'built-in' | 'user';
@@ -1104,6 +1106,98 @@ export interface TerminateResult {
   card: WorkloadCard;
 }
 
+/* -------------------------------------------------------------------------- */
+/* The hostname (TOON_Network#97, spec §12)                                   */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * What this console handed to a Workload Gateway.
+ *
+ * Note the field that is not here and never will be: the **Gateway Grant**. A
+ * grant reads one lease's `status` until the moment it names, so it is a
+ * secret exactly as the Continuation Token it derives from is. It is derived
+ * in the daemon for the length of one sealed message. Nothing sends one to
+ * this window and nothing could, because none of these types has a field for
+ * one.
+ */
+export interface GatewayHandoverNote {
+  hostname: string;
+  expiresAt: number;
+  httpPort: number;
+  name?: string;
+  standbySet: string[];
+  connectorUrl: string;
+  route: string;
+  at: string;
+  withdrawnAt?: string;
+}
+
+/** What the hostname itself answered, when the window asked for a knock. */
+export type ServingView =
+  | { kind: 'serving'; status: number; excerpt?: string; at: string }
+  | { kind: 'no_grant'; message: string; at: string }
+  | { kind: 'refused'; reason: string; status: number; message: string; at: string }
+  | { kind: 'unreachable'; message: string; at: string };
+
+export interface GatewayEdgeView {
+  connectorUrl: string;
+  ilpAddress: string;
+  route: string;
+  price?: string;
+  domain: string;
+}
+
+export interface GatewayView {
+  workloadId: string;
+  hostname?: string;
+  gateway?: GatewayEdgeView;
+  handover?: GatewayHandoverNote;
+  held: boolean;
+  expired?: boolean;
+  problems: string[];
+  ok: boolean;
+  ports: number[];
+  httpPort?: number;
+  serving?: ServingView;
+  checkedAt: string;
+}
+
+export interface HandoverResult {
+  sent: boolean;
+  problems: string[];
+  route?: OpRouteView;
+  cost?: string;
+  /** What the gateway answered. */
+  hostname?: string;
+  /** What the daemon derived for itself from the workload id (§12.2). */
+  expectedHostname?: string;
+  matches?: boolean;
+  expiresAt?: number;
+  gatewayError?: string;
+  message?: string;
+  view: GatewayView;
+}
+
+export interface WithdrawalResult {
+  sent: boolean;
+  problems: string[];
+  route?: OpRouteView;
+  cost?: string;
+  hostname?: string;
+  withdrawn?: boolean;
+  gatewayError?: string;
+  message?: string;
+  view: GatewayView;
+}
+
+export interface HandoverRequestBody {
+  expiresAt?: number;
+  expiresIn?: number;
+  httpPort?: number;
+  name?: string;
+  chain?: string;
+}
+
 export class DaemonError extends Error {
   readonly status: number;
   /** The daemon's machine-readable code, e.g. `passphrase_required`. */
@@ -1163,10 +1257,55 @@ function post<T>(path: string, body?: unknown): Promise<T> {
   });
 }
 
+/**
+ * The desktop around the window (TOON_Network#99).
+ *
+ * A mirror of `packages/daemon/src/desktop.ts`, for the same reason as every
+ * other type in this file.
+ */
+export type MenuView = 'workloads' | 'new-workload' | 'funds';
+
+export interface ThemeReading {
+  source: 'omarchy' | 'default';
+  name: string;
+  mode: 'dark' | 'light';
+  revision: string;
+  /** A `:root { … }` rule the daemon built. Goes straight into a `<style>`. */
+  css: string;
+  /** Why the default theme is in use, when it is. */
+  reason?: string;
+  readAt: string;
+}
+
+export interface DesktopView {
+  seq: number;
+  theme: ThemeReading;
+  open?: MenuView;
+  openedAt?: string;
+  at: string;
+}
+
 export const daemon = {
   health: (options: { refresh?: boolean } = {}) =>
     call<Health>(`/api/health${options.refresh ? '?refresh=1' : ''}`),
   profiles: () => call<Profiles>('/api/profiles'),
+
+  /**
+   * The desktop: this machine's theme, and whatever the Omarchy menu last
+   * asked to be opened (TOON_Network#99).
+   *
+   * With `wait`, the daemon holds the request open until something changes or
+   * about twenty-five seconds pass — so a theme switch reaches an open window
+   * at once and an idle one costs nothing. `since` is the last `seq` seen, and
+   * a window that is behind is answered immediately rather than waiting.
+   */
+  desktop: (options: { since?: number; wait?: boolean } = {}) => {
+    const query = new URLSearchParams();
+    if (options.wait) query.set('wait', '1');
+    if (options.since !== undefined) query.set('since', String(options.since));
+    const text = query.toString();
+    return call<DesktopView>(`/api/desktop${text === '' ? '' : `?${text}`}`);
+  },
   setProfile: (id: string) =>
     call<Profiles>('/api/profiles/active', { method: 'POST', body: JSON.stringify({ id }) }),
   directory: (filters: DirectoryFilters = {}) =>
@@ -1336,6 +1475,36 @@ export const daemon = {
     call<WorkloadCard>(`/api/workloads/${encodeURIComponent(workloadId)}/auto-extend`, {
       method: 'DELETE',
     }),
+
+  /**
+   * The hostname (TOON_Network#97). Reading is free and sends nothing;
+   * `probe` additionally knocks on the name itself, over ordinary HTTPS,
+   * reaching no provider and no relay — which is how "the hostname shown is
+   * the one the gateway serves" becomes a check rather than a claim.
+   */
+  gateway: (workloadId: string, options: { probe?: boolean } = {}) =>
+    call<GatewayView>(
+      `/api/workloads/${encodeURIComponent(workloadId)}/gateway${options.probe ? '?probe=1' : ''}`
+    ),
+  /**
+   * Hands the workload to the Workload Gateway: one Gateway Grant per member
+   * of the Standby Set, sealed into one message. Free on every gateway built
+   * so far, and the answer says where it was bought and what it cost.
+   */
+  handOverWorkload: (workloadId: string, request: HandoverRequestBody = {}) =>
+    post<HandoverResult>(
+      `/api/workloads/${encodeURIComponent(workloadId)}/gateway/handover`,
+      request
+    ),
+  /**
+   * Stops the gateway serving the workload. It ends the SERVING and not the
+   * reading: the gateway keeps a working grant until the moment that grant was
+   * derived for. Rotating the lease's token is what ends the reading.
+   */
+  withdrawWorkload: (workloadId: string) =>
+    post<WithdrawalResult>(
+      `/api/workloads/${encodeURIComponent(workloadId)}/gateway/withdraw`
+    ),
 };
 
 /** The filters, as the daemon's query string spells them. */

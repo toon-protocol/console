@@ -315,6 +315,9 @@ function Deposit({
         Deposit address
       </h3>
       <div className="flex flex-wrap items-start gap-4">
+        {/* The one fixed colour in this package, and the theme test names it
+            as such: a QR code is read by a camera, and it has to be dark on
+            light whichever Omarchy theme is set (TOON_Network#99). */}
         <div className="rounded-lg border bg-white p-2" aria-hidden="true">
           <QRCodeSVG value={chain.deposit.address} size={116} level="M" />
         </div>

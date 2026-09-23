@@ -1,15 +1,17 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { useAccount } from '@/hooks/use-account';
 import { useChainSeed } from '@/hooks/use-chain-seed';
 import { useConsole } from '@/hooks/use-console';
+import { useDesktop } from '@/hooks/use-desktop';
 import { useDirectory } from '@/hooks/use-directory';
 import { useDocs } from '@/hooks/use-docs';
 import { useFunding } from '@/hooks/use-funding';
 import { useLeases } from '@/hooks/use-leases';
 import { useWorkloads } from '@/hooks/use-workloads';
 import { useTemplates } from '@/hooks/use-templates';
+import type { MenuView } from '@/lib/daemon';
 
 import { AccountCard, AccountChip } from './account-view';
 import { ChainSeedCard } from './chain-seed-view';
@@ -59,6 +61,20 @@ import { WorkloadsView } from './workloads-view';
 
 type Tab = 'health' | 'directory' | 'templates' | 'workloads' | 'account' | 'funds' | 'docs';
 
+/**
+ * Which tab an Omarchy menu entry means (TOON_Network#99).
+ *
+ * "New workload" is the Template gallery, because that is where a workload is
+ * started from — the milestone's own words. The menu speaks in the three
+ * things a person goes to the console FOR; the tabs are how this window is
+ * arranged, and the two are allowed to differ.
+ */
+const MENU_TABS: Record<MenuView, Tab> = {
+  workloads: 'workloads',
+  'new-workload': 'templates',
+  funds: 'funds',
+};
+
 const TABS: { id: Tab; label: string }[] = [
   { id: 'health', label: 'Health' },
   { id: 'directory', label: 'Providers' },
@@ -72,6 +88,17 @@ const TABS: { id: Tab; label: string }[] = [
 export function ConsoleApp() {
   const { health, profiles, loading, switching, error, refresh, selectProfile } = useConsole();
   const [tab, setTab] = useState<Tab>('health');
+  // The desktop: the theme this window follows, and the view an Omarchy menu
+  // entry asked for. Always live — a theme change has to reach the window
+  // whatever tab it is on.
+  const desktop = useDesktop();
+  const requested = desktop.open;
+  const clearOpen = desktop.clearOpen;
+  useEffect(() => {
+    if (requested === undefined) return;
+    setTab(MENU_TABS[requested]);
+    clearOpen();
+  }, [requested, clearOpen]);
   // The directory is keyed to the active profile: a switch is another network,
   // another relay and another set of providers.
   const directory = useDirectory({
