@@ -1,0 +1,37 @@
+#!/bin/bash
+#
+# `omarchy update` has just finished. Catch the console up with it.
+#
+# Installed as ~/.config/omarchy/hooks/post-update.d/toon-console, with
+# @INSTALL@ replaced by the absolute path of toon-console-install — the hook
+# runs from omarchy-hook, whose PATH is not this login shell's.
+#
+# There are two things an update can leave behind, and this fixes both:
+#
+#   1. A NEW PACKAGE, an OLD DAEMON. pacman cannot restart a `systemd --user`
+#      service: it runs as root, outside the session that owns the daemon. So
+#      after an upgrade the console keeps running the build that was replaced
+#      until someone restarts it, and this is the someone.
+#
+#   2. A NEW TEMPLATE, an OLD COPY. The themed template, the theme-set hook
+#      and the menu entries are the person's files in ~/.config, written from
+#      this package's copies at install time. A package that changes any of
+#      them changes only its own copy; re-running the installer is what moves
+#      the change across. It is idempotent, it edits the menu file only
+#      between its own markers, and it re-renders the theme only if the
+#      template it wrote actually changed.
+#
+# What it must never do is start a console that was not running, or install a
+# console that was removed. `try-restart` is precisely "restart it if it is
+# running", and the guard below is "if the package is still here".
+
+set -euo pipefail
+
+[[ -x @INSTALL@ ]] || exit 0
+
+@INSTALL@ --omarchy-only
+
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl --user daemon-reload || true
+  systemctl --user try-restart toon-console.service || true
+fi

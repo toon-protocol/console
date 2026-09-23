@@ -23,7 +23,7 @@ and that account can **spawn a workload** and keep its Root Secret in the **Leas
 | `packages/site` | The public landing page and docs site: React 19 + Vite, one static build |
 | `docs` | The documentation, as Markdown. The source of the site, the Help tab and the published articles |
 | `deploy` | The Caddy site block, and the runbook a human follows to deploy and publish |
-| `packaging` | The `systemd --user` unit, the launcher, and the install/uninstall scripts |
+| `packaging` | The `systemd --user` unit, the launcher, the install/uninstall scripts, and the AUR package |
 
 ## Running it from a checkout
 
@@ -46,33 +46,120 @@ server's port with the same `?t=` the daemon printed.
 
 ## Installing it as an app
 
+Two ways in, and they install the same thing in two different places. A package puts the
+console in `/usr` and pacman owns it; a checkout puts it in your `$HOME` and you own it.
+Either way the daemon is a `systemd --user` service and the console is opened by
+`toon-console`.
+
+### From the AUR (Arch, Omarchy)
+
 ```bash
+yay -S toon-console      # or: paru -S toon-console
+toon-console-install     # once, as yourself
+```
+
+> The package is `packaging/aur` in this repository and is **not published yet**: it is
+> built from the tag `v$pkgver`, and this repository has no tags. Until one exists, build
+> it yourself — `makepkg -si` in a copy of `packaging/aur` with `pkgver` pointing at a tag
+> you made — or use the checkout path below. What publishing needs is in
+> [`packaging/aur/README.md`](packaging/aur/README.md).
+
+The package installs the daemon, the UI, the docs, the launcher, the desktop entry and the
+`systemd --user` unit. `toon-console-install` does the half a package cannot: it enables
+and starts the service for **your** user, and — on Omarchy — installs the themed template,
+the theme-set hook, the three menu entries and a `post-update.d` hook into your
+`~/.config/omarchy`. It is idempotent; run it again whenever you like.
+
+`SUPER + SPACE` launches **TOON Console**; launching again focuses the window that is
+already open rather than opening a second one.
+
+| | Where |
+| --- | --- |
+| the daemon and its `node_modules` | `/usr/lib/toon-console` |
+| the unit | `/usr/lib/systemd/user/toon-console.service` |
+| the UI, the docs, the Omarchy sources | `/usr/share/toon-console` |
+| the launcher and the two setup commands | `/usr/bin` |
+| **your** channel state, Chain Seed, Lease Vault cache and keystore | `~/.local/share/toon-console` |
+| **your** active profile | `~/.config/toon-console` |
+| this login session's launch token | `$XDG_RUNTIME_DIR/toon-console` |
+
+**Upgrading keeps your data.** The package names nothing under `~/.local/share` or
+`~/.config`, so pacman cannot touch either: `pacman -Syu` replaces `/usr` and leaves every
+account's state alone. What it cannot do is restart a user service — it runs as root,
+outside your session — so after an upgrade:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user try-restart toon-console.service
+```
+
+(Re-running `toon-console-install` does the same thing: it restarts the service rather than
+starting it, precisely so that running it after an upgrade leaves the new build running.)
+
+On Omarchy the `post-update.d` hook does exactly that on the next `omarchy update`, and
+re-applies the template, the hooks and the menu entries if the package changed them. It
+re-themes only if the template it wrote actually changed, and it never starts a console you
+had stopped.
+
+**Removing it takes the lot.** Run `toon-console-uninstall` first — it stops and disables
+the service and takes the Omarchy files and the menu entries back out of your `~/.config` —
+then `pacman -R toon-console`. (The install left a copy of the uninstaller in
+`~/.local/bin`, so the order does not actually matter.) Your data directory survives both,
+on purpose; delete `~/.local/share/toon-console` yourself if you mean it.
+
+The package is built from a git tag and lives in `packaging/aur`, with the release and
+publishing runbook in [`packaging/aur/README.md`](packaging/aur/README.md).
+
+### From a checkout (any Linux desktop)
+
+No Arch and no AUR needed — node 22+, bash and a `systemd --user` session are the whole
+list:
+
+```bash
+npm ci
 npm run build
 packaging/bin/toon-console-install
 ```
 
-That enables `toon-console.service` for your user and registers a **TOON Console** web app
-through `omarchy-webapp-install`. `SUPER + SPACE` launches it; launching again focuses the
-window that is already open rather than opening a second one. On a desktop without Omarchy
-you get a plain `.desktop` entry instead.
+That writes the launcher to `~/.local/bin/toon-console` and the unit to
+`~/.config/systemd/user/toon-console.service`, both pointing at this checkout, enables the
+service and installs a launcher entry: an `omarchy-webapp-install` web app where Omarchy is
+present, and a plain `~/.local/share/applications/toon-console.desktop` where it is not.
+It also installs the Omarchy integration below if `~/.config/omarchy` exists, and skips it
+silently if it does not.
 
-It also installs the Omarchy integration below. `--omarchy-only` installs just that half,
-leaving a running service and its launcher alone.
+`--omarchy-only` installs just that desktop half, leaving a running service and its
+launcher alone; `--no-omarchy` leaves it out; `--no-webapp` forces the plain desktop entry.
+
+On a desktop that is not Omarchy the console opens in your browser through `xdg-open`,
+with the default theme in `packages/daemon/src/theme.ts` rather than your desktop's
+colours. Everything else — the service, the API, the notifications — is the same.
 
 `packaging/bin/toon-console-uninstall` removes all of it. It never touches
-`~/.local/share/toon-console`, which is where channel state — and later the Lease Vault
-cache — lives, nor the keystore.
+`~/.local/share/toon-console`, which is where channel state and the Lease Vault cache live,
+nor the keystore.
+
+### If your session has no keyring
+
+The local keystore uses `secret-tool` (libsecret) when a Secret Service answers on the
+session bus, and a passphrase-encrypted file when none does (ADR 0020). Nothing has to be
+installed for the second; `TOON_CONSOLE_KEYSTORE=file` forces it.
 
 ## Part of the desktop
 
-The console is an Omarchy app, not a website that happens to run locally (ADR 0019). Three
-pieces of it live outside this repository's own directories, and each is one file:
+The console is an Omarchy app, not a website that happens to run locally (ADR 0019). Four
+pieces of it live in your own `~/.config/omarchy` rather than in this repository or in
+`/usr`, because they are yours, and each is one file:
 
 | File | What it does |
 | --- | --- |
 | `~/.config/omarchy/themed/toon-console.css.tpl` | Omarchy renders it against the current theme on every theme change |
 | `~/.config/omarchy/hooks/theme-set.d/toon-console` | tells a running daemon the theme moved |
+| `~/.config/omarchy/hooks/post-update.d/toon-console` | after `omarchy update`: re-applies these files and restarts a running daemon |
 | `~/.config/omarchy/extensions/omarchy-menu.jsonc` | three menu entries, between this package's own markers |
+
+`toon-console-install` writes all four and `toon-console-uninstall` takes all four out; the
+menu file itself is yours, so only the lines between this package's markers are touched.
 
 ### The colours are the desktop's
 

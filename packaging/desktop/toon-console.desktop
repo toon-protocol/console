@@ -1,0 +1,31 @@
+[Desktop Entry]
+# The console's launcher entry, for every desktop including Omarchy.
+#
+# @BIN@ is the launcher and @ICON@ is either an icon theme NAME (the package,
+# which installs into hicolor) or an absolute path to a file (a checkout,
+# which installs nothing into an icon theme). Both are what the Desktop Entry
+# spec allows in Icon=, and both are substituted at install time --
+# `packaging/aur/PKGBUILD` for the package, `toon-console-install` for a
+# checkout.
+#
+# Exec is the LAUNCHER and not a URL, because the URL that opens the console
+# carries a token minted at launch: there is no long-lived credential that
+# could be written into a desktop file. The launcher starts the daemon if it
+# is not running, reads the URL the daemon published, and on Omarchy hands it
+# to omarchy-launch-or-focus-webapp, which focuses the window that is already
+# open rather than opening a second one.
+Version=1.0
+Type=Application
+Name=TOON Console
+GenericName=Workload console
+Comment=Run workloads on TOON Network
+Exec=@BIN@
+Icon=@ICON@
+Terminal=false
+StartupNotify=true
+# Network with RemoteAccess under it, and one main category only:
+# `desktop-file-validate` warns that an entry with two main categories can
+# appear twice in a menu, and running someone else's machine from here is
+# remote access if anything is.
+Categories=Network;RemoteAccess;
+Keywords=TOON;workload;lease;provider;nostr;

@@ -17,6 +17,11 @@ ExecStart=@NODE@ @DAEMON@
 Environment=NODE_ENV=production
 Environment=TOON_CONSOLE_PORT=7797
 Environment=TOON_CONSOLE_UI_ROOT=@UI_ROOT@
+# Where the Markdown pages the Help tab falls back to were installed. Named
+# here rather than left to the daemon's default, because that default is
+# relative to the daemon's own file and a package does not keep the two
+# together: the code goes to /usr/lib and the pages to /usr/share.
+Environment=TOON_CONSOLE_DOCS_DIR=@DOCS_DIR@
 # Reaching a Hidden Provider (TOON_Network#98, spec §10). Deliberately NOT set
 # here: it is a fact about this machine, and a default pointing at a daemon
 # that may not be running would make an honest refusal look like a bug. Set it
