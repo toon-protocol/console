@@ -7,7 +7,8 @@
   "type": "module",
   "workspaces": [
     "packages/daemon",
-    "packages/ui"
+    "packages/ui",
+    "packages/site"
   ],
   "scripts": {
     "build": "npm run build --workspaces",
@@ -18,7 +19,9 @@
     "format:check": "prettier --check \"packages/*/src/**/*.{ts,tsx}\"",
     "typecheck": "npm run typecheck --workspaces",
     "test": "npm run test --workspaces",
-    "test:packaging": "node --test \"packaging/*.test.mjs\""
+    "test:packaging": "node --test \"packaging/*.test.mjs\"",
+    "dev:site": "npm run dev -w @toon-protocol/console-site",
+    "docs:publish": "npm run docs:publish -w @toon-protocol/console-daemon --"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",

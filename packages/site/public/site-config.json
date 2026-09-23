@@ -1,0 +1,10 @@
+{
+  "$comment": "Edited on the box, not baked into the build. Set docsNpub once the documentation key exists (toon-docs-publish --new-key); with it empty the site renders the Markdown it was built with and says so.",
+  "docsNpub": "",
+  "relays": ["wss://relay-ws.devnet.toonprotocol.dev"],
+  "network": "devnet",
+  "gatewayDomain": "gw.devnet.toonprotocol.dev",
+  "aurPackage": "toon-console",
+  "repoUrl": "https://github.com/toon-protocol/console",
+  "specUrl": "https://github.com/toon-protocol/TOON_Network"
+}
