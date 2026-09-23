@@ -1,0 +1,64 @@
+# What pacman says when the console is installed, upgraded or removed.
+#
+# These functions run as ROOT, at package time, possibly in a chroot, with no
+# idea which human this machine belongs to and no session to talk to. So they
+# do nothing at all except print. Every per-user step -- enabling the user
+# service, the Omarchy template, the hook and the menu entries -- is
+# `toon-console-install`, run by the person whose keys and whose ~/.config
+# these are.
+#
+# In particular nothing here touches ~/.local/share/toon-console. An upgrade
+# and a removal leave the account's data directory, its Lease Vault cache and
+# its keystore exactly as they were, because nothing in this package ever
+# names them.
+
+post_install() {
+  cat <<'MESSAGE'
+
+  The TOON Console is installed. One command, as yourself, wires it up:
+
+      toon-console-install
+
+  That enables toon-console.service for your user and starts it, and -- on
+  Omarchy -- installs the themed template, the theme-set hook, the three menu
+  entries and a post-update hook. Then launch "TOON Console" (SUPER + SPACE),
+  or run `toon-console`.
+
+  It writes only under your $HOME. Run it once per account that uses the
+  console; it is safe to run again at any time.
+
+MESSAGE
+}
+
+post_upgrade() {
+  cat <<'MESSAGE'
+
+  The TOON Console has been upgraded. pacman cannot restart a user service,
+  so a console that is running is still running the previous build:
+
+      systemctl --user daemon-reload
+      systemctl --user try-restart toon-console.service
+
+  On Omarchy the post-update hook does both on the next `omarchy update`, and
+  re-applies the desktop integration from this package. Your data directory
+  (~/.local/share/toon-console) has not been touched.
+
+MESSAGE
+}
+
+pre_remove() {
+  cat <<'MESSAGE'
+
+  Before this package goes: take the per-user half out too, as yourself --
+
+      toon-console-uninstall
+
+  It stops and disables the user service, and removes the Omarchy template,
+  the hooks and the menu entries from your ~/.config. (`toon-console-install`
+  left a copy of it in ~/.local/bin, so it still works afterwards.)
+
+  It does NOT remove ~/.local/share/toon-console, and neither does pacman:
+  your channel state, Lease Vault cache and keystore survive both.
+
+MESSAGE
+}

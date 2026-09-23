@@ -1,34 +1,70 @@
 #!/usr/bin/env bash
 #
 # Install the console for the current user: the systemd --user service, the
-# launcher on PATH, and the Omarchy web app entry.
+# launcher, the desktop entry and the Omarchy integration.
 #
-# Everything lands under $HOME. Nothing here needs root, and nothing here is
-# system-wide, because the daemon is a user service holding one person's keys
-# (ADR 0019). The AUR package (TOON_Network#99) will place the same files from
-# a package-owned prefix; this script is what a checkout uses.
+# Everything this script writes lands under $HOME. Nothing here needs root,
+# and nothing here is system-wide, because the daemon is a user service
+# holding one person's keys (ADR 0019).
 #
-# The Omarchy half is TOON_Network#99: the themed template the console's
-# colours come from, the theme-set hook that re-themes an open window, and the
-# three menu entries. Each is one file under ~/.config/omarchy, each is removed
-# again by toon-console-uninstall, and the menu file — which belongs to the
-# person — is edited only between this package's own markers.
+# It runs in one of two LAYOUTS, and works out which by where it is:
 #
-# Usage: packaging/bin/toon-console-install [--repo <dir>] [--no-webapp] [--no-omarchy] [--no-retheme]
+#   checkout   packaging/bin/toon-console-install in a built checkout. It
+#              writes the launcher into ~/.local/bin and the unit into
+#              ~/.config/systemd/user, pointing both at this checkout.
+#
+#   packaged   /usr/bin/toon-console-install, from the AUR package
+#              (TOON_Network#100). The launcher, the unit, the UI, the docs
+#              and the desktop entry are already in /usr and belong to pacman,
+#              so this writes NONE of them: it enables the service, installs
+#              the Omarchy integration, and leaves a copy of the uninstaller
+#              in ~/.local/bin so that removing the package can still be
+#              undone after the package is gone.
+#
+# `--repo <dir>` forces the first, `--prefix <dir>` the second.
+#
+# The Omarchy half (TOON_Network#99) is the same either way, because those
+# files are the PERSON's and live in ~/.config however the console got here:
+# the themed template the console's colours come from, the theme-set hook that
+# re-themes an open window, the three menu entries, and a post-update hook
+# that catches the console up with `omarchy update`. Each is one file, each is
+# removed again by toon-console-uninstall, and the menu file — which belongs
+# to the person — is edited only between this package's own markers.
+#
+# NOTHING here reads or writes the console's DATA directory
+# ($XDG_DATA_HOME/toon-console). Installing, re-installing and upgrading all
+# leave an account's channel state, Lease Vault cache and keystore alone.
+#
+# Usage: toon-console-install [--repo <dir> | --prefix <dir>]
+#                             [--no-webapp] [--no-omarchy] [--no-retheme]
+#                             [--omarchy-only]
 
 set -euo pipefail
 
 REPO=""
+PREFIX=""
 INSTALL_WEBAPP=true
 INSTALL_OMARCHY=true
 RETHEME=true
 OMARCHY_ONLY=false
 APP_NAME="TOON Console"
 
+usage() {
+  echo "usage: toon-console-install [--repo <dir> | --prefix <dir>] [--no-webapp] [--no-omarchy] [--no-retheme] [--omarchy-only]" >&2
+  exit 1
+}
+
 while (($#)); do
   case "$1" in
   --repo)
     REPO="${2:?--repo needs a directory}"
+    shift 2
+    ;;
+  --prefix)
+    # Where the package installed itself: <prefix>/bin, <prefix>/lib and
+    # <prefix>/share. /usr in real life; a throwaway root when this is being
+    # tested without installing anything.
+    PREFIX="${2:?--prefix needs a directory}"
     shift 2
     ;;
   --no-webapp)
@@ -44,77 +80,126 @@ while (($#)); do
     shift
     ;;
   --omarchy-only)
-    # The desktop integration alone: the themed template, the theme-set hook
-    # and the menu entries, with the service and the launcher left exactly as
-    # they are. What a post-update hook wants, and what a checkout that is
-    # already running wants when only these three files have changed.
+    # The desktop integration alone: the themed template, the theme-set hook,
+    # the menu entries and the post-update hook, with the service and the
+    # launcher left exactly as they are. What the post-update hook wants, and
+    # what a checkout that is already running wants when only these files have
+    # changed.
     OMARCHY_ONLY=true
     shift
     ;;
   *)
-    echo "usage: toon-console-install [--repo <dir>] [--no-webapp] [--no-omarchy] [--no-retheme] [--omarchy-only]" >&2
-    exit 1
+    usage
     ;;
   esac
 done
-
-if [[ -z $REPO ]]; then
-  REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-fi
-
-DAEMON_ENTRY="$REPO/packages/daemon/dist/main.js"
-UI_ROOT="$REPO/packages/ui/dist"
-BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
-UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
-ICON_SOURCE="$REPO/packaging/icons/toon-console.png"
-OMARCHY_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy"
-THEME_STATE="$HOME/.local/state/omarchy/current"
 
 die() {
   echo "toon-console-install: $1" >&2
   exit 1
 }
 
+[[ -z $REPO || -z $PREFIX ]] || die "--repo and --prefix are two different layouts; pass one"
+
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [[ -z $REPO && -z $PREFIX ]]; then
+  if [[ -d $SELF_DIR/../../packages/daemon ]]; then
+    REPO="$(cd "$SELF_DIR/../.." && pwd)"
+  elif [[ -d $SELF_DIR/../lib/toon-console ]]; then
+    PREFIX="$(cd "$SELF_DIR/.." && pwd)"
+  else
+    die "cannot tell which layout this is; pass --repo <checkout> or --prefix <prefix>"
+  fi
+fi
+
+BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
+UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+DESKTOP_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+OMARCHY_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy"
+THEME_STATE="$HOME/.local/state/omarchy/current"
+
+if [[ -n $PREFIX ]]; then
+  LAYOUT=packaged
+  # Absolute, because a hook and a menu entry run with a PATH that is not this
+  # login shell's.
+  BIN="$PREFIX/bin/toon-console"
+  INSTALLER="$PREFIX/bin/toon-console-install"
+  UNINSTALLER="$PREFIX/bin/toon-console-uninstall"
+  ASSETS="$PREFIX/share/toon-console"
+  OMARCHY_SRC="$ASSETS/omarchy"
+  DESKTOP_SOURCE=""
+  ICON_SOURCE=""
+else
+  LAYOUT=checkout
+  BIN="$BIN_DIR/toon-console"
+  INSTALLER="$REPO/packaging/bin/toon-console-install"
+  UNINSTALLER="$REPO/packaging/bin/toon-console-uninstall"
+  OMARCHY_SRC="$REPO/packaging/omarchy"
+  DESKTOP_SOURCE="$REPO/packaging/desktop/toon-console.desktop"
+  ICON_SOURCE="$REPO/packaging/icons/toon-console.png"
+  DAEMON_ENTRY="$REPO/packages/daemon/dist/main.js"
+  UI_ROOT="$REPO/packages/ui/dist"
+  DOCS_DIR="$REPO/docs"
+fi
 
 # --------------------------------------------------------------------------
-# The Omarchy half (TOON_Network#99)
+# The Omarchy half (TOON_Network#99, TOON_Network#100)
 # --------------------------------------------------------------------------
 
 # The console's colours come from the current theme through a template in
-# ~/.config/omarchy/themed/, and an open window is re-themed by a hook in
-# hooks/theme-set.d/. Both are ordinary user files with the conventions the
-# samples beside them document; neither is generated and neither is a copy of
-# anything Omarchy owns.
+# ~/.config/omarchy/themed/, an open window is re-themed by a hook in
+# hooks/theme-set.d/, and hooks/post-update.d/ catches a console up with an
+# `omarchy update` that replaced its package under it. All three are ordinary
+# user files with the conventions the samples beside them document; none is
+# generated and none is a copy of anything Omarchy owns.
 install_omarchy() {
   [[ -d $OMARCHY_DIR ]] || {
     echo "No $OMARCHY_DIR — skipping the Omarchy integration."
     return 0
   }
 
-  mkdir -p "$OMARCHY_DIR/themed" "$OMARCHY_DIR/hooks/theme-set.d" "$OMARCHY_DIR/extensions"
+  mkdir -p "$OMARCHY_DIR/themed" "$OMARCHY_DIR/hooks/theme-set.d" \
+    "$OMARCHY_DIR/hooks/post-update.d" "$OMARCHY_DIR/extensions"
 
-  install -m 0644 "$REPO/packaging/omarchy/toon-console.css.tpl" \
-    "$OMARCHY_DIR/themed/toon-console.css.tpl"
+  local template="$OMARCHY_DIR/themed/toon-console.css.tpl"
+  local before="" after=""
+  # An `[[ ... ]] && x=y` here would take `set -e` out with it the first time
+  # the template is not there yet, which is every first install.
+  if [[ -r $template ]]; then
+    before="$(cksum <"$template")"
+  fi
+  install -m 0644 "$OMARCHY_SRC/toon-console.css.tpl" "$template"
+  after="$(cksum <"$template")"
 
-  # The hook runs from omarchy-theme-set, whose PATH is not this shell's, so
-  # the launcher is named absolutely -- the same reason the unit is.
-  sed -e "s|@BIN@|$BIN_DIR/toon-console|g" \
-    "$REPO/packaging/omarchy/theme-set.d/toon-console" \
+  # The hooks run from omarchy-hook, whose PATH is not this shell's, so what
+  # they call is named absolutely -- the same reason the unit is.
+  sed -e "s|@BIN@|$BIN|g" "$OMARCHY_SRC/theme-set.d/toon-console" \
     >"$OMARCHY_DIR/hooks/theme-set.d/toon-console"
   chmod 0644 "$OMARCHY_DIR/hooks/theme-set.d/toon-console"
 
+  sed -e "s|@INSTALL@|$INSTALLER|g" "$OMARCHY_SRC/post-update.d/toon-console" \
+    >"$OMARCHY_DIR/hooks/post-update.d/toon-console"
+  chmod 0644 "$OMARCHY_DIR/hooks/post-update.d/toon-console"
+
   merge_menu
 
-  if [[ $RETHEME == true ]] && command -v omarchy-theme-set >/dev/null 2>&1 &&
-    [[ -r $THEME_STATE/theme.name ]]; then
-    # A template is rendered when a theme is SET, so until the next theme
-    # change there is nothing for the daemon to read. Setting the current
-    # theme again is the supported way to render one now; it is the same code
-    # path a theme switch takes and it is idempotent.
+  # A template is rendered when a theme is SET, so a template that has just
+  # changed -- or one whose rendered colours are missing -- has nothing on disk
+  # for the daemon to read until the next theme change. Setting the current
+  # theme again is the supported way to render one now: it is the same code
+  # path a theme switch takes and it is idempotent.
+  #
+  # Only when something actually changed, though. This runs from the
+  # post-update hook on every `omarchy update`, and re-theming the desktop is
+  # not a free thing to do to somebody in the middle of one.
+  local rendered="$THEME_STATE/theme/toon-console.css"
+  if [[ $RETHEME == true ]] && [[ $before != "$after" || ! -r $rendered ]] &&
+    command -v omarchy-theme-set >/dev/null 2>&1 && [[ -r $THEME_STATE/theme.name ]]; then
     omarchy-theme-set "$(cat "$THEME_STATE/theme.name")" >/dev/null || true
   fi
 
-  echo "Omarchy: themed template, theme-set hook and menu entries installed."
+  echo "Omarchy: themed template, theme-set and post-update hooks, and menu entries installed."
 }
 
 # The menu file belongs to the person: it is JSONC with their comments in it,
@@ -131,7 +216,7 @@ install_omarchy() {
 merge_menu() {
   local menu="$OMARCHY_DIR/extensions/omarchy-menu.jsonc"
   local block
-  block=$(sed -e "s|@BIN@|$BIN_DIR/toon-console|g" "$REPO/packaging/omarchy/menu.jsonc")
+  block=$(sed -e "s|@BIN@|$BIN|g" "$OMARCHY_SRC/menu.jsonc")
 
   MENU_FILE="$menu" MENU_BLOCK="$block" node -e '
     const { readFileSync, writeFileSync } = require("node:fs");
@@ -180,58 +265,87 @@ if [[ $OMARCHY_ONLY == true ]]; then
   exit 0
 fi
 
-[[ -f $DAEMON_ENTRY ]] || die "no built daemon at $DAEMON_ENTRY — run 'npm run build' first"
-[[ -d $UI_ROOT ]] || die "no built UI at $UI_ROOT — run 'npm run build' first"
+# --------------------------------------------------------------------------
+# The service, the launcher and the desktop entry
+# --------------------------------------------------------------------------
 
-NODE_BIN="$(command -v node)" || die "node is not on PATH"
+if [[ $LAYOUT == checkout ]]; then
+  [[ -f $DAEMON_ENTRY ]] || die "no built daemon at $DAEMON_ENTRY — run 'npm run build' first"
+  [[ -d $UI_ROOT ]] || die "no built UI at $UI_ROOT — run 'npm run build' first"
 
-mkdir -p "$BIN_DIR" "$UNIT_DIR"
+  NODE_BIN="$(command -v node)" || die "node is not on PATH"
 
-# The launcher, on PATH.
-install -m 0755 "$REPO/packaging/bin/toon-console" "$BIN_DIR/toon-console"
+  mkdir -p "$BIN_DIR" "$UNIT_DIR"
 
-# The unit, with this checkout's absolute paths substituted in. systemd does
-# not expand $PATH or relative paths in ExecStart, so they have to be resolved
-# here rather than left as placeholders.
-sed \
-  -e "s|@NODE@|$NODE_BIN|g" \
-  -e "s|@DAEMON@|$DAEMON_ENTRY|g" \
-  -e "s|@UI_ROOT@|$UI_ROOT|g" \
-  "$REPO/packaging/systemd/toon-console.service" >"$UNIT_DIR/toon-console.service"
+  # The launcher, on PATH.
+  install -m 0755 "$REPO/packaging/bin/toon-console" "$BIN"
 
+  # The unit, with this checkout's absolute paths substituted in. systemd does
+  # not expand $PATH or relative paths in ExecStart, so they have to be
+  # resolved here rather than left as placeholders.
+  sed \
+    -e "s|@NODE@|$NODE_BIN|g" \
+    -e "s|@DAEMON@|$DAEMON_ENTRY|g" \
+    -e "s|@UI_ROOT@|$UI_ROOT|g" \
+    -e "s|@DOCS_DIR@|$DOCS_DIR|g" \
+    "$REPO/packaging/systemd/toon-console.service" >"$UNIT_DIR/toon-console.service"
+else
+  # The package put the launcher in $PREFIX/bin, the unit in
+  # $PREFIX/lib/systemd/user and the daemon in $PREFIX/lib/toon-console, all
+  # owned by pacman. Writing any of them again under $HOME would SHADOW the
+  # package's copy -- a unit in ~/.config/systemd/user wins over one in
+  # /usr/lib/systemd/user -- and would outlive the package it came from.
+  [[ -f $PREFIX/lib/toon-console/daemon/main.js ]] ||
+    die "no daemon at $PREFIX/lib/toon-console/daemon/main.js — is the package installed?"
+  [[ -f $PREFIX/lib/systemd/user/toon-console.service ]] ||
+    die "no unit at $PREFIX/lib/systemd/user/toon-console.service — is the package installed?"
+  [[ -d $ASSETS/ui ]] || die "no UI at $ASSETS/ui — is the package installed?"
+
+  # The uninstaller, kept where the package cannot take it away. Removing the
+  # package removes $PREFIX/bin/toon-console-uninstall along with everything
+  # else it owns, and the per-user half -- the enabled service, the Omarchy
+  # files -- would then have nothing left to remove it. This copy is what
+  # `pacman -R` leaves behind on purpose, and it deletes itself when it runs.
+  mkdir -p "$BIN_DIR"
+  install -m 0755 "$UNINSTALLER" "$BIN_DIR/toon-console-uninstall"
+fi
+
+command -v systemctl >/dev/null 2>&1 || die "systemctl not found; this console is a systemd --user service"
 systemctl --user daemon-reload
 systemctl --user enable --now toon-console.service
 
-if [[ $INSTALL_WEBAPP == true ]] && command -v omarchy-webapp-install >/dev/null 2>&1; then
-  # Arguments are: name, url, icon, custom-exec.
-  #
-  # The URL is the daemon's base and is NOT what gets opened: the custom exec
-  # is, because the URL that opens the window carries a token minted at launch
-  # and cannot be written into a .desktop file at install time. omarchy still
-  # requires a valid http(s) URL in that position, so the base is what it gets.
-  omarchy-webapp-install \
-    "$APP_NAME" \
-    "http://127.0.0.1:7797" \
-    "$ICON_SOURCE" \
-    "$BIN_DIR/toon-console"
-  echo "Installed the '$APP_NAME' web app. SUPER + SPACE to launch it."
+if [[ $LAYOUT == checkout ]]; then
+  if [[ $INSTALL_WEBAPP == true ]] && command -v omarchy-webapp-install >/dev/null 2>&1; then
+    # Arguments are: name, url, icon, custom-exec.
+    #
+    # The URL is the daemon's base and is NOT what gets opened: the custom exec
+    # is, because the URL that opens the window carries a token minted at
+    # launch and cannot be written into a .desktop file at install time.
+    # omarchy still requires a valid http(s) URL in that position, so the base
+    # is what it gets.
+    omarchy-webapp-install \
+      "$APP_NAME" \
+      "http://127.0.0.1:7797" \
+      "$ICON_SOURCE" \
+      "$BIN"
+    echo "Installed the '$APP_NAME' web app. SUPER + SPACE to launch it."
+  else
+    # Any other desktop gets a plain desktop entry (ADR 0019). Same file the
+    # package installs system-wide, with this checkout's paths in it.
+    mkdir -p "$DESKTOP_DIR"
+    sed -e "s|@BIN@|$BIN|g" -e "s|@ICON@|$ICON_SOURCE|g" "$DESKTOP_SOURCE" \
+      >"$DESKTOP_DIR/toon-console.desktop"
+    echo "Installed $DESKTOP_DIR/toon-console.desktop."
+  fi
 else
-  # Any other desktop gets a plain desktop entry (ADR 0019).
-  DESKTOP_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
-  mkdir -p "$DESKTOP_DIR"
-  cat >"$DESKTOP_DIR/toon-console.desktop" <<EOF
-[Desktop Entry]
-Version=1.0
-Type=Application
-Name=$APP_NAME
-Comment=Run workloads on TOON Network
-Exec=$BIN_DIR/toon-console
-Icon=$ICON_SOURCE
-Terminal=false
-StartupNotify=true
-Categories=Development;Network;
-EOF
-  echo "Installed $DESKTOP_DIR/toon-console.desktop."
+  # The package's own /usr/share/applications/toon-console.desktop is the
+  # launcher entry, on Omarchy as much as anywhere else: it runs the same
+  # launcher the menu entries do, and that launcher is what opens the web-app
+  # window. `omarchy-webapp-install` is deliberately not run here — it would
+  # write a SECOND "TOON Console" into ~/.local/share/applications, and the
+  # person would have two identical entries, one of which pacman cannot
+  # remove.
+  echo "Launcher: $PREFIX/share/applications/toon-console.desktop (from the package)."
 fi
 
 if [[ $INSTALL_OMARCHY == true ]]; then

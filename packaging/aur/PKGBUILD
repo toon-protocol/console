@@ -1,0 +1,197 @@
+# Maintainer: TOON Network <https://github.com/toon-protocol/console>
+#
+# The AUR package for the TOON Console (TOON_Network#100).
+#
+# WHAT THIS PACKAGE IS. A source package built from a git TAG, not a `-bin`
+# package and not a `-git` one. A `-bin` would need a release artifact, and
+# this repository publishes no release yet; a `-git` package would track
+# whatever `main` happens to be, which is not a thing to hand a person who
+# only wants to run the console. `#tag=v$pkgver` pins one commit, the AUR's
+# version is that tag, and upgrading is moving the tag in this file.
+#
+# WHAT IT OWNS AND WHAT IT DOES NOT. Everything this package installs is
+# read-only and under /usr. The account's own state -- channel stores, the
+# Chain Seed cache, the Lease Vault cache, the keystore -- lives under
+# $XDG_DATA_HOME/toon-console, which appears NOWHERE in this file. pacman
+# removes what it installed and can remove nothing else, so an upgrade and a
+# removal both leave that directory exactly as it was. That is the whole of
+# the guarantee: not a backup() line, not a hook that spares it, but a file
+# list that never names it.
+#
+# The per-user half -- enabling the systemd --user service, and the Omarchy
+# template, hook and menu entries that live in ~/.config -- is not something
+# a package can do from a root install script, and this one does not try.
+# `toon-console-install` does it, as the person, once (see .install).
+
+pkgname=toon-console
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Run workloads on TOON Network: a local daemon and web UI, as an Omarchy app"
+arch=('any')
+url="https://github.com/toon-protocol/console"
+license=('Apache-2.0')
+# node is the daemon; bash is the launcher, the installer and the hooks.
+# Everything else the console can do without, so everything else is optional.
+depends=('nodejs>=22' 'bash')
+makedepends=('git' 'npm')
+optdepends=(
+  'libsecret: keep the account key in the system keyring (`secret-tool`) instead of a passphrase file'
+  'gnome-keyring: a Secret Service for libsecret to talk to'
+  'chromium: the browser the Omarchy web-app window is'
+  'xdg-utils: open the console in the default browser on a desktop without Omarchy'
+  'anon: reach a Hidden Provider over a circuit (TOON_CONSOLE_SOCKS_PROXY)'
+)
+install="$pkgname.install"
+source=("$pkgname::git+https://github.com/toon-protocol/console.git#tag=v$pkgver")
+# A git source is verified by the tag it is fetched at, so there is no
+# checksum to record. A release tarball would carry a real sha256 here.
+sha256sums=('SKIP')
+# Pure JavaScript: nothing to strip, and no debug package to split out.
+options=('!strip' '!debug')
+
+build() {
+  cd "$srcdir/$pkgname"
+
+  # npm reaches the network here. That is unavoidable for a package built from
+  # source out of an npm workspace, and it is why `makepkg` in a network-less
+  # chroot will not build this. The cache is kept inside $srcdir so a build
+  # never writes to the builder's ~/.npm.
+  npm ci --cache "$srcdir/npm-cache" --no-audit --no-fund
+
+  npm run build
+
+  # Now throw that tree away and install the one that SHIPS: the daemon's
+  # runtime dependencies, and nothing else.
+  #
+  # The workspace's install is three packages' worth of everything -- vite,
+  # vitest, typescript and eslint built the console, and react, radix and
+  # lucide were compiled INTO packages/ui/dist and are not loaded again at
+  # runtime. Resolving the daemon alone, from the same lockfile, is 34
+  # packages instead of a thousand and a third of the size. It is a second
+  # `npm ci` rather than an `npm prune` because prune keeps every workspace's
+  # production dependencies, which is exactly what is not wanted here.
+  rm -rf node_modules
+  npm ci --cache "$srcdir/npm-cache" --no-audit --no-fund \
+    --omit=dev --include-workspace-root --workspace @toon-protocol/console-daemon
+
+  # The workspace link points back into $srcdir and would be dangling the
+  # moment the package is installed. The daemon does not import itself by
+  # name -- its dist is relative imports and real dependencies -- so it goes,
+  # along with any other link left pointing outside the tree.
+  rm -rf node_modules/@toon-protocol/console-daemon
+  find node_modules -xtype l -delete
+}
+
+package() {
+  cd "$srcdir/$pkgname"
+
+  local lib="$pkgdir/usr/lib/$pkgname"
+  local share="$pkgdir/usr/share/$pkgname"
+
+  # ---------------------------------------------------------------------
+  # The daemon
+  # ---------------------------------------------------------------------
+  #
+  # /usr/lib/toon-console, because this is one application's private code and
+  # not a library anything else links to.
+  #
+  # A package.json goes in one level above the dist, and it is not optional:
+  # node decides whether a .js file is ESM from the NEAREST package.json (the
+  # daemon's dist is ESM, and without one every `import` in it fails), and
+  # `version.ts` reads the name and the version out of exactly this path to
+  # answer "which console am I running". It is derived from the daemon's own
+  # manifest rather than written out by hand here, so the version in the
+  # health view cannot drift from the version that was built.
+  node -e '
+    const { readFileSync, writeFileSync } = require("node:fs");
+    const pkg = JSON.parse(readFileSync("packages/daemon/package.json", "utf8"));
+    writeFileSync(
+      process.argv[1],
+      JSON.stringify({ name: pkg.name, version: pkg.version, private: true, type: pkg.type }, null, 2) + "\n"
+    );
+  ' "$srcdir/runtime-package.json"
+  install -Dm644 "$srcdir/runtime-package.json" "$lib/package.json"
+  install -d "$lib/daemon"
+  cp -a packages/daemon/dist/. "$lib/daemon/"
+  # Declarations and source maps are for the people who build this, not for
+  # the machine that runs it: node loads neither, and a map with no sources
+  # beside it tells nobody anything.
+  find "$lib/daemon" \( -name '*.d.ts' -o -name '*.map' \) -delete
+  cp -a node_modules "$lib/node_modules"
+  # npm hoists to the workspace root, so this directory is normally not there
+  # at all; a dependency that ever refuses to hoist would live here, one level
+  # above the dist that imports it, and has to come too.
+  if [[ -d packages/daemon/node_modules ]]; then
+    cp -a packages/daemon/node_modules "$lib/daemon/node_modules"
+  fi
+  find "$lib" -type d -exec chmod 755 {} +
+  find "$lib" -type f -exec chmod 644 {} +
+
+  # ---------------------------------------------------------------------
+  # The read-only data the daemon serves
+  # ---------------------------------------------------------------------
+  #
+  # The UI and the docs are architecture-independent data, so they live in
+  # /usr/share and the unit points the daemon at them with the two environment
+  # variables it already reads for exactly this purpose.
+  install -d "$share"
+  cp -a packages/ui/dist "$share/ui"
+  cp -a docs "$share/docs"
+  # The Omarchy assets ship as SOURCES, not as installed integration: the
+  # template, the hook and the menu entries belong in the person's
+  # ~/.config/omarchy, and `toon-console-install` is what puts them there.
+  cp -a packaging/omarchy "$share/omarchy"
+  find "$share" -type d -exec chmod 755 {} +
+  find "$share" -type f -exec chmod 644 {} +
+
+  # ---------------------------------------------------------------------
+  # The commands
+  # ---------------------------------------------------------------------
+  install -Dm755 packaging/bin/toon-console "$pkgdir/usr/bin/toon-console"
+  install -Dm755 packaging/bin/toon-console-install "$pkgdir/usr/bin/toon-console-install"
+  install -Dm755 packaging/bin/toon-console-uninstall "$pkgdir/usr/bin/toon-console-uninstall"
+
+  # ---------------------------------------------------------------------
+  # The systemd --user unit
+  # ---------------------------------------------------------------------
+  #
+  # /usr/lib/systemd/user is where a PACKAGE puts a user unit; the copy in
+  # ~/.config/systemd/user is what a checkout install writes, and the two never
+  # both exist for one install. systemd expands nothing in ExecStart, so the
+  # paths are substituted here -- the same substitution
+  # `toon-console-install` does for a checkout, with this layout's paths.
+  sed \
+    -e "s|@NODE@|/usr/bin/node|g" \
+    -e "s|@DAEMON@|/usr/lib/$pkgname/daemon/main.js|g" \
+    -e "s|@UI_ROOT@|/usr/share/$pkgname/ui|g" \
+    -e "s|@DOCS_DIR@|/usr/share/$pkgname/docs|g" \
+    packaging/systemd/toon-console.service \
+    >"$srcdir/toon-console.service"
+  install -Dm644 "$srcdir/toon-console.service" \
+    "$pkgdir/usr/lib/systemd/user/toon-console.service"
+
+  # ---------------------------------------------------------------------
+  # The launcher entry and its icons
+  # ---------------------------------------------------------------------
+  #
+  # One desktop entry, from the package, for every desktop including Omarchy:
+  # it runs the same launcher the Omarchy menu does, and that launcher is what
+  # opens the web-app window. `omarchy-webapp-install` is deliberately NOT run
+  # for a packaged install -- it would write a second "TOON Console" entry into
+  # ~/.local/share/applications, and the person would have two identical
+  # launchers, one of which pacman cannot remove.
+  sed \
+    -e "s|@BIN@|/usr/bin/toon-console|g" \
+    -e "s|@ICON@|toon-console|g" \
+    packaging/desktop/toon-console.desktop \
+    >"$srcdir/toon-console.desktop"
+  install -Dm644 "$srcdir/toon-console.desktop" \
+    "$pkgdir/usr/share/applications/toon-console.desktop"
+
+  install -Dm644 packaging/icons/toon-console.svg \
+    "$pkgdir/usr/share/icons/hicolor/scalable/apps/toon-console.svg"
+  install -Dm644 packaging/icons/toon-console.png \
+    "$pkgdir/usr/share/icons/hicolor/256x256/apps/toon-console.png"
+
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

@@ -5,9 +5,21 @@
 # or, later, an account's cached Lease Vault.
 #
 # The Omarchy files go too (TOON_Network#99): the themed template, the
-# theme-set hook and the three menu entries. The menu file itself is the
-# person's, so only the lines between this package's markers are taken out and
-# everything else in it — including their comments — is left byte for byte.
+# theme-set and post-update hooks, and the three menu entries. The menu file
+# itself is the person's, so only the lines between this package's markers are
+# taken out and everything else in it — including their comments — is left
+# byte for byte.
+#
+# It undoes BOTH layouts, and deliberately does not care which one it is
+# undoing: a checkout install and a packaged install put the per-user half in
+# exactly the same places, and the files the other layout never wrote are
+# simply not there to remove. What it never removes is anything in /usr --
+# that is the package's, and `pacman -R` is what takes it.
+#
+# The packaged install leaves a copy of this script in ~/.local/bin precisely
+# so that it still exists after `pacman -R` has taken /usr/bin's copy away.
+# That copy is the last thing removed below; bash has the script open by
+# descriptor, so deleting the file it is running from is safe.
 
 set -euo pipefail
 
@@ -25,6 +37,7 @@ rm -f "$APP_DIR/TOON Console.desktop" "$APP_DIR/toon-console.desktop"
 
 rm -f "$OMARCHY_DIR/themed/toon-console.css.tpl"
 rm -f "$OMARCHY_DIR/hooks/theme-set.d/toon-console"
+rm -f "$OMARCHY_DIR/hooks/post-update.d/toon-console"
 
 MENU_FILE="$OMARCHY_DIR/extensions/omarchy-menu.jsonc"
 if [[ -f $MENU_FILE ]]; then
@@ -56,3 +69,9 @@ fi
 
 echo "Removed the console's service, launcher and Omarchy files."
 echo "Its data is untouched: ${XDG_DATA_HOME:-$HOME/.local/share}/toon-console"
+if [[ -f $BIN_DIR/toon-console-uninstall ]]; then
+  echo "If the package is still installed, 'pacman -R toon-console' takes the rest."
+fi
+
+# Last, and possibly this very file.
+rm -f "$BIN_DIR/toon-console-uninstall"

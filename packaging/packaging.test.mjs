@@ -7,7 +7,18 @@
 
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { accessSync, constants, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  accessSync,
+  chmodSync,
+  constants,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
@@ -252,3 +263,395 @@ function stripJsonc(raw) {
     .replace(/^\s*\/\/[^\n]*(\n|$)/gm, '')
     .replace(/,(\s*[}\]])/g, '$1');
 }
+
+/* -------------------------------------------------------------------------- */
+/* The AUR package (TOON_Network#100)                                         */
+/* -------------------------------------------------------------------------- */
+
+const PKGBUILD = 'aur/PKGBUILD';
+
+test('the PKGBUILD and its install file are bash, and parse', () => {
+  for (const file of [PKGBUILD, 'aur/toon-console.install']) {
+    execFileSync('bash', ['-n', join(here, file)]);
+  }
+});
+
+test('the package version is the version that is built', () => {
+  // pkgver is what the AUR shows and what `#tag=v$pkgver` fetches. A pkgver
+  // that has drifted from the workspace would build one version and claim
+  // another, and the health view — which reads the daemon's own package.json
+  // — would be the only place the difference showed.
+  const workspace = JSON.parse(readFileSync(join(here, '..', 'package.json'), 'utf8'));
+  const daemon = JSON.parse(
+    readFileSync(join(here, '..', 'packages', 'daemon', 'package.json'), 'utf8')
+  );
+  const pkgver = /^pkgver=(.+)$/m.exec(read(PKGBUILD))?.[1];
+  assert.equal(pkgver, workspace.version);
+  assert.equal(pkgver, daemon.version);
+});
+
+test('the source is one pinned tag, not a moving branch', () => {
+  const pkgbuild = read(PKGBUILD);
+  assert.match(pkgbuild, /#tag=v\$pkgver/);
+  assert.doesNotMatch(pkgbuild, /#branch=/);
+  // A `-git` package would be a different package with a different name.
+  assert.match(pkgbuild, /^pkgname=toon-console$/m);
+});
+
+/** A bash file with its comments and its printed messages taken out. */
+const codeOf = (name) =>
+  read(name)
+    .replace(/cat <<'MESSAGE'[\s\S]*?\nMESSAGE\n/g, '')
+    .replace(/^\s*#.*$/gm, '');
+
+test('the package never names the account data directory', () => {
+  // THE guarantee of this ticket: an upgrade and a removal leave the account's
+  // channel state, Chain Seed cache, Lease Vault cache and keystore alone.
+  // It is not enforced by a backup() line or by a clever hook — it is enforced
+  // by a file list that never mentions the directory, so pacman cannot touch
+  // it. This test is that file list staying that way. (What the install file
+  // PRINTS about that directory is another matter, and is the point.)
+  for (const file of [PKGBUILD, 'aur/toon-console.install']) {
+    const code = codeOf(file);
+    assert.doesNotMatch(code, /XDG_DATA_HOME/, `${file} reaches into the data directory`);
+    assert.doesNotMatch(code, /\.local\/share/, `${file} reaches into the data directory`);
+    assert.doesNotMatch(code, /backup=/, `${file} declares a backup file under $HOME`);
+  }
+});
+
+test('the install file prints and does nothing else', () => {
+  // It runs as root, at package time, possibly in a chroot, with no session
+  // and no idea whose machine this is. Anything it did to a person's files it
+  // would be doing as the wrong user, at the wrong time — so with the messages
+  // taken out there is nothing left in it but three empty functions.
+  const code = codeOf('aur/toon-console.install')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  assert.deepEqual(code, [
+    'post_install() {',
+    '}',
+    'post_upgrade() {',
+    '}',
+    'pre_remove() {',
+    '}',
+  ]);
+  // ...and it tells the person the one command that does the per-user half.
+  const text = read('aur/toon-console.install');
+  assert.match(text, /toon-console-install/);
+  assert.match(text, /toon-console-uninstall/);
+});
+
+test('the PKGBUILD substitutes every placeholder the unit and the desktop entry carry', () => {
+  // The same contract the checkout installer is held to: a placeholder nobody
+  // replaces reaches systemd as a literal `@NODE@` and the unit never starts.
+  const pkgbuild = read(PKGBUILD);
+  const sources = [read('systemd/toon-console.service'), read('desktop/toon-console.desktop')];
+  for (const source of sources) {
+    for (const placeholder of source.match(/@[A-Z_]+@/g) ?? []) {
+      assert.ok(
+        pkgbuild.includes(`s|${placeholder}|`),
+        `the PKGBUILD leaves ${placeholder} in what it installs`
+      );
+    }
+  }
+});
+
+test('the package installs every file the console needs, from this tree', () => {
+  // Each path the PKGBUILD copies out of the checkout has to be a path that
+  // exists in it. A renamed asset otherwise fails at `makepkg` time on a
+  // stranger's machine rather than here.
+  const pkgbuild = read(PKGBUILD);
+  const referenced = [
+    ...[...pkgbuild.matchAll(/install -Dm\d+ (packaging\/\S+|LICENSE)/g)].map((m) => m[1]),
+    ...[...pkgbuild.matchAll(/cp -a (packages\/\w+\/dist\S*|docs|packaging\/\S+)/g)].map(
+      (m) => m[1]
+    ),
+    ...[...pkgbuild.matchAll(/install -Dm\d+ "\$srcdir\/[^"]+" \\?\s*\n?\s*"\$pkgdir[^"]+"/g)].map(
+      () => null
+    ),
+  ].filter(Boolean);
+  const built = new Set(['packages/daemon/dist/.', 'packages/ui/dist']);
+  for (const path of referenced) {
+    if (built.has(path)) continue; // only exists after `npm run build`
+    accessSync(join(here, '..', path), constants.R_OK);
+  }
+  // And the two it can only have after a build are the two the build makes.
+  assert.ok(pkgbuild.includes('packages/daemon/dist/.'));
+  assert.ok(pkgbuild.includes('packages/ui/dist'));
+});
+
+test('the package ships the runtime tree only, with no link into the build directory', () => {
+  const pkgbuild = read(PKGBUILD);
+  // vite, vitest, typescript and eslint built the console, and react, radix
+  // and lucide were compiled into the UI's dist. What ships is the DAEMON's
+  // production tree, resolved from the same lockfile that built it.
+  assert.match(pkgbuild, /--omit=dev --include-workspace-root --workspace @toon-protocol\/console-daemon/);
+  // The workspace link points back into $srcdir and would be dangling the
+  // moment the package is installed.
+  assert.match(pkgbuild, /find node_modules -xtype l -delete/);
+});
+
+test('the daemon gets a package.json beside its dist, or none of its imports work', () => {
+  // node decides ESM-vs-CommonJS from the nearest package.json, and
+  // version.ts reads the console's name and version out of exactly that path.
+  const pkgbuild = read(PKGBUILD);
+  assert.match(pkgbuild, /"\$lib\/package\.json"/);
+  assert.match(pkgbuild, /packages\/daemon\/package\.json/);
+  const version = readFileSync(
+    join(here, '..', 'packages', 'daemon', 'src', 'version.ts'),
+    'utf8'
+  );
+  assert.match(
+    version,
+    /join\(here, '\.\.', 'package\.json'\)/,
+    'version.ts no longer reads the package.json one level above its dist'
+  );
+});
+
+test('the desktop entry is one file, used by the package and by a checkout', () => {
+  const entry = read('desktop/toon-console.desktop');
+  assert.match(entry, /^\[Desktop Entry\]$/m);
+  assert.match(entry, /^Exec=@BIN@$/m);
+  assert.match(entry, /^Icon=@ICON@$/m);
+  // Exec is the launcher, never a URL: the URL that opens the console carries
+  // a token minted at launch.
+  assert.doesNotMatch(entry, /^Exec=.*http/m);
+  // The installer renders the same file rather than keeping a second copy of
+  // it in a heredoc.
+  assert.match(read('bin/toon-console-install'), /packaging\/desktop\/toon-console\.desktop/);
+  assert.doesNotMatch(read('bin/toon-console-install'), /\[Desktop Entry\]/);
+});
+
+test('the launcher entry comes from the package, or from a checkout, never both', () => {
+  const installer = read('bin/toon-console-install');
+  // A second webapp entry would be a duplicate launcher pacman cannot remove,
+  // so the one call there is belongs to the checkout branch alone.
+  assert.equal((installer.match(/omarchy-webapp-install \\\n/g) ?? []).length, 1);
+  const packaged = installer
+    .slice(installer.indexOf("# The package's own"))
+    .replace(/^\s*#.*$/gm, '');
+  assert.doesNotMatch(packaged, /omarchy-webapp-install/);
+  assert.match(installer, /LAYOUT == checkout/);
+});
+
+test('the post-update hook restarts a running console and starts no other', () => {
+  const hook = read('omarchy/post-update.d/toon-console');
+  // `try-restart` is exactly "restart it if it is running". `restart` would
+  // start a console the person had stopped, in the middle of a system update.
+  assert.match(hook, /systemctl --user try-restart toon-console\.service/);
+  assert.doesNotMatch(hook, /systemctl --user (start|restart) /);
+  // It must do nothing at all once the package is gone.
+  assert.match(hook, /\[\[ -x @INSTALL@ \]\] \|\| exit 0/);
+  // And the installer has to resolve that placeholder, for the same reason
+  // the theme-set hook's is resolved: the hook runs with omarchy-hook's PATH.
+  assert.match(read('bin/toon-console-install'), /s\|@INSTALL@\|/);
+});
+
+test('the theme is re-rendered only when the template actually changed', () => {
+  // The post-update hook runs this on every `omarchy update`, and
+  // omarchy-theme-set re-themes the whole desktop.
+  const installer = read('bin/toon-console-install');
+  assert.match(installer, /before != "\$after" \|\| ! -r \$rendered/);
+});
+
+test('uninstalling removes the post-update hook and the copy of itself', () => {
+  const uninstall = read('bin/toon-console-uninstall');
+  assert.match(uninstall, /hooks\/post-update\.d\/toon-console/);
+  assert.match(uninstall, /rm -f "\$BIN_DIR\/toon-console-uninstall"/);
+  // ...and still nothing under the data directory.
+  assert.match(uninstall, /Its data is untouched/);
+});
+
+/**
+ * A packaged install, into a throwaway prefix and a throwaway HOME, with a
+ * systemctl that records rather than acts.
+ *
+ * This is the half of the AUR package that `makepkg` cannot show: what the
+ * person's own directories look like after `pacman -S` and `toon-console-install`,
+ * and after `pacman -R` and `toon-console-uninstall`. Nothing real is
+ * installed, no real service is touched, and the fake prefix stands in for
+ * /usr exactly as `pacman -U --root` would.
+ */
+function fakePrefixInstall(run) {
+  const dir = mkdtempSync(join(tmpdir(), 'toon-packaged-'));
+  try {
+    const prefix = join(dir, 'usr');
+    const home = join(dir, 'home');
+    const config = join(home, '.config');
+    const data = join(home, '.local', 'share');
+
+    // What the package put in /usr.
+    mkdirSync(join(prefix, 'lib', 'toon-console', 'daemon'), { recursive: true });
+    writeFileSync(join(prefix, 'lib', 'toon-console', 'daemon', 'main.js'), '');
+    mkdirSync(join(prefix, 'lib', 'systemd', 'user'), { recursive: true });
+    writeFileSync(join(prefix, 'lib', 'systemd', 'user', 'toon-console.service'), '');
+    mkdirSync(join(prefix, 'share', 'toon-console', 'ui'), { recursive: true });
+    mkdirSync(join(prefix, 'share', 'applications'), { recursive: true });
+    cpSync(join(here, 'omarchy'), join(prefix, 'share', 'toon-console', 'omarchy'), {
+      recursive: true,
+    });
+    mkdirSync(join(prefix, 'bin'), { recursive: true });
+    for (const name of ['toon-console', 'toon-console-install', 'toon-console-uninstall']) {
+      cpSync(join(here, 'bin', name), join(prefix, 'bin', name));
+      chmodSync(join(prefix, 'bin', name), 0o755);
+    }
+
+    // The person's directories, with state in them that must survive.
+    mkdirSync(join(config, 'omarchy'), { recursive: true });
+    mkdirSync(join(data, 'toon-console', 'accounts', 'a'), { recursive: true });
+    writeFileSync(join(data, 'toon-console', 'accounts', 'a', 'leases.json'), '{"keep":true}');
+
+    // A systemctl that records what it was asked to do and does none of it.
+    const stub = join(dir, 'stub');
+    mkdirSync(stub, { recursive: true });
+    const log = join(dir, 'systemctl.log');
+    writeFileSync(
+      join(stub, 'systemctl'),
+      `#!/bin/bash\nprintf '%s\\n' "$*" >>${JSON.stringify(log)}\nexit 0\n`,
+      { mode: 0o755 }
+    );
+
+    const env = {
+      ...process.env,
+      HOME: home,
+      XDG_CONFIG_HOME: config,
+      XDG_DATA_HOME: data,
+      XDG_BIN_HOME: join(home, '.local', 'bin'),
+      PATH: `${stub}:${process.env.PATH}`,
+    };
+    const exec = (script, args = []) =>
+      execFileSync('bash', [script, ...args], { env, encoding: 'utf8' });
+
+    run({ dir, prefix, home, config, data, env, exec, systemctl: () => read_(log) });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const read_ = (file) => {
+  try {
+    return readFileSync(file, 'utf8');
+  } catch {
+    return '';
+  }
+};
+
+test('a packaged install enables the package unit and writes only under $HOME', () => {
+  fakePrefixInstall(({ prefix, home, config, data, exec, systemctl }) => {
+    const out = exec(join(prefix, 'bin', 'toon-console-install'));
+
+    // The service is enabled from the package's unit; no second unit is
+    // written where it would shadow it.
+    assert.match(systemctl(), /enable --now toon-console\.service/);
+    assert.ok(!existsSync(join(config, 'systemd', 'user', 'toon-console.service')));
+    // The launcher is the package's, so nothing is copied onto PATH...
+    assert.ok(!existsSync(join(home, '.local', 'bin', 'toon-console')));
+    // ...but the uninstaller is, because pacman will take the package's copy.
+    accessSync(join(home, '.local', 'bin', 'toon-console-uninstall'), constants.X_OK);
+    // The desktop entry is the package's, and no webapp duplicate was made.
+    assert.ok(!existsSync(join(home, '.local', 'share', 'applications')));
+    assert.match(out, /from the package/);
+
+    // The Omarchy half, pointing at the package's launcher and installer.
+    const hook = readFileSync(join(config, 'omarchy', 'hooks', 'theme-set.d', 'toon-console'), 'utf8');
+    assert.ok(hook.includes(`${prefix}/bin/toon-console --theme-changed`));
+    const update = readFileSync(
+      join(config, 'omarchy', 'hooks', 'post-update.d', 'toon-console'),
+      'utf8'
+    );
+    assert.ok(update.includes(`${prefix}/bin/toon-console-install --omarchy-only`));
+    assert.doesNotMatch(update, /@INSTALL@/);
+    const menu = readFileSync(
+      join(config, 'omarchy', 'extensions', 'omarchy-menu.jsonc'),
+      'utf8'
+    );
+    assert.ok(menu.includes(`${prefix}/bin/toon-console --view workloads`));
+
+    // And the account's data is exactly as it was.
+    assert.equal(
+      readFileSync(join(data, 'toon-console', 'accounts', 'a', 'leases.json'), 'utf8'),
+      '{"keep":true}'
+    );
+  });
+});
+
+test('installing twice changes nothing, the way an upgrade re-runs it', () => {
+  fakePrefixInstall(({ prefix, config, exec }) => {
+    exec(join(prefix, 'bin', 'toon-console-install'));
+    const snapshot = readFileSync(
+      join(config, 'omarchy', 'extensions', 'omarchy-menu.jsonc'),
+      'utf8'
+    );
+    exec(join(prefix, 'bin', 'toon-console-install'));
+    assert.equal(
+      readFileSync(join(config, 'omarchy', 'extensions', 'omarchy-menu.jsonc'), 'utf8'),
+      snapshot
+    );
+  });
+});
+
+test('removing the package leaves no launcher, hook, service or menu entry behind', () => {
+  fakePrefixInstall(({ prefix, home, config, data, exec, systemctl }) => {
+    exec(join(prefix, 'bin', 'toon-console-install'));
+
+    // `pacman -R`: everything the package owned, including its uninstaller.
+    rmSync(prefix, { recursive: true, force: true });
+
+    // The copy the install left behind is what is left to run.
+    exec(join(home, '.local', 'bin', 'toon-console-uninstall'));
+
+    assert.match(systemctl(), /disable --now toon-console\.service/);
+    for (const left of [
+      join(config, 'omarchy', 'themed', 'toon-console.css.tpl'),
+      join(config, 'omarchy', 'hooks', 'theme-set.d', 'toon-console'),
+      join(config, 'omarchy', 'hooks', 'post-update.d', 'toon-console'),
+      join(config, 'systemd', 'user', 'toon-console.service'),
+      join(home, '.local', 'bin', 'toon-console'),
+      join(home, '.local', 'bin', 'toon-console-uninstall'),
+    ]) {
+      assert.ok(!existsSync(left), `${left} survived the uninstall`);
+    }
+    const menu = readFileSync(join(config, 'omarchy', 'extensions', 'omarchy-menu.jsonc'), 'utf8');
+    assert.doesNotMatch(menu, /toon-console/);
+    assert.doesNotMatch(menu, /toon\.workloads/);
+
+    // The data directory is the one thing that survives all of it.
+    assert.equal(
+      readFileSync(join(data, 'toon-console', 'accounts', 'a', 'leases.json'), 'utf8'),
+      '{"keep":true}'
+    );
+  });
+});
+
+test('.SRCINFO says what the PKGBUILD says', () => {
+  // The AUR refuses a push whose .SRCINFO does not match its PKGBUILD, and it
+  // is a generated file that nothing but a person's memory regenerates. This
+  // compares the fields that actually move; `makepkg --printsrcinfo` is what
+  // writes it (packaging/aur/README.md).
+  const pkgbuild = read(PKGBUILD);
+  const srcinfo = read('aur/.SRCINFO');
+  const field = (name) =>
+    [...srcinfo.matchAll(new RegExp(`^\\t${name} = (.+)$`, 'gm'))].map((match) => match[1]);
+  const declared = (name) =>
+    new RegExp(`^${name}=(?:'([^']*)'|"([^"]*)"|(\\S+))$`, 'm')
+      .exec(pkgbuild)
+      ?.slice(1)
+      .find(Boolean);
+
+  assert.equal(field('pkgver')[0], declared('pkgver'));
+  assert.equal(field('pkgrel')[0], declared('pkgrel'));
+  assert.match(srcinfo, /^pkgbase = toon-console$/m);
+  // The source line carries the tag, with $pkgver expanded.
+  assert.equal(
+    field('source')[0],
+    `toon-console::git+https://github.com/toon-protocol/console.git#tag=v${declared('pkgver')}`
+  );
+  for (const depend of field('depends')) {
+    assert.ok(
+      pkgbuild.includes(`'${depend}'`),
+      `.SRCINFO has a depends the PKGBUILD does not: ${depend}`
+    );
+  }
+  assert.equal(field('install')[0], 'toon-console.install');
+});
