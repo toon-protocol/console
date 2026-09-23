@@ -9,7 +9,9 @@ import type {
   LeaseAccess,
   LeaseLife,
   RunwayView,
+  StandbySetView,
   WorkloadCard as Card,
+  WorkloadMemberView,
   WorkloadStatus,
 } from '@/lib/daemon';
 
@@ -38,6 +40,20 @@ import type {
  * **Terminate asks twice.** It is free, immediate, and there is no refund
  * (§6.6): the workload is destroyed and nothing brings it back. So it takes a
  * second press, and the second one says what it will end.
+ *
+ * A **Standby Set** adds a fifth (TOON_Network#95, spec §7). Its members are
+ * listed, each with what it is doing and the route that keeps it alive, and
+ * three words are kept apart because the protocol keeps them apart:
+ *
+ * - **Reserved** is a Warm Standby holding capacity with nothing running. It
+ *   is paid on `.standby.extend` at the standby price, and letting it lapse
+ *   is letting the protection go.
+ * - **Self-stop** is a primary that stopped its OWN workload because it could
+ *   no longer publish Liveness to a majority of its Relay Set (§7.1). The
+ *   lease is still paid, still extendable at the running price, and still
+ *   swept at its expiry — it is not an ending.
+ * - **Expiry** is an ending: nobody paid, the lease is over, nothing restarts
+ *   it. The card must never show one of these three as another.
  */
 
 export function WorkloadCard({ card, workloads }: { card: Card; workloads: WorkloadsState }) {
@@ -58,6 +74,14 @@ export function WorkloadCard({ card, workloads }: { card: Card; workloads: Workl
             provider {card.provider.liveness}
           </Badge>
         )}
+        {card.set.warm && (
+          <Badge
+            variant="outline"
+            title="A Standby Set: one workload id, several providers, one Root Secret (spec §7)."
+          >
+            {card.set.members} members
+          </Badge>
+        )}
         {card.lease.localOnly ? (
           <Badge variant="outline" title="This lease's Root Secret is on this machine only.">
             local only
@@ -76,10 +100,12 @@ export function WorkloadCard({ card, workloads }: { card: Card; workloads: Workl
       </p>
 
       <Life card={card} />
-      <Runway runway={card.runway} />
-      <Access access={card.status.kind === 'read' ? card.status.access : card.lease.access} />
+      <Takeover set={card.set} />
+      <Runway runway={card.runway} set={card.set} />
+      <Access access={runningAccess(card)} />
 
       <Actions card={card} workloads={workloads} busy={busy} />
+      {card.set.warm && <Members card={card} workloads={workloads} busy={busy} />}
       <AutoExtend card={card} workloads={workloads} busy={busy} />
     </article>
   );
@@ -160,15 +186,207 @@ function Life({ card }: { card: Card }) {
           .
         </>
       )}
-      {status.takeover !== undefined && (
+      {status.life.phase === 'stopped' && (
         <>
           {' '}
-          A Takeover has settled: <code>{status.takeover.winner.slice(0, 12)}…</code> runs this
-          workload now (spec §7.1).
+          <span className="font-medium">This is a self-stop, not an ending.</span> The primary
+          could no longer publish Liveness to a majority of its own Relay Set, so it stopped
+          its workload rather than keep running beside a Takeover (spec §7.1). The lease is
+          still paid to its expiry, <code>.extend</code> still adds an interval at the running
+          price, and the expiry sweep still ends it &mdash; an <em>expired</em> lease is over
+          and cannot be restarted, and this one is not that.
         </>
       )}
     </p>
   );
+}
+
+/**
+ * The Takeover, with its two halves labelled.
+ *
+ * `announcedAt` is the winner's own signed moment, from the kind-30433 claim
+ * it published (§7.1 step 2). `firstSeenAt` is when this console noticed.
+ * Showing the second as though it were the first would be inventing a time,
+ * so the card says which it has.
+ */
+function Takeover({ set }: { set: StandbySetView }) {
+  const takeover = set.takeover;
+  if (!takeover) {
+    return set.takeoverUnread === undefined ? null : (
+      <p className="text-muted-foreground text-sm">
+        Whether a Takeover happened could not be read: {set.takeoverUnread}
+      </p>
+    );
+  }
+  return (
+    <p className="text-sm">
+      <span className="font-medium">Takeover.</span>{' '}
+      <code>{takeover.winner.slice(0, 12)}…</code> runs this workload now
+      {takeover.from === undefined
+        ? ''
+        : `, taken over from ${takeover.from.slice(0, 12)}…`}.{' '}
+      {takeover.announcedAt === undefined ? (
+        <span className="text-muted-foreground">
+          This console first saw it at {new Date(takeover.firstSeenAt).toLocaleString()} — the
+          member said so itself (spec §6.5); nothing it answers carries the moment it happened.
+        </span>
+      ) : (
+        <span className="text-muted-foreground">
+          Announced {new Date(takeover.announcedAt).toLocaleString()}, in the winner&rsquo;s
+          own signed claim (spec §7.1)
+          {takeover.rounds !== undefined && takeover.rounds > 1
+            ? `. This set has changed hands ${takeover.rounds} times`
+            : ''}
+          . No workload state moved: the standby started from the image (ADR 0010).
+        </span>
+      )}
+    </p>
+  );
+}
+
+/**
+ * Every member of the Standby Set, with the route that keeps each one alive.
+ *
+ * One button per member, and it carries the route as well as the price,
+ * because the two extension routes are not interchangeable: §6.3 refuses a
+ * reservation on `.extend` as `not_running` and a running lease on
+ * `.standby.extend` as `not_standby`, and bills for both. The daemon reads
+ * which one applies from a free `status` before it sends anything, so what is
+ * on the button is what will actually be bought.
+ */
+function Members({
+  card,
+  workloads,
+  busy,
+}: {
+  card: Card;
+  workloads: WorkloadsState;
+  busy: boolean;
+}) {
+  return (
+    <div className="space-y-2 rounded-lg border px-3 py-2">
+      <p className="text-xs font-medium">
+        Standby Set &mdash; {card.set.members} members, one workload id, one Root Secret
+        {card.set.pricePerInterval === undefined
+          ? ''
+          : `; one round of extensions costs ${card.set.pricePerInterval} base units`}
+        .
+      </p>
+      {card.members.map((member) => (
+        <Member
+          key={member.pubkey}
+          member={member}
+          card={card}
+          workloads={workloads}
+          busy={busy}
+        />
+      ))}
+    </div>
+  );
+}
+
+function Member({
+  member,
+  card,
+  workloads,
+  busy,
+}: {
+  member: WorkloadMemberView;
+  card: Card;
+  workloads: WorkloadsState;
+  busy: boolean;
+}) {
+  const price = member.extend.route?.price;
+  return (
+    <div className="space-y-1 border-t pt-2 text-xs first:border-t-0 first:pt-0">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-mono">{member.pubkey.slice(0, 12)}…</span>
+        <Badge variant="outline">{member.role}</Badge>
+        <MemberState member={member} />
+        {member.runningNow && <Badge>running the workload</Badge>}
+        <span className="text-muted-foreground">
+          {member.listing.name} v{member.listing.version} · {member.provider.ilpAddress}
+        </span>
+      </div>
+      <p className="text-muted-foreground">{memberSentence(member)}</p>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={!member.extend.ok || busy}
+          onClick={() => {
+            void workloads.extend(card.workloadId, price, member.pubkey);
+          }}
+        >
+          {price === undefined
+            ? `Extend on .${member.extend.op}`
+            : `Extend on .${member.extend.op} — ${price} base units for ${member.listing.lease_interval_s} s`}
+        </Button>
+      </div>
+      {!member.extend.ok && member.extend.problems.length > 0 && (
+        <ul className="text-muted-foreground list-disc space-y-1 pl-5">
+          {member.extend.problems.map((problem) => (
+            <li key={problem}>{problem}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function MemberState({ member }: { member: WorkloadMemberView }) {
+  const status = member.status;
+  if (status.kind === 'read') {
+    if (status.life.phase === 'ended') {
+      return <Badge variant="secondary">ended — {endingWord(status.life)}</Badge>;
+    }
+    if (status.life.phase === 'stopped') {
+      return <Badge variant="secondary">self-stopped</Badge>;
+    }
+    return (
+      <Badge variant={status.life.phase === 'running' ? 'default' : 'secondary'}>
+        {status.life.phase}
+      </Badge>
+    );
+  }
+  if (status.kind === 'silent') return <Badge variant="outline">not answering</Badge>;
+  if (status.kind === 'refused') return <Badge variant="secondary">{status.code}</Badge>;
+  return <Badge variant="outline">not asked</Badge>;
+}
+
+/** What this member is, in the words the protocol uses for it. */
+function memberSentence(member: WorkloadMemberView): string {
+  if (member.vaultState === 'failed') {
+    return `This member's spawn was refused${member.failedBecause ? `: ${member.failedBecause}` : ''}. It was billed anyway (ADR 0003), and it holds nothing for this workload.`;
+  }
+  if (!member.known) {
+    return 'This account holds no record of where this member is, so nothing can be addressed to it until its Provider Profile is readable.';
+  }
+  const status = member.status;
+  if (status.kind !== 'read') return '';
+  switch (status.life.phase) {
+    case 'reserved':
+      return `A Warm Standby: it holds capacity for this workload and runs nothing until a Takeover. It is paid on .standby.extend at the standby price — let it lapse and the protection goes with it (spec §7).`;
+    case 'stopped':
+      return `A self-stop: this primary could not publish Liveness to a majority of its own Relay Set, so it stopped its workload (spec §7.1). Its lease is still paid and still extendable at the running price. It is not an expired lease.`;
+    case 'running':
+      return member.role === 'standby'
+        ? `This Warm Standby won the Takeover and runs the workload now. Winning buys no time: from here it needs a full-price .extend before its current expiry, or the sweep ends it (spec §7.1).`
+        : `Running the workload.`;
+    case 'ended':
+      return endingSentence(status.life);
+    default:
+      return `Paid, holding its workload id and its capacity while the workload starts.`;
+  }
+}
+
+/** The access details of whichever member is actually running the workload. */
+function runningAccess(card: Card): LeaseAccess | undefined {
+  const running = card.members.find(
+    (member) => member.runningNow && member.status.kind === 'read' && member.status.access
+  );
+  if (running?.status.kind === 'read' && running.status.access) return running.status.access;
+  return card.status.kind === 'read' ? card.status.access : card.lease.access;
 }
 
 export function endingWord(life: Extract<LeaseLife, { phase: 'ended' }>): string {
@@ -201,7 +419,7 @@ function endingSentence(life: Extract<LeaseLife, { phase: 'ended' }>): string {
  * What this does is put it in words, and — when it could not be worked out —
  * say which half was missing rather than showing a zero.
  */
-function Runway({ runway }: { runway: RunwayView }) {
+function Runway({ runway, set }: { runway: RunwayView; set: StandbySetView }) {
   if (runway.state === 'unknown') {
     return (
       <p className="text-muted-foreground text-sm">
@@ -225,10 +443,20 @@ function Runway({ runway }: { runway: RunwayView }) {
           — to about {new Date(runway.until).toLocaleString()}
         </span>
       )}
-      <span className="text-muted-foreground">
-        {`: ${duration(runway.paidSeconds ?? 0)} already paid for, plus `}
-        {`${runway.affordableIntervals ?? 0} more interval(s) of ${runway.leaseIntervalSeconds} s that ${runway.available ?? '?'} base units buys at ${runway.pricePerInterval ?? '?'} each. The Listing prices an interval at ${runway.listingPrice} µUSDC; the figure counted here is what the connector that collects actually quotes.`}
-      </span>
+      {set.warm ? (
+        <span className="text-muted-foreground">
+          {` for the whole Standby Set: ${runway.rounds ?? 0} more round(s) of extensions at ${runway.setPricePerInterval ?? '?'} base units each — the primary at its listing's price and every Warm Standby at its standby price. A set protects this workload only while EVERY member is paid, so the figure is bounded by `}
+          {runway.boundBy === undefined
+            ? 'the member that runs out first'
+            : `${runway.boundBy.slice(0, 12)}…, the member that runs out first`}
+          .
+        </span>
+      ) : (
+        <span className="text-muted-foreground">
+          {`: ${duration(runway.paidSeconds ?? 0)} already paid for, plus `}
+          {`${runway.affordableIntervals ?? 0} more interval(s) of ${runway.leaseIntervalSeconds} s that ${runway.available ?? '?'} base units buys at ${runway.pricePerInterval ?? '?'} each. The Listing prices an interval at ${runway.listingPrice} µUSDC; the figure counted here is what the connector that collects actually quotes.`}
+        </span>
+      )}
     </p>
   );
 }
@@ -392,7 +620,10 @@ function AutoExtend({
   const [open, setOpen] = useState(false);
   const [budget, setBudget] = useState('');
   const armed = card.autoExtend;
-  const price = card.extend.route?.price;
+  // The SET's price, not the primary's: a budget armed against one member
+  // would let the reservations lapse, and a Standby Set with a lapsed
+  // reservation has stopped protecting anything (spec §7).
+  const price = card.set.pricePerInterval;
 
   if (armed !== undefined) {
     return (
@@ -402,8 +633,9 @@ function AutoExtend({
             {armed.armed ? 'Extending automatically' : 'Automatic extension is off'}
           </span>{' '}
           — {armed.spent} of {armed.budget} base units spent over {armed.extensions}{' '}
-          extension(s), {armed.remaining} left, at no more than {armed.agreedPrice} an
-          interval, bought inside the last {duration(armed.leadSeconds)} before expiry.
+          extension(s), {armed.remaining} left, at no more than {armed.agreedPrice} a round
+          across this workload&rsquo;s {card.set.members} member(s), bought inside the last{' '}
+          {duration(armed.leadSeconds)} before expiry.
         </p>
         {armed.stoppedBecause !== undefined && (
           <p className="text-muted-foreground">It stopped: {armed.stoppedBecause}</p>
@@ -444,8 +676,9 @@ function AutoExtend({
     <div className="bg-muted/40 space-y-2 rounded-lg border px-3 py-2 text-xs">
       <p>
         <span className="font-medium">This spends money with nobody present.</span> The console
-        will buy one Lease Interval at a time, at no more than{' '}
-        {price ?? 'the price it is quoted'} base units each, inside the last stretch before
+        will buy one round of extensions at a time — every member of this workload that is due,
+        each on the route that keeps it alive — at no more than{' '}
+        {price ?? 'the price it is quoted'} base units a round, inside the last stretch before
         expiry, until the budget below is spent — and then it stops. It stops early too: if the
         price moves, if the provider stops answering, if an extension is refused, or if the
         lease ends. It runs only on this machine, and only while this console is running.
@@ -456,7 +689,7 @@ function AutoExtend({
           <Input
             id={`budget-${card.workloadId}`}
             value={budget}
-            placeholder={price === undefined ? '' : `${price} buys one interval`}
+            placeholder={price === undefined ? '' : `${price} buys one round`}
             onChange={(event) => setBudget(event.target.value)}
           />
         </div>

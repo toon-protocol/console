@@ -43,12 +43,44 @@ function card(
     expiresAt: overrides.expiresAt ?? 1_700_000_300,
     readAt: '2026-09-23T00:00:00.000Z',
   };
+  const provider = {
+    pubkey: 'd'.repeat(64),
+    ilp_address: 'g.toon.provider',
+    connector_url: 'https://provider.example/ilp',
+    connector_seal_key: '0x04aa',
+  };
+  const listing = {
+    name: 'basic',
+    version: 1,
+    address: `30432:${'d'.repeat(64)}:basic`,
+    lease_interval_s: 3600,
+    price: 1000,
+  };
+  const route = {
+    route: 'g.toon.provider.basic.v1.extend',
+    payAt: 'https://provider.example/ilp',
+    via: 'provider-connector' as const,
+    reason: 'because',
+    price: overrides.price ?? '1000',
+  };
   return {
     workloadId: WORKLOAD,
     lease: {
       workloadId: WORKLOAD,
       state: 'live',
       standbySet: ['d'.repeat(64)],
+      members: [
+        {
+          pubkey: 'd'.repeat(64),
+          index: 0,
+          role: 'standalone',
+          provider,
+          listing,
+          paidAt: 'https://provider.example/ilp',
+          state: 'live',
+          known: true,
+        },
+      ],
       provider: {
         pubkey: 'd'.repeat(64),
         ilp_address: 'g.toon.provider',
@@ -85,13 +117,39 @@ function card(
     extend: {
       ok: overrides.extendOk ?? true,
       problems: overrides.problems ?? [],
-      route: {
-        route: 'g.toon.provider.basic.v1.extend',
-        payAt: 'https://provider.example/ilp',
-        via: 'provider-connector',
-        reason: 'because',
-        price: overrides.price ?? '1000',
+      route,
+    },
+    members: [
+      {
+        pubkey: 'd'.repeat(64),
+        index: 0,
+        role: 'standalone',
+        provider: {
+          ilpAddress: 'g.toon.provider',
+          connectorUrl: 'https://provider.example/ilp',
+          hidden: false,
+          inDirectory: true,
+        },
+        listing,
+        status,
+        extend: {
+          ok: overrides.extendOk ?? true,
+          op: 'extend',
+          problems: overrides.problems ?? [],
+          route,
+        },
+        runningNow: status.kind === 'read' && status.life.phase === 'running',
+        selfStopped: status.kind === 'read' && status.life.phase === 'stopped',
+        vaultState: 'live',
+        known: true,
       },
+    ],
+    set: {
+      members: 1,
+      warm: false,
+      ...(status.kind === 'read' && status.life.phase === 'ended'
+        ? { pricePerInterval: '0' }
+        : { pricePerInterval: overrides.price ?? '1000' }),
     },
   };
 }
@@ -99,7 +157,11 @@ function card(
 class FakeOps implements WorkloadOps {
   next: WorkloadCard = card();
   answer: ExtendResult | (() => ExtendResult) = extended(1_700_003_900);
-  readonly calls: { workloadId: string; maxPrice?: string | undefined }[] = [];
+  readonly calls: {
+    workloadId: string;
+    maxPrice?: string | undefined;
+    member?: string | undefined;
+  }[] = [];
 
   card(): Promise<WorkloadCard> {
     return Promise.resolve(this.next);
@@ -107,7 +169,7 @@ class FakeOps implements WorkloadOps {
 
   extend(
     workloadId: string,
-    options: { maxPrice?: string | undefined } = {}
+    options: { maxPrice?: string | undefined; member?: string | undefined } = {}
   ): Promise<ExtendResult> {
     this.calls.push({ workloadId, ...options });
     return Promise.resolve(typeof this.answer === 'function' ? this.answer() : this.answer);
@@ -115,7 +177,15 @@ class FakeOps implements WorkloadOps {
 }
 
 function extended(expiresAt: number, cost = '1000'): ExtendResult {
-  return { sent: true, problems: [], cost, expiresAt, card: card() };
+  return {
+    sent: true,
+    problems: [],
+    member: 'd'.repeat(64),
+    op: 'extend',
+    cost,
+    expiresAt,
+    card: card(),
+  };
 }
 
 describe('automatic extension within a budget', () => {
@@ -285,6 +355,8 @@ describe('automatic extension within a budget', () => {
       ops.answer = {
         sent: true,
         problems: [],
+        member: 'd'.repeat(64),
+        op: 'extend',
         providerError: 'no_capacity',
         cost: '1000',
         card: card(),
@@ -301,7 +373,14 @@ describe('automatic extension within a budget', () => {
 
     it('stops when an extension’s fate is unknown', async () => {
       await arm();
-      ops.answer = { sent: true, problems: [], message: 'nothing came back', card: card() };
+      ops.answer = {
+        sent: true,
+        problems: [],
+        member: 'd'.repeat(64),
+        op: 'extend',
+        message: 'nothing came back',
+        card: card(),
+      };
 
       const report = await budgets.tick();
 

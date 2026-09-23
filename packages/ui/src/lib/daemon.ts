@@ -644,10 +644,41 @@ export interface LeaseAccess {
   ports?: { container_port: number; host_port: number }[];
 }
 
+export interface LeaseMemberView {
+  pubkey: string;
+  index: number;
+  /** Its position in the set, which a Takeover never changes (§6.7). */
+  role: 'standalone' | 'primary' | 'standby';
+  provider: {
+    pubkey: string;
+    ilp_address: string;
+    connector_url: string;
+    connector_seal_key: string;
+    hidden?: boolean;
+  };
+  listing: {
+    name: string;
+    version: number;
+    address: string;
+    lease_interval_s: number;
+    price: number;
+  };
+  paidAt: string;
+  paidChain?: string;
+  state: 'spawning' | 'live' | 'failed';
+  failedBecause?: string;
+  answeredRole?: string;
+  expiresAt?: number;
+  access?: LeaseAccess;
+  known: boolean;
+}
+
 export interface LeaseView {
   workloadId: string;
   state: 'spawning' | 'live' | 'retracted';
   standbySet: string[];
+  /** One per name in `standbySet`, primary first (§7). Never empty. */
+  members: LeaseMemberView[];
   provider: {
     pubkey: string;
     ilp_address: string;
@@ -738,6 +769,55 @@ export interface SpawnResult {
   /** What the packet cost, in base units of the settlement token. */
   cost?: string;
   retractionFailed?: string;
+  confirmationFailed?: string;
+}
+
+/**
+ * What the Standby Set form posts (§7).
+ *
+ * The primary is the ordinary spawn body; `standbys` names the rest of the
+ * set, each with the tier its reservation is bought on — two providers need
+ * not publish the same tier, the same version or the same `standby_price`.
+ */
+export interface StandbySetRequestBody extends SpawnRequestBody {
+  standbys: { provider: string; listing: string; listingVersion?: number; chain?: string }[];
+}
+
+export interface MemberPlanView {
+  pubkey: string;
+  index: number;
+  role: 'primary' | 'standby';
+  view: PreflightView;
+}
+
+export interface StandbySetPreflightView {
+  ok: boolean;
+  problems: string[];
+  workloadId?: string;
+  members: MemberPlanView[];
+  cost?: string;
+  vault: { localOnly: boolean; writes: RelayWriteTargets };
+}
+
+export interface MemberSpawnResult {
+  pubkey: string;
+  index: number;
+  role: 'primary' | 'standby';
+  route?: string;
+  sent: boolean;
+  ok: boolean;
+  cost?: string;
+  expiresAt?: number;
+  access?: LeaseAccess;
+  providerError?: string;
+  message?: string;
+}
+
+export interface StandbySetResult {
+  lease?: LeaseView;
+  preflight: StandbySetPreflightView;
+  members: MemberSpawnResult[];
+  cost?: string;
   confirmationFailed?: string;
 }
 
@@ -862,8 +942,25 @@ export interface RunwayView {
   paidSeconds?: number;
   paidUntil?: string;
   expirySource?: 'provider' | 'vault';
+  /** The whole SET's figure, bounded by the member that runs out first (§7). */
   seconds?: number;
   until?: string;
+  /** What one round of extensions for every member costs, base units. */
+  setPricePerInterval?: string;
+  rounds?: number;
+  boundBy?: string;
+  memberRunways?: {
+    pubkey: string;
+    index: number;
+    paidSeconds?: number;
+    pricePerInterval?: string;
+    op?: 'extend' | 'standby.extend';
+    leaseIntervalSeconds: number;
+    channelKey?: string;
+    available?: string;
+    unknown?: string;
+    ended?: boolean;
+  }[];
   readAt: string;
 }
 
@@ -891,8 +988,64 @@ export interface AutoExtendView {
     outcome: 'extended' | 'waited' | 'stopped';
     reason: string;
     cost?: string;
+    members?: string[];
   };
   stoppedBecause?: string;
+}
+
+/**
+ * A Takeover, as the dashboard reports it (§7.1, ADR 0010).
+ *
+ * `announcedAt` is the winner's own signed moment, from its kind-30433 claim.
+ * `firstSeenAt` is when THIS CONSOLE noticed, and the card says so rather than
+ * passing one off as the other.
+ */
+export interface TakeoverReport {
+  winner: string;
+  from?: string;
+  rounds?: number;
+  announcedAt?: string;
+  firstSeenAt: string;
+  seenBy: 'status' | 'claim';
+  claims?: { claimant: string; index: number; primary: string; announcedAt: string }[];
+}
+
+export interface WorkloadMemberView {
+  pubkey: string;
+  index: number;
+  role: 'standalone' | 'primary' | 'standby';
+  provider: {
+    ilpAddress: string;
+    connectorUrl: string;
+    hidden: boolean;
+    liveness?: string;
+    inDirectory: boolean;
+  };
+  listing: LeaseView['listing'];
+  status: WorkloadStatus;
+  extend: {
+    ok: boolean;
+    op: 'extend' | 'standby.extend';
+    problems: string[];
+    route?: OpRouteView;
+  };
+  /** True when this member is the one the workload is running on. */
+  runningNow: boolean;
+  /** A primary that stopped its OWN workload under §7.1. Not an ending. */
+  selfStopped: boolean;
+  vaultState: 'spawning' | 'live' | 'failed';
+  failedBecause?: string;
+  known: boolean;
+}
+
+export interface StandbySetView {
+  members: number;
+  warm: boolean;
+  pricePerInterval?: string;
+  reason?: string;
+  runningMember?: string;
+  takeover?: TakeoverReport;
+  takeoverUnread?: string;
 }
 
 export interface WorkloadCard {
@@ -909,6 +1062,9 @@ export interface WorkloadCard {
   status: WorkloadStatus;
   runway: RunwayView;
   extend: { ok: boolean; problems: string[]; route?: OpRouteView };
+  /** Every member of the Standby Set, primary first (§7). Never empty. */
+  members: WorkloadMemberView[];
+  set: StandbySetView;
   autoExtend?: AutoExtendView;
   endedAs?: LeaseEnding;
 }
@@ -927,6 +1083,9 @@ export interface ExtendResult {
   sent: boolean;
   problems: string[];
   route?: OpRouteView;
+  /** Which member of the Standby Set this bought an interval for (§7). */
+  member: string;
+  op: 'extend' | 'standby.extend';
   cost?: string;
   expiresAt?: number;
   providerError?: string;
@@ -1112,6 +1271,20 @@ export const daemon = {
    */
   spawn: (request: SpawnRequestBody) => post<SpawnResult>('/api/leases/spawn', request),
 
+  /** What a Standby Set's spawn WOULD do, at every member, with nothing spent. */
+  preflightStandbySet: (request: StandbySetRequestBody) =>
+    post<StandbySetPreflightView>('/api/leases/standby-set/preflight', request),
+  /**
+   * Buy a primary lease AND its Warm Standbys under one workload id (§7).
+   *
+   * This **spends at every member**: the primary's interval at the listing's
+   * price and each reservation at its tier's `standby_price`. A member that
+   * refuses is billed like one that accepts (ADR 0003), so the answer reports
+   * each member separately rather than one verdict for the set.
+   */
+  spawnStandbySet: (request: StandbySetRequestBody) =>
+    post<StandbySetResult>('/api/leases/standby-set', request),
+
   /**
    * The dashboard (TOON_Network#93).
    *
@@ -1132,11 +1305,19 @@ export const daemon = {
    * everything checkable first and answers `sent: false` — having paid nothing
    * — when any of it fails.
    */
-  extendWorkload: (workloadId: string, options: { maxPrice?: string } = {}) =>
+  extendWorkload: (workloadId: string, options: { maxPrice?: string; member?: string } = {}) =>
     post<ExtendResult>(`/api/workloads/${encodeURIComponent(workloadId)}/extend`, options),
-  /** End the lease now. Free, immediate and irreversible: there is no refund. */
-  terminateWorkload: (workloadId: string) =>
-    post<TerminateResult>(`/api/workloads/${encodeURIComponent(workloadId)}/terminate`),
+  /**
+   * End ONE member's lease now. Free, immediate and irreversible: no refund.
+   *
+   * `member` names which of the Standby Set; without it, the primary. Ending a
+   * whole set is ending each member, and the window asks about each.
+   */
+  terminateWorkload: (workloadId: string, options: { member?: string } = {}) =>
+    post<TerminateResult>(
+      `/api/workloads/${encodeURIComponent(workloadId)}/terminate`,
+      options
+    ),
   /**
    * Arm a budget: a standing instruction to keep extending while nobody is
    * watching. `confirm` is the whole of the consent, and `agreedPrice` is

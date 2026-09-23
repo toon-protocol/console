@@ -512,13 +512,19 @@ describe('the workload dashboard', () => {
       expect(port.sent).toHaveLength(1);
     });
 
-    it('sends NOTHING for a Warm Standby reservation: that is `.standby.extend`', async () => {
+    it('sends NOTHING for a reservation whose tier prices no Warm Standby', async () => {
+      // `.extend` on a Reserved lease is `not_running` and billed at the
+      // running price (§6.3), so the console never sends one — it picks
+      // `.standby.extend` from what the lease IS. This fixture's tier
+      // publishes no `standby_price`, so that route does not exist either
+      // (§4.2, §5), and the honest answer is to send nothing at all.
       port.answer = statusOk({ state: 'reserved', role: 'standby', access: null });
 
       const result = await workloads.extend(workloadId);
 
       expect(result.sent).toBe(false);
-      expect(result.problems.join(' ')).toContain('not_running');
+      expect(result.op).toBe('standby.extend');
+      expect(result.problems.join(' ')).toContain('no longer prices a Warm Standby');
       expect(port.sent).toHaveLength(1);
     });
 

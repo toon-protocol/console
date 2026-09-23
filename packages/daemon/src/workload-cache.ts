@@ -26,21 +26,92 @@ import type { LeaseEnding, WorkloadStatus } from './workload.js';
  * secret, and which network it was bought on is a field in its record.
  */
 
+/** What one member of a Standby Set last said about the lease (§7). */
+export interface WorkloadMemberNote {
+  readonly status?: WorkloadStatus | undefined;
+  readonly endedAs?: LeaseEnding | undefined;
+  readonly expiresAt?: number | undefined;
+}
+
+/**
+ * The Takeover this console has seen on a workload, kept so that "when" does
+ * not become "just now" on every restart (§7.1, TOON_Network#95).
+ *
+ * `announcedAt` is the winner's own signed moment and needs no keeping; what
+ * does is `firstSeenAt`, which is this console's observation and exists for
+ * the case where no claim could be read at all. Neither is a secret, and
+ * neither is worth a paid relay write — this is a local note about a public
+ * event.
+ */
+export interface TakeoverNote {
+  readonly winner: string;
+  readonly from?: string | undefined;
+  readonly rounds?: number | undefined;
+  readonly announcedAt?: string | undefined;
+  readonly firstSeenAt: string;
+  readonly seenBy: 'status' | 'claim';
+}
+
 export interface WorkloadNote {
-  /** The last answer, whatever kind it was. */
+  /** The last answer, whatever kind it was. The PRIMARY's (§7's index 0). */
   readonly status?: WorkloadStatus | undefined;
   /** The last ending seen, kept after the provider stops knowing the lease. */
   readonly endedAs?: LeaseEnding | undefined;
   /** The last `expires_at` anything reported, unix seconds. */
   readonly expiresAt?: number | undefined;
+  /**
+   * The same, per member of the Standby Set, keyed by provider public key.
+   *
+   * A set's members answer different things about one workload — after a
+   * Takeover the primary says `stopped` and the winner says `running` — so
+   * one answer per workload was never enough for a set. The primary's is kept
+   * in both places, because the fields above are where every console before
+   * TOON_Network#95 looked.
+   */
+  readonly members?: Readonly<Record<string, WorkloadMemberNote>> | undefined;
+  /** The Takeover seen on this workload, if one has been. */
+  readonly takeover?: TakeoverNote | undefined;
   readonly at: string;
 }
 
 export interface WorkloadNoteStore {
   read(pubkey: string, workloadId: string): WorkloadNote | undefined;
-  /** Merges into whatever is held: a caller updates one field at a time. */
-  write(pubkey: string, workloadId: string, note: Partial<WorkloadNote>): void;
+  /**
+   * Merges into whatever is held: a caller updates one field at a time.
+   *
+   * `members` merges BY MEMBER rather than replacing the map, so a write
+   * about one provider never forgets what another said. That is the one
+   * non-obvious thing about this store and the reason both implementations
+   * below share the same merge.
+   */
+  write(
+    pubkey: string,
+    workloadId: string,
+    note: Partial<WorkloadNote> & {
+      members?: Readonly<Record<string, Partial<WorkloadMemberNote>>> | undefined;
+    }
+  ): void;
   remove(pubkey: string, workloadId: string): void;
+}
+
+/** One note merged into another, member by member. */
+export function mergeNote(
+  held: WorkloadNote | undefined,
+  note: Partial<WorkloadNote> & {
+    members?: Readonly<Record<string, Partial<WorkloadMemberNote>>> | undefined;
+  },
+  at: string
+): WorkloadNote {
+  const members: Record<string, WorkloadMemberNote> = { ...held?.members };
+  for (const [pubkey, member] of Object.entries(note.members ?? {})) {
+    members[pubkey] = { ...members[pubkey], ...member };
+  }
+  return {
+    ...held,
+    ...note,
+    ...(Object.keys(members).length === 0 ? {} : { members }),
+    at,
+  };
 }
 
 interface NoteFile {
@@ -62,14 +133,15 @@ export class FileWorkloadNoteStore implements WorkloadNoteStore {
     return this.#load(pubkey)?.workloads[workloadId];
   }
 
-  write(pubkey: string, workloadId: string, note: Partial<WorkloadNote>): void {
+  write(
+    pubkey: string,
+    workloadId: string,
+    note: Partial<WorkloadNote> & {
+      members?: Readonly<Record<string, Partial<WorkloadMemberNote>>> | undefined;
+    }
+  ): void {
     const file = this.#load(pubkey) ?? { v: 1 as const, pubkey, workloads: {} };
-    const held = file.workloads[workloadId];
-    const next: WorkloadNote = {
-      ...held,
-      ...note,
-      at: this.#now().toISOString(),
-    };
+    const next = mergeNote(file.workloads[workloadId], note, this.#now().toISOString());
     this.#save({ ...file, workloads: { ...file.workloads, [workloadId]: next } });
   }
 
@@ -129,13 +201,15 @@ export class InMemoryWorkloadNoteStore implements WorkloadNoteStore {
     return this.#held.get(`${pubkey}/${workloadId}`);
   }
 
-  write(pubkey: string, workloadId: string, note: Partial<WorkloadNote>): void {
+  write(
+    pubkey: string,
+    workloadId: string,
+    note: Partial<WorkloadNote> & {
+      members?: Readonly<Record<string, Partial<WorkloadMemberNote>>> | undefined;
+    }
+  ): void {
     const key = `${pubkey}/${workloadId}`;
-    this.#held.set(key, {
-      ...this.#held.get(key),
-      ...note,
-      at: this.#now().toISOString(),
-    });
+    this.#held.set(key, mergeNote(this.#held.get(key), note, this.#now().toISOString()));
   }
 
   remove(pubkey: string, workloadId: string): void {

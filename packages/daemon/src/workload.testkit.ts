@@ -7,6 +7,7 @@ import type { LeaseVault } from './lease-vault.js';
 import type { LeasePacket, PacketOutcome } from './lease.js';
 import type { ConsolePaths } from './paths.js';
 import { SANDBOX, type NetworkProfile } from './profiles.js';
+import type { TakeoverReading } from './takeover.js';
 import { InMemoryWorkloadNoteStore, type WorkloadNoteStore } from './workload-cache.js';
 import { WorkloadStore, type AutoExtendReader } from './workload.js';
 
@@ -106,6 +107,8 @@ export function providerRoutes(input: {
   price?: string;
   /** What this node charges for the free routes. `0` at the provider's own. */
   freePrice?: string;
+  /** Present only for a tier that prices a Warm Standby (§4.2). */
+  standbyPrice?: string;
 }): readonly { prefix: string; price: string }[] {
   const address = input.ilpAddress ?? 'g.toon.provider';
   const listing = input.listing ?? 'basic';
@@ -114,6 +117,21 @@ export function providerRoutes(input: {
   return [
     { prefix: `${address}.${listing}.v${version}.spawn`, price: input.price ?? '1000' },
     { prefix: `${address}.${listing}.v${version}.extend`, price: input.price ?? '1000' },
+    // The two standby rows exist only because a Listing prices standbys
+    // (§4.2, §5). A connector MUST NOT terminate a route the provider did
+    // not price, so a fixture for a tier that sells none leaves them out.
+    ...(input.standbyPrice === undefined
+      ? []
+      : [
+          {
+            prefix: `${address}.${listing}.v${version}.standby`,
+            price: input.standbyPrice,
+          },
+          {
+            prefix: `${address}.${listing}.v${version}.standby.extend`,
+            price: input.standbyPrice,
+          },
+        ]),
     { prefix: `${address}.status`, price: free },
     { prefix: `${address}.terminate`, price: free },
     { prefix: `${address}.availability`, price: free },
@@ -168,6 +186,11 @@ export function workloadFixture(input: {
   directory?: () => Promise<DirectoryResult>;
   health?: (profile: NetworkProfile) => Promise<ConnectorHealth>;
   autoExtend?: () => AutoExtendReader;
+  readTakeover?: (query: {
+    workloadId: string;
+    standbySet: readonly string[];
+    relays: readonly string[];
+  }) => Promise<TakeoverReading>;
   now?: () => Date;
 }): WorkloadFixture {
   const profile = input.profile ?? SANDBOX;
@@ -194,6 +217,7 @@ export function workloadFixture(input: {
     paths: input.paths,
     notes,
     ...(input.autoExtend === undefined ? {} : { autoExtend: input.autoExtend }),
+    ...(input.readTakeover === undefined ? {} : { readTakeover: input.readTakeover }),
     ...(input.now === undefined ? {} : { now: input.now }),
   });
   return { workloads, port, notes };

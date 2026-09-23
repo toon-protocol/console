@@ -27,6 +27,7 @@ import { activeProfileFilePath, consolePaths, launchFilePath } from './paths.js'
 import { ProfileStore } from './profile-store.js';
 import { startServer } from './server.js';
 import { SignerIndex, signerIndexPath } from './signer-index.js';
+import { readTakeover } from './takeover.js';
 import { readTemplates } from './templates.js';
 import { daemonVersion } from './version.js';
 import { AutoExtender, FileAutoExtendStore } from './auto-extend.js';
@@ -198,6 +199,10 @@ export async function main(): Promise<void> {
     paths,
     notes,
     autoExtend: () => budgets,
+    // Reading the Takeover claims a Standby Set leaves on its relays (§7.1).
+    // A relay read is free, so watching a set change hands costs nothing and
+    // needs no account beyond the one already signed in.
+    readTakeover: (query) => readTakeover(query),
   });
 
   // Budgets: the one thing here that spends with nobody present. It is armed

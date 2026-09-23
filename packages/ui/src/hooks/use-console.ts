@@ -54,26 +54,23 @@ export function useConsole(): ConsoleState {
     void load();
   }, [load]);
 
-  const selectProfile = useCallback(
-    (id: string) => {
-      setSwitching(id);
-      void (async () => {
-        try {
-          const next = await daemon.setProfile(id);
-          setProfiles(next.profiles);
-          // The connector behind the new profile has not been asked anything
-          // yet, so force the read rather than showing the old one's cache.
-          setHealth(await daemon.health({ refresh: true }));
-          setError(undefined);
-        } catch (caught) {
-          setError(messageOf(caught));
-        } finally {
-          setSwitching(undefined);
-        }
-      })();
-    },
-    []
-  );
+  const selectProfile = useCallback((id: string) => {
+    setSwitching(id);
+    void (async () => {
+      try {
+        const next = await daemon.setProfile(id);
+        setProfiles(next.profiles);
+        // The connector behind the new profile has not been asked anything
+        // yet, so force the read rather than showing the old one's cache.
+        setHealth(await daemon.health({ refresh: true }));
+        setError(undefined);
+      } catch (caught) {
+        setError(messageOf(caught));
+      } finally {
+        setSwitching(undefined);
+      }
+    })();
+  }, []);
 
   return {
     health,

@@ -16,13 +16,22 @@ import {
 import {
   LeaseVaultError,
   type LeaseAccess,
+  type LeaseMemberView,
   type LeaseVault,
   type LeaseView,
 } from './lease-vault.js';
 import type { ConsolePaths } from './paths.js';
 import { isConfigured, type NetworkProfile } from './profiles.js';
 import { HEX_32 } from './spawn-content.js';
-import type { WorkloadNote, WorkloadNoteStore } from './workload-cache.js';
+import {
+  routeOpFor,
+  setRunway,
+  type ExtendOp,
+  type MemberPhase,
+  type RunwayMember,
+} from './standby-set.js';
+import type { TakeoverReading } from './takeover.js';
+import type { WorkloadMemberNote, WorkloadNote, WorkloadNoteStore } from './workload-cache.js';
 
 /**
  * **The dashboard**: what a lease is doing, how long the money keeps it doing
@@ -94,6 +103,109 @@ export type LeaseLife =
 export interface TakeoverView {
   /** The member of the Standby Set that runs the workload now (§7.1). */
   readonly winner: string;
+}
+
+/**
+ * A Takeover, as the dashboard reports it (§7.1, ADR 0010).
+ *
+ * Two independent sources, and they answer different halves of the question.
+ * A member's `status` says a Takeover settled and who won (§6.5), and says
+ * nothing about when. The winner's own kind-30433 claim says when, signed, and
+ * is free to read. So the report carries both and names which one each fact
+ * came from, rather than presenting a guess as a timestamp.
+ *
+ * `firstSeenAt` is this console's own observation and is labelled as such: it
+ * is what a person has when no claim could be read, and it is never passed off
+ * as the moment the Takeover happened.
+ */
+export interface TakeoverReport {
+  /** The member running the workload now. */
+  readonly winner: string;
+  /** The member it was taken from: `standby_set[0]`, or an earlier winner. */
+  readonly from?: string | undefined;
+  /** How many times this workload has changed hands. */
+  readonly rounds?: number | undefined;
+  /** When the winner ANNOUNCED its claim — the event's own `created_at`. */
+  readonly announcedAt?: string | undefined;
+  /** When THIS CONSOLE first saw it. Not the moment it happened. */
+  readonly firstSeenAt: string;
+  /** Which of the two said so first. */
+  readonly seenBy: 'status' | 'claim';
+  /** Every claim the race left behind, earliest first (§7.1 step 3). */
+  readonly claims?: readonly TakeoverClaimView[];
+}
+
+export interface TakeoverClaimView {
+  readonly claimant: string;
+  readonly index: number;
+  readonly primary: string;
+  readonly announcedAt: string;
+}
+
+/**
+ * One member of the Standby Set, as a card shows it (§7).
+ *
+ * The three facts a person needs about a member are what it is doing, what
+ * keeps it doing that, and whether it is the one the workload is on right now.
+ * `selfStopped` is the fourth and it exists because two very different things
+ * look alike at a glance: a primary that stopped its own workload under §7.1
+ * still HOLDS a paid lease and can be extended at the running price, while a
+ * lease that ended by Expiry is over and cannot be restarted at all.
+ */
+export interface WorkloadMemberView {
+  readonly pubkey: string;
+  readonly index: number;
+  /** Its position in the set, which a Takeover never changes (§6.7). */
+  readonly role: 'standalone' | 'primary' | 'standby';
+  readonly provider: {
+    readonly ilpAddress: string;
+    readonly connectorUrl: string;
+    readonly hidden: boolean;
+    readonly liveness?: string | undefined;
+    readonly inDirectory: boolean;
+  };
+  readonly listing: LeaseView['listing'];
+  /** What this member last said about the lease. */
+  readonly status: WorkloadStatus;
+  /**
+   * Which route adds an interval here, and everything that would refuse one.
+   *
+   * `op` is read from what the member is doing NOW, not from what it was
+   * bought as: §6.3 wants the lease in the opposite state on each route, so a
+   * Reserved standby is `standby.extend` and a standby that won a Takeover is
+   * `extend`, at the running price, from the moment it won (§7.1 step 4).
+   */
+  readonly extend: {
+    readonly ok: boolean;
+    readonly op: ExtendOp;
+    readonly problems: readonly string[];
+    readonly route?: OpRouteView | undefined;
+  };
+  /** True when this member is the one the workload is running on. */
+  readonly runningNow: boolean;
+  /** A primary that stopped its own workload under §7.1's self-stop rule. */
+  readonly selfStopped: boolean;
+  /** What the vault record says this member's spawn did. */
+  readonly vaultState: LeaseMemberView['state'];
+  readonly failedBecause?: string | undefined;
+  /** False when the record names this member but not where to reach it. */
+  readonly known: boolean;
+}
+
+/** The Standby Set as a whole, summarised on the card (§7). */
+export interface StandbySetView {
+  readonly members: number;
+  /** True for a set with a Warm Standby in it; false for a standalone lease. */
+  readonly warm: boolean;
+  /** What ONE round of extensions for the whole set costs, base units. */
+  readonly pricePerInterval?: string | undefined;
+  /** Why that figure is missing, when it is. */
+  readonly reason?: string | undefined;
+  /** The member the workload is running on, when anything says which. */
+  readonly runningMember?: string | undefined;
+  readonly takeover?: TakeoverReport | undefined;
+  /** Why no claim could be read, when the relays could not be asked. */
+  readonly takeoverUnread?: string | undefined;
 }
 
 /**
@@ -199,6 +311,22 @@ export interface RunwayView {
   /** The whole runway: paid time plus what the funds could buy. */
   readonly seconds?: number | undefined;
   readonly until?: string | undefined;
+  /**
+   * What one ROUND of extensions for the whole Standby Set costs, base units.
+   *
+   * A set is only alive while every member is paid — a lapsed reservation is a
+   * Warm Standby that is not there when the primary goes silent — so the
+   * figure above is the SET's, bounded by the member that runs out first. For
+   * a standalone lease this equals `pricePerInterval` and `boundBy` is that
+   * one provider, which is how the same arithmetic serves both.
+   */
+  readonly setPricePerInterval?: string | undefined;
+  /** Whole rounds the channels buy for the whole set. */
+  readonly rounds?: number | undefined;
+  /** The member whose time runs out first. That is the one to top up. */
+  readonly boundBy?: string | undefined;
+  /** Each member's half of the sum, so the figure is checkable. */
+  readonly memberRunways?: readonly RunwayMember[] | undefined;
   readonly readAt: string;
 }
 
@@ -239,6 +367,9 @@ export interface WorkloadCard {
     readonly problems: readonly string[];
     readonly route?: OpRouteView | undefined;
   };
+  /** Every member of the Standby Set, primary first (§7). Never empty. */
+  readonly members: readonly WorkloadMemberView[];
+  readonly set: StandbySetView;
   readonly autoExtend?: AutoExtendView | undefined;
   /** The last ending this console saw, kept across restarts. */
   readonly endedAs?: LeaseEnding | undefined;
@@ -269,6 +400,8 @@ export interface AutoExtendView {
         readonly outcome: 'extended' | 'waited' | 'stopped';
         readonly reason: string;
         readonly cost?: string | undefined;
+        /** Which members of the Standby Set that run bought an interval for. */
+        readonly members?: readonly string[] | undefined;
       }
     | undefined;
   /** Set once the budget turned itself off, with the sentence that did it. */
@@ -294,6 +427,10 @@ export interface ExtendResult {
   readonly sent: boolean;
   readonly problems: readonly string[];
   readonly route?: OpRouteView | undefined;
+  /** Which member of the Standby Set this bought an interval for (§7). */
+  readonly member: string;
+  /** Which route it was bought on: a reservation is not extended like a lease. */
+  readonly op: ExtendOp;
   /** What this extension cost, in base units. Present on a refusal too (§5). */
   readonly cost?: string | undefined;
   /** The lease's new `expires_at`, as the provider answered it (§6.3). */
@@ -308,6 +445,8 @@ export interface TerminateResult {
   readonly sent: boolean;
   readonly problems: readonly string[];
   readonly route?: OpRouteView | undefined;
+  /** Which member of the Standby Set was ended. Terminating one ends one (§7). */
+  readonly member: string;
   readonly cost?: string | undefined;
   /** The ending the provider named. `termination` on a terminate that worked. */
   readonly ended?: LeaseEnding | undefined;
@@ -342,6 +481,18 @@ export interface WorkloadStoreDeps {
   readonly notes: WorkloadNoteStore;
   /** The budgets, when they are wired. A dashboard reads fine without them. */
   readonly autoExtend?: (() => AutoExtendReader) | undefined;
+  /**
+   * Reading the Takeover claims a Standby Set left on its relays (§7.1).
+   *
+   * Optional, and a card without it still reports a Takeover — a member's own
+   * `status` says one settled and who won (§6.5). What this adds is WHEN,
+   * because only the winner's kind-30433 claim carries that, and it is free.
+   */
+  readonly readTakeover?: (query: {
+    workloadId: string;
+    standbySet: readonly string[];
+    relays: readonly string[];
+  }) => Promise<TakeoverReading>;
   readonly now?: (() => Date) | undefined;
   readonly timeoutMs?: number | undefined;
 }
@@ -401,24 +552,38 @@ export class WorkloadStore {
   }
 
   /**
-   * Ask the provider what this lease is doing (§6.5). Free at the provider.
+   * Ask a member what this lease is doing (§6.5). Free at the provider.
    *
-   * It presents the lease's own Continuation Token, borrowed from the vault
-   * for the length of this one packet. A Gateway Grant would also be admitted
-   * here (§6.5.1) and is #97's business, not this module's.
+   * It presents that member's own Continuation Token, derived from the one
+   * Root Secret under that member's public key and borrowed from the vault for
+   * the length of this one packet (§6.1.1). A Gateway Grant would also be
+   * admitted here (§6.5.1) and is #97's business, not this module's.
+   *
+   * `member` names which of the Standby Set to ask; without it, the primary.
    */
-  async readStatus(workloadId: string): Promise<WorkloadStatus> {
-    return this.#readStatus(this.#lease(workloadId));
+  async readStatus(
+    workloadId: string,
+    options: { member?: string | undefined } = {}
+  ): Promise<WorkloadStatus> {
+    const lease = this.#lease(workloadId);
+    return this.#readStatus(lease, this.#member(lease, options.member));
   }
 
   /**
-   * **Buy one Lease Interval** for a running lease (§6.3). This spends money.
+   * **Buy one Lease Interval** for one member of the set (§6.3, §7). Spends.
    *
    * Everything checkable is checked first and the packet is not sent if any of
    * it fails, because §6.3's refusals — `expired`, `not_running`,
-   * `wrong_listing_version`, `unknown_workload` — are all billed at the full
-   * interval price. The last check is a live `status`, which is free and is
-   * the only thing that can say whether this lease is still there to extend.
+   * `not_standby`, `wrong_listing_version`, `unknown_workload` — are all
+   * billed at the route's full price. The last check is a live `status`, which
+   * is free and is the only thing that can say whether this lease is still
+   * there to extend AND which of the two extension routes it is on now.
+   *
+   * **Which route is read, never assumed.** A Reserved Warm Standby is paid on
+   * `.standby.extend` at `standby_price`; a standalone lease, a primary, a
+   * primary that stopped itself and a standby that WON a Takeover are all paid
+   * on `.extend` at the running price (§6.3, §7.1 step 4). Getting that wrong
+   * costs an interval at the other route's price and buys nothing.
    *
    * The body is BARE: `{ "workload_id": "…" }`. Any payer may extend any
    * lease, so there is no Lease Request here and no token to present
@@ -426,13 +591,20 @@ export class WorkloadStore {
    */
   async extend(
     workloadId: string,
-    options: { maxPrice?: string | undefined; chain?: string | undefined } = {}
+    options: {
+      maxPrice?: string | undefined;
+      chain?: string | undefined;
+      member?: string | undefined;
+    } = {}
   ): Promise<ExtendResult> {
     const lease = this.#lease(workloadId);
+    const member = this.#member(lease, options.member);
     const problems: string[] = [];
-    const planned = await this.#plan(lease, 'extend', problems, options.chain);
-    const status = await this.#readStatus(lease);
-    this.#checkExtendable(status, problems);
+    // The free read FIRST, because it decides which route is even asked for.
+    const status = await this.#readStatus(lease, member);
+    const op = this.#extendOp(status, member);
+    const planned = await this.#plan(lease, member, op, problems, options.chain);
+    this.#checkExtendable(status, op, problems);
 
     if (planned !== undefined && options.maxPrice !== undefined) {
       const quoted = planned.price;
@@ -452,12 +624,14 @@ export class WorkloadStore {
       }
     }
 
+    const who = { member: member.pubkey, op };
     if (planned === undefined || problems.length > 0) {
       return {
         sent: false,
         problems,
+        ...who,
         ...(planned === undefined ? {} : { route: viewOf(planned) }),
-        card: await this.#cardWith(lease, status),
+        card: await this.#cardWith(lease, new Map([[member.pubkey, status]])),
       };
     }
 
@@ -472,12 +646,13 @@ export class WorkloadStore {
       return {
         sent: true,
         problems: [],
+        ...who,
         route: viewOf(planned),
         message:
           `The extension was sent and nothing came back: ${outcome.message} Whether the ` +
           `interval was bought is unknown. Ask for this lease's status — that is free — ` +
           `before extending again.`,
-        card: await this.#cardWith(lease, await this.#readStatus(lease)),
+        card: await this.#refreshedCard(lease, member),
       };
     }
 
@@ -485,6 +660,7 @@ export class WorkloadStore {
       return {
         sent: true,
         problems: [],
+        ...who,
         route: viewOf(planned),
         ...(cost === undefined ? {} : { cost }),
         providerError: read.error,
@@ -494,7 +670,7 @@ export class WorkloadStore {
             ? ''
             : ` It was billed ${cost} base units anyway — a paid route bills for an answer, ` +
               `and a refusal is one (ADR 0003, spec §5).`),
-        card: await this.#cardWith(lease, await this.#readStatus(lease)),
+        card: await this.#refreshedCard(lease, member),
       };
     }
 
@@ -507,43 +683,56 @@ export class WorkloadStore {
       expiresAt === undefined || status.kind !== 'read'
         ? status
         : { ...status, expiresAt, readAt: this.#at().toISOString() };
-    this.#note(lease.workloadId, {
+    this.#note(lease, member, {
       status: moved,
       ...(expiresAt === undefined ? {} : { expiresAt }),
     });
     return {
       sent: true,
       problems: [],
+      ...who,
       route: viewOf(planned),
       ...(cost === undefined ? {} : { cost }),
       ...(expiresAt === undefined ? {} : { expiresAt }),
-      card: await this.#cardWith(lease, moved),
+      card: await this.#cardWith(lease, new Map([[member.pubkey, moved]])),
     };
   }
 
   /**
-   * End this lease now (§6.6). Free at the provider, and there is no refund.
+   * End ONE member's lease now (§6.6). Free at the provider, no refund.
    *
-   * It presents the lease's own Continuation Token: a Gateway Grant is not
+   * It presents that member's own Continuation Token: a Gateway Grant is not
    * enough here and never will be (§6.5.1). The answer carries the ending, so
    * the card says **Termination** — not "expired", not "gone" — and the ending
    * is written down locally so it survives a restart and the provider's own
    * sweep, after which `status` answers `unknown_workload`.
+   *
+   * **One member, not the set.** A Termination releases the lease it names:
+   * the primary's workload, or a Warm Standby's reservation (§7). Ending a
+   * whole Standby Set is ending each member, one free request each, and this
+   * console asks for each one rather than deciding on a person's behalf that
+   * every member should go — a set whose primary is terminated still has
+   * standbys holding paid capacity, and that is a thing somebody may mean.
    */
-  async terminate(workloadId: string): Promise<TerminateResult> {
+  async terminate(
+    workloadId: string,
+    options: { member?: string | undefined } = {}
+  ): Promise<TerminateResult> {
     const lease = this.#lease(workloadId);
+    const member = this.#member(lease, options.member);
     const problems: string[] = [];
-    const planned = await this.#plan(lease, 'terminate', problems);
+    const planned = await this.#plan(lease, member, 'terminate', problems);
     if (planned === undefined || problems.length > 0) {
       return {
         sent: false,
         problems,
+        member: member.pubkey,
         ...(planned === undefined ? {} : { route: viewOf(planned) }),
         card: await this.#card(lease, false),
       };
     }
 
-    const body = await this.#leaseRequest(lease, planned, 'terminate', {
+    const body = await this.#leaseRequest(lease, member, 'terminate', {
       workload_id: lease.workloadId,
     });
     const outcome = await this.#send(planned, body);
@@ -553,11 +742,12 @@ export class WorkloadStore {
       return {
         sent: true,
         problems: [],
+        member: member.pubkey,
         route: viewOf(planned),
         message:
           `The termination was sent and nothing came back: ${outcome.message} Whether the ` +
           `workload was destroyed is unknown. Ask for this lease's status, which is free.`,
-        card: await this.#cardWith(lease, await this.#readStatus(lease)),
+        card: await this.#refreshedCard(lease, member),
       };
     }
 
@@ -566,11 +756,12 @@ export class WorkloadStore {
       return {
         sent: true,
         problems: [],
+        member: member.pubkey,
         route: viewOf(planned),
         ...(cost === undefined ? {} : { cost }),
         providerError: read.error,
         message: read.message ?? `The provider refused this termination: ${read.error}.`,
-        card: await this.#cardWith(lease, await this.#readStatus(lease)),
+        card: await this.#refreshedCard(lease, member),
       };
     }
 
@@ -578,7 +769,7 @@ export class WorkloadStore {
     // tenant needs no second call to see that its lease is over.
     const life = read.life;
     const ended = life?.phase === 'ended' ? life.ending : undefined;
-    this.#note(lease.workloadId, {
+    this.#note(lease, member, {
       endedAs: ended ?? 'termination',
       status: {
         kind: 'read',
@@ -589,6 +780,7 @@ export class WorkloadStore {
     return {
       sent: true,
       problems: [],
+      member: member.pubkey,
       route: viewOf(planned),
       ...(cost === undefined ? {} : { cost }),
       ended: ended ?? 'termination',
@@ -600,45 +792,123 @@ export class WorkloadStore {
   /* Cards                                                                    */
   /* ------------------------------------------------------------------------ */
 
+  /**
+   * One card, asking every member of the Standby Set or none of them.
+   *
+   * `refresh` asks EACH member, because a set's whole point is that the answer
+   * differs between them: after a Takeover the primary answers `stopped` with
+   * no access and a standby answers `running` with it, and a card built from
+   * the primary alone would say the workload was off. Each of those reads is
+   * free at its own provider (§5) and is bought where it is free (`#plan`), so
+   * a set of three costs three free packets and not three fees.
+   */
   async #card(lease: LeaseView, refresh: boolean): Promise<WorkloadCard> {
-    const status = refresh
-      ? await this.#readStatus(lease)
-      : (this.#noteFor(lease.workloadId)?.status ?? {
-          kind: 'unread' as const,
-          reason:
-            'This lease has not been asked about yet. Asking is free at the provider (§6.5).',
-          readAt: this.#at().toISOString(),
-        });
-    return this.#cardWith(lease, status);
+    const statuses = new Map<string, WorkloadStatus>();
+    if (refresh) {
+      for (const member of lease.members) {
+        statuses.set(member.pubkey, await this.#readStatus(lease, member));
+      }
+    }
+    return this.#cardWith(lease, statuses);
   }
 
-  async #cardWith(lease: LeaseView, status: WorkloadStatus): Promise<WorkloadCard> {
-    const problems: string[] = [];
-    const plan = await this.#plan(lease, 'extend', problems);
-    this.#checkExtendable(status, problems);
+  /** A card with one member just re-read, and the rest from what was known. */
+  async #refreshedCard(lease: LeaseView, member: LeaseMemberView): Promise<WorkloadCard> {
+    return this.#cardWith(
+      lease,
+      new Map([[member.pubkey, await this.#readStatus(lease, member)]])
+    );
+  }
+
+  async #cardWith(
+    lease: LeaseView,
+    fresh: ReadonlyMap<string, WorkloadStatus>
+  ): Promise<WorkloadCard> {
     const note = this.#noteFor(lease.workloadId);
-    const found = await this.#provider(lease);
+    const found = await this.#directory();
     const budget = this.#deps.autoExtend?.();
     const pubkey = this.#deps.vault.status().pubkey;
+
+    const members: WorkloadMemberView[] = [];
+    const runways: RunwayMember[] = [];
+    const plans = new Map<string, OpPlan | undefined>();
+    for (const member of lease.members) {
+      const status = fresh.get(member.pubkey) ?? this.#lastStatus(lease, member);
+      const op = this.#extendOp(status, member);
+      const problems: string[] = [];
+      const plan = await this.#plan(lease, member, op, problems);
+      this.#checkExtendable(status, op, problems);
+      plans.set(member.pubkey, plan);
+      const profile = found?.get(member.pubkey);
+      const phase = phaseOf(status);
+      members.push({
+        pubkey: member.pubkey,
+        index: member.index,
+        role: member.role,
+        provider: {
+          ilpAddress: profile?.profile.ilpAddress ?? member.provider.ilp_address,
+          connectorUrl: profile?.profile.connectorUrl ?? member.provider.connector_url,
+          hidden: profile?.profile.hidden ?? member.provider.hidden === true,
+          ...(profile === undefined ? {} : { liveness: profile.liveness.state }),
+          inDirectory: profile !== undefined,
+        },
+        listing: member.listing,
+        status,
+        extend: {
+          ok: problems.length === 0 && plan !== undefined,
+          op,
+          problems,
+          ...(plan === undefined ? {} : { route: viewOf(plan) }),
+        },
+        runningNow: phase === 'running',
+        // §6.7: `stopped` is reached by a primary and by nothing else, and
+        // only §7.1's self-stop rule puts a lease there. It is NOT an ending:
+        // the lease is paid to its `expires_at`, `.extend` still adds an
+        // interval at the running price, and the sweep still ends it.
+        selfStopped: phase === 'stopped',
+        vaultState: member.state,
+        ...(member.failedBecause === undefined ? {} : { failedBecause: member.failedBecause }),
+        known: member.known,
+      });
+      runways.push(this.#memberRunway(member, status, plan, op));
+    }
+
+    const primary = members[0];
+    const primaryMember = lease.members[0];
+    const status = primary?.status ?? {
+      kind: 'unread' as const,
+      reason: 'This lease names no member this console can ask about.',
+      readAt: this.#at().toISOString(),
+    };
+    const takeover = await this.#takeover(lease, members, found, note);
 
     return {
       workloadId: lease.workloadId,
       lease,
       provider: {
         pubkey: lease.provider.pubkey,
-        ilpAddress: found?.provider.profile.ilpAddress ?? lease.provider.ilp_address,
-        connectorUrl: found?.provider.profile.connectorUrl ?? lease.provider.connector_url,
-        hidden: found?.provider.profile.hidden ?? lease.provider.hidden === true,
-        ...(found === undefined ? {} : { liveness: found.provider.liveness.state }),
-        inDirectory: found !== undefined,
+        ilpAddress: primary?.provider.ilpAddress ?? lease.provider.ilp_address,
+        connectorUrl: primary?.provider.connectorUrl ?? lease.provider.connector_url,
+        hidden: primary?.provider.hidden ?? lease.provider.hidden === true,
+        ...(primary?.provider.liveness === undefined
+          ? {}
+          : { liveness: primary.provider.liveness }),
+        inDirectory: primary?.provider.inDirectory ?? false,
       },
       status,
-      runway: this.#runway(lease, status, plan),
+      runway: this.#runway(
+        lease,
+        status,
+        primaryMember === undefined ? undefined : plans.get(primaryMember.pubkey),
+        runways
+      ),
       extend: {
-        ok: problems.length === 0 && plan !== undefined,
-        problems,
-        ...(plan === undefined ? {} : { route: viewOf(plan) }),
+        ok: primary?.extend.ok ?? false,
+        problems: primary?.extend.problems ?? [],
+        ...(primary?.extend.route === undefined ? {} : { route: primary.extend.route }),
       },
+      members,
+      set: setViewOf(members, takeover),
       ...(budget === undefined || pubkey === undefined
         ? {}
         : optional('autoExtend', budget.view(pubkey, lease.workloadId))),
@@ -647,17 +917,171 @@ export class WorkloadStore {
   }
 
   /**
-   * The runway, in the units the channel is denominated in.
+   * Whether a Takeover has happened, from the two things that can say so.
+   *
+   * A member's own `status` is the authority on its own lease (§6.5), so a
+   * `takeover.winner` from any member settles WHO. The claims on the relays
+   * settle WHEN, and only they can: a kind-30433 event carries the moment the
+   * winner announced, signed by the winner (§7.1 step 2). The two are read
+   * together and the report says which said what.
+   *
+   * The moment this console first saw it is written down, so that "when" does
+   * not become "just now" every time the daemon restarts — and it is labelled
+   * as this console's observation rather than dressed up as the event's.
+   */
+  async #takeover(
+    lease: LeaseView,
+    members: readonly WorkloadMemberView[],
+    found: ReadonlyMap<string, ProviderView> | undefined,
+    note: WorkloadNote | undefined
+  ): Promise<{ report?: TakeoverReport | undefined; unread?: string | undefined }> {
+    if (lease.members.length < 2) return {};
+    const said = members
+      .map((member) => (member.status.kind === 'read' ? member.status.takeover : undefined))
+      .find((view) => view !== undefined);
+    const seenAt = this.#at().toISOString();
+
+    let reading: TakeoverReading | undefined;
+    if (this.#deps.readTakeover !== undefined) {
+      // The primary's Relay Set is where every claim is published (§7.1), and
+      // its Provider Profile is what names it. Every member's is asked as
+      // well: a read costs nothing, and a set whose relays have shifted
+      // between rounds is exactly the case a narrower list would miss.
+      const relays = [
+        ...lease.members.flatMap((member) => found?.get(member.pubkey)?.profile.relays ?? []),
+        this.#deps.profile().relayUrl,
+      ];
+      reading = await this.#deps
+        .readTakeover({
+          workloadId: lease.workloadId,
+          standbySet: lease.members.map((member) => member.pubkey),
+          relays,
+        })
+        .catch(() => undefined);
+    }
+
+    const claim = reading?.winner;
+    const winner = claim?.claimant ?? said?.winner;
+    if (winner === undefined) {
+      return reading?.state === 'unread'
+        ? {
+            unread: reading.reason ?? 'The Takeover claims on these relays could not be read.',
+          }
+        : {};
+    }
+
+    const held = note?.takeover;
+    const firstSeenAt = held?.winner === winner ? held.firstSeenAt : seenAt;
+    const report: TakeoverReport = {
+      winner,
+      seenBy: claim === undefined ? 'status' : 'claim',
+      firstSeenAt,
+      ...(claim === undefined
+        ? {}
+        : {
+            from: claim.primary,
+            announcedAt: claim.announcedAt,
+            rounds: reading?.rounds ?? 1,
+          }),
+      ...(reading?.claims === undefined || reading.claims.length === 0
+        ? {}
+        : {
+            claims: reading.claims.map((entry) => ({
+              claimant: entry.claimant,
+              index: entry.index,
+              primary: entry.primary,
+              announcedAt: entry.announcedAt,
+            })),
+          }),
+    };
+    if (held?.winner !== winner || held.announcedAt !== report.announcedAt) {
+      this.#noteWorkload(lease.workloadId, { takeover: report });
+    }
+    return { report };
+  }
+
+  /**
+   * One member's half of the set's runway.
+   *
+   * It is the same two halves #93 counts for a lease — time already paid for,
+   * and time the channel could still buy — with the route decided by what the
+   * member IS: a Reserved standby is priced on `.standby.extend`, and the sum
+   * that keeps a set alive is the sum of what each member is actually charged.
+   */
+  #memberRunway(
+    member: LeaseMemberView,
+    status: WorkloadStatus,
+    plan: OpPlan | undefined,
+    op: ExtendOp
+  ): RunwayMember {
+    const base = {
+      pubkey: member.pubkey,
+      index: member.index,
+      leaseIntervalSeconds: member.listing.lease_interval_s,
+      op,
+    };
+    const phase = phaseOf(status);
+    if (phase === 'ended') return { ...base, ended: true };
+
+    const expiry =
+      status.kind === 'read' && status.expiresAt !== undefined
+        ? status.expiresAt
+        : member.expiresAt;
+    const paidSeconds =
+      expiry === undefined ? undefined : Math.max(0, expiry - this.#seconds());
+
+    if (plan === undefined) {
+      return {
+        ...base,
+        unknown:
+          `has no route this console can price right now, so what keeping it costs is ` +
+          `unknown — and a runway counted against a price nobody quoted would be a guess.`,
+      };
+    }
+    return {
+      ...base,
+      ...(paidSeconds === undefined ? {} : { paidSeconds }),
+      ...(plan.price === undefined ? {} : { pricePerInterval: plan.price }),
+      ...(plan.channelId === undefined
+        ? {}
+        : { channelKey: `${plan.payAt}|${plan.chain ?? ''}|${plan.channelId}` }),
+      ...(plan.available === undefined ? {} : { available: plan.available.toString() }),
+    };
+  }
+
+  /**
+   * The runway, in the units the channel is denominated in — for the whole
+   * Standby Set.
    *
    * Both halves are read rather than assumed, and either may be missing: an
    * expiry this console has never been told, or a channel it cannot find. What
    * it must never do is put a zero where one of them should be.
+   *
+   * **It is the set's, not the primary's.** A set protects a workload only
+   * while EVERY member is paid — a reservation that lapses is a Warm Standby
+   * that is not there when the primary goes silent — so the headline figure is
+   * `standby-set.ts`'s sum, bounded by the member that runs out first. For a
+   * standalone lease that sum is this one lease's, so the same arithmetic
+   * serves both and there is no second one to drift. What stays the primary's
+   * is the detail beside it: its price, its channel, its expiry.
    */
-  #runway(lease: LeaseView, status: WorkloadStatus, plan: OpPlan | undefined): RunwayView {
+  #runway(
+    lease: LeaseView,
+    status: WorkloadStatus,
+    plan: OpPlan | undefined,
+    members: readonly RunwayMember[]
+  ): RunwayView {
     const readAt = this.#at().toISOString();
+    const set = setRunway(members);
     const base = {
       listingPrice: lease.listing.price,
       leaseIntervalSeconds: lease.listing.lease_interval_s,
+      memberRunways: members,
+      ...(set.pricePerInterval === undefined
+        ? {}
+        : { setPricePerInterval: set.pricePerInterval }),
+      ...(set.rounds === undefined ? {} : { rounds: set.rounds }),
+      ...(set.boundBy === undefined ? {} : { boundBy: set.boundBy }),
       readAt,
     };
 
@@ -773,7 +1197,19 @@ export class WorkloadStore {
       };
     }
 
-    const seconds = paidSeconds + affordableIntervals * lease.listing.lease_interval_s;
+    // The primary's own arithmetic is kept as the detail; the headline is the
+    // SET's, which for a set of one is the same number by construction.
+    if (set.state !== 'computed' || set.seconds === undefined) {
+      return {
+        ...base,
+        ...money,
+        ...paid,
+        affordableIntervals,
+        state: set.state,
+        ...optional('reason', set.reason),
+      };
+    }
+    const seconds = set.seconds;
     return {
       ...base,
       ...money,
@@ -789,19 +1225,19 @@ export class WorkloadStore {
   /* Talking to the provider                                                  */
   /* ------------------------------------------------------------------------ */
 
-  async #readStatus(lease: LeaseView): Promise<WorkloadStatus> {
+  async #readStatus(lease: LeaseView, member: LeaseMemberView): Promise<WorkloadStatus> {
     const readAt = this.#at().toISOString();
     const problems: string[] = [];
-    const planned = await this.#plan(lease, 'status', problems);
+    const planned = await this.#plan(lease, member, 'status', problems);
     if (planned === undefined) {
       const status: WorkloadStatus = { kind: 'unread', reason: problems.join(' '), readAt };
-      this.#note(lease.workloadId, { status });
+      this.#note(lease, member, { status });
       return status;
     }
 
     let body: unknown;
     try {
-      body = await this.#leaseRequest(lease, planned, 'status', {
+      body = await this.#leaseRequest(lease, member, 'status', {
         workload_id: lease.workloadId,
       });
     } catch (error) {
@@ -813,13 +1249,13 @@ export class WorkloadStore {
             : `This lease's Continuation Token could not be derived: ${messageOf(error)}`,
         readAt,
       };
-      this.#note(lease.workloadId, { status });
+      this.#note(lease, member, { status });
       return status;
     }
 
     const outcome = await this.#send(planned, body);
     const status = this.#statusOf(outcome, planned, readAt);
-    this.#note(lease.workloadId, {
+    this.#note(lease, member, {
       status,
       ...(status.kind === 'read' && status.life.phase === 'ended'
         ? { endedAs: status.life.ending }
@@ -893,27 +1329,33 @@ export class WorkloadStore {
     };
   }
 
-  /** §6.1's Lease Request, with the lease's own token borrowed for one packet. */
+  /**
+   * §6.1's Lease Request, with THIS MEMBER's token borrowed for one packet.
+   *
+   * The token is derived per provider from the one Root Secret (§6.1.1), so
+   * every member of a Standby Set holds a different one and the request has to
+   * name the member it is for twice over: in `provider`, which §6.1.2 step 1
+   * checks, and in the derivation, which step 4 compares. Presenting one
+   * member's token to another is `not_tenant` — and on a paid route that
+   * refusal is billed.
+   */
   async #leaseRequest(
     lease: LeaseView,
-    plan: OpPlan,
+    member: LeaseMemberView,
     op: 'status' | 'terminate',
     content: Record<string, unknown>
   ): Promise<unknown> {
-    return this.#deps.vault.withContinuation(
-      lease.workloadId,
-      lease.provider.pubkey,
-      (continuation) =>
-        Promise.resolve({
-          request: {
-            request_id: mintRequestId(),
-            op,
-            provider: lease.provider.pubkey,
-            expiration: this.#seconds() + REQUEST_TTL_S,
-            continuation,
-            content,
-          },
-        })
+    return this.#deps.vault.withContinuation(lease.workloadId, member.pubkey, (continuation) =>
+      Promise.resolve({
+        request: {
+          request_id: mintRequestId(),
+          op,
+          provider: member.pubkey,
+          expiration: this.#seconds() + REQUEST_TTL_S,
+          continuation,
+          content,
+        },
+      })
     );
   }
 
@@ -956,7 +1398,8 @@ export class WorkloadStore {
    */
   async #plan(
     lease: LeaseView,
-    op: 'status' | 'terminate' | 'extend',
+    member: LeaseMemberView,
+    op: 'status' | 'terminate' | ExtendOp,
     problems: string[],
     wanted?: string | undefined
   ): Promise<OpPlan | undefined> {
@@ -988,39 +1431,49 @@ export class WorkloadStore {
       return undefined;
     }
 
-    const found = await this.#provider(lease);
-    const ilpAddress = found?.provider.profile.ilpAddress ?? lease.provider.ilp_address;
+    const directory = await this.#directory();
+    const view = directory?.get(member.pubkey);
+    const found = view === undefined ? undefined : { provider: view };
+    const ilpAddress = found?.provider.profile.ilpAddress ?? member.provider.ilp_address;
     const sealTo =
-      found?.provider.profile.connectorSealKey ?? lease.provider.connector_seal_key;
+      found?.provider.profile.connectorSealKey ?? member.provider.connector_seal_key;
     const providerConnector =
-      found?.provider.profile.connectorUrl ?? lease.provider.connector_url;
+      found?.provider.profile.connectorUrl ?? member.provider.connector_url;
+    if (ilpAddress.length === 0) {
+      problems.push(
+        `${member.pubkey.slice(0, 12)}… is a member of this workload's Standby Set, and ` +
+          `neither this account's vault record nor ${profile.label}'s relays say where it is. ` +
+          `Nothing can be addressed to it until its Provider Profile is readable (§4.1).`
+      );
+      return undefined;
+    }
 
     let route: string;
-    if (op === 'extend') {
+    if (op === 'extend' || op === 'standby.extend') {
       if (found === undefined) {
         problems.push(
           `No current Profile for this provider was on ${profile.label}'s relays, so neither ` +
-            `its route nor whether it still sells ${JSON.stringify(lease.listing.name)} at ` +
-            `v${lease.listing.version} can be read. An extension on a retired version is ` +
+            `its route nor whether it still sells ${JSON.stringify(member.listing.name)} at ` +
+            `v${member.listing.version} can be read. An extension on a retired version is ` +
             `refused \`wrong_listing_version\` — and billed — so none was sent (spec §6.3).`
         );
         return undefined;
       }
       const listing = found.provider.listings.find(
-        (candidate) => candidate.name === lease.listing.name
+        (candidate) => candidate.name === member.listing.name
       );
       if (listing === undefined) {
         problems.push(
           `This provider no longer publishes a Listing named ` +
-            `${JSON.stringify(lease.listing.name)}. It sells ` +
+            `${JSON.stringify(member.listing.name)}. It sells ` +
             `${found.provider.listings.map((entry) => entry.name).join(', ') || 'nothing'}. ` +
             `An extension has to name this lease's own listing and version (§6.3).`
         );
         return undefined;
       }
-      if (listing.version !== lease.listing.version) {
+      if (listing.version !== member.listing.version) {
         problems.push(
-          `This lease was bought on ${listing.name} v${lease.listing.version} and the provider ` +
+          `This lease was bought on ${listing.name} v${member.listing.version} and the provider ` +
             `now publishes v${listing.version}. §6.3 requires the lease's own version on the ` +
             `route, and a version change is a price or resource change (ADR 0009) — so an ` +
             `extension here is either refused \`wrong_listing_version\` at full price, or it ` +
@@ -1028,7 +1481,20 @@ export class WorkloadStore {
         );
         return undefined;
       }
-      route = `${ilpAddress}.${listing.name}.v${listing.version}.extend`;
+      if (op === 'standby.extend' && listing.standbyPrice === undefined) {
+        // §5: the two standby routes exist for exactly the listings whose
+        // Listing event carries `standby_price`, and a connector MUST NOT
+        // terminate one the provider did not price. A reservation on a tier
+        // that has stopped pricing standbys has nowhere to be paid.
+        problems.push(
+          `${listing.name} v${listing.version} no longer prices a Warm Standby, so this ` +
+            `provider's connector terminates no \`.standby.extend\` route at all (§4.2, §5). ` +
+            `This reservation cannot be extended where it was bought; it ends at its expiry ` +
+            `unless the tier prices standbys again.`
+        );
+        return undefined;
+      }
+      route = `${ilpAddress}.${listing.name}.v${listing.version}.${op}`;
     } else {
       route = `${ilpAddress}.${op}`;
     }
@@ -1167,13 +1633,37 @@ export class WorkloadStore {
   }
 
   /**
+   * Which of §6.3's two extension routes this member is on RIGHT NOW.
+   *
+   * Read from the live state and never from what the member was bought as: a
+   * Warm Standby that won a Takeover is Running from that moment and is paid
+   * at the running price on `.extend` (§7.1 step 4), while its sibling that
+   * lost is still Reserved and still paid on `.standby.extend`. When nothing
+   * could be read, the member's position in the set is the honest guess — and
+   * `#checkExtendable` refuses to send anything anyway.
+   */
+  #extendOp(status: WorkloadStatus, member: LeaseMemberView): ExtendOp {
+    const phase = phaseOf(status);
+    if (phase !== undefined) return routeOpFor(phase) ?? 'extend';
+    return member.role === 'standby' ? 'standby.extend' : 'extend';
+  }
+
+  /**
    * Everything §6.3 would refuse an extension for that a free `status` already
    * told us — checked here so the packet is never sent.
+   *
+   * The two routes refuse each other's leases, each at its own price. A
+   * Reserved Warm Standby on `.extend` is `not_running`, billed at the running
+   * price; a running lease on `.standby.extend` is `not_standby`, billed at
+   * the standby price. `#extendOp` above chooses between them from the live
+   * state, so reaching either of these is a state that changed under us — and
+   * the answer is still to send nothing.
    */
-  #checkExtendable(status: WorkloadStatus, problems: string[]): void {
+  #checkExtendable(status: WorkloadStatus, op: ExtendOp, problems: string[]): void {
+    const what = op === 'standby.extend' ? 'reservation' : 'extension';
     if (status.kind === 'unread') {
       problems.push(
-        `This lease's state could not be read, and an extension is only worth buying for a ` +
+        `This lease's state could not be read, and an ${what} is only worth buying for a ` +
           `lease that is still there: §6.3 refuses an ended one \`expired\` and bills for the ` +
           `refusal. ${status.reason}`
       );
@@ -1182,14 +1672,14 @@ export class WorkloadStore {
     if (status.kind === 'silent') {
       problems.push(
         `This provider is not answering, so whether this lease is still running is unknown. ` +
-          `Nothing was sent: an extension buys an interval on a lease that may have ended, and ` +
+          `Nothing was sent: an ${what} buys an interval on a lease that may have ended, and ` +
           `§6.3 bills for the \`expired\` that would come back. ${status.reason}`
       );
       return;
     }
     if (status.kind === 'refused') {
       problems.push(
-        `The provider answered \`${status.code}\` when asked about this lease, so an extension ` +
+        `The provider answered \`${status.code}\` when asked about this lease, so an ${what} ` +
           `would be refused too — and billed (ADR 0003). ${status.message}`
       );
       return;
@@ -1202,28 +1692,76 @@ export class WorkloadStore {
       );
       return;
     }
-    if (status.life.phase === 'reserved') {
+    if (status.life.phase === 'reserved' && op !== 'standby.extend') {
       problems.push(
         `This lease is a Warm Standby reservation, and a reservation is extended on ` +
           `\`.standby.extend\` at the standby price, never on \`.extend\` — which refuses it ` +
-          `\`not_running\` and bills at the running price (§6.3). Warm Standbys are ` +
-          `TOON_Network#95.`
+          `\`not_running\` and bills at the running price (§6.3).`
+      );
+      return;
+    }
+    if (status.life.phase !== 'reserved' && op === 'standby.extend') {
+      problems.push(
+        `This lease is ${status.life.phase}, not a reservation, so it is extended on ` +
+          `\`.extend\` at the running price. §6.3 refuses a running lease of any role on ` +
+          `\`.standby.extend\` as \`not_standby\` — and bills at the standby price. A Warm ` +
+          `Standby that won a Takeover is one of these: winning buys no time, and from then ` +
+          `on it needs a full-price extension (§7.1 step 4).`
       );
     }
   }
 
   /* ------------------------------------------------------------------------ */
 
-  /** The provider's CURRENT Profile, when the directory could be read. */
-  async #provider(lease: LeaseView): Promise<{ provider: ProviderView } | undefined> {
+  /**
+   * The CURRENT Profile of every provider, by pubkey, when the relays answered.
+   *
+   * By pubkey and read once per card, because a Standby Set asks about several
+   * providers at a time: a lookup per member would read the directory once per
+   * member, which on a set of three is three relay reads for one answer.
+   */
+  async #directory(): Promise<ReadonlyMap<string, ProviderView> | undefined> {
     const directory = await this.#deps
       .readDirectory(this.#deps.profile())
       .catch(() => undefined);
     if (directory === undefined || directory.state !== 'ok') return undefined;
-    const provider = directory.providers.find(
-      (candidate) => candidate.pubkey === lease.provider.pubkey
-    );
-    return provider === undefined ? undefined : { provider };
+    return new Map(directory.providers.map((provider) => [provider.pubkey, provider]));
+  }
+
+  /**
+   * Which member of the Standby Set an action is for.
+   *
+   * Without a name, the primary — `standby_set[0]`, which for a standalone
+   * lease is the only member there is. A name that is not in the set is
+   * refused rather than addressed: the vault holds no token for it (§6.1.1),
+   * so a packet sent there would be `not_tenant`, and on a paid route that
+   * refusal is billed.
+   */
+  #member(lease: LeaseView, wanted: string | undefined): LeaseMemberView {
+    const first = lease.members[0];
+    if (wanted === undefined) {
+      if (first === undefined) {
+        throw new WorkloadError(
+          'no_members',
+          `This account's record for workload ${lease.workloadId} names no provider, so there ` +
+            `is nothing to address.`,
+          404
+        );
+      }
+      return first;
+    }
+    const member = lease.members.find((candidate) => candidate.pubkey === wanted);
+    if (member === undefined) {
+      throw new WorkloadError(
+        'not_a_member',
+        `${wanted.slice(0, 12)}… is not a member of this workload's Standby Set. It holds ` +
+          `${lease.members.map((entry) => entry.pubkey.slice(0, 12)).join(', ')}… — and a ` +
+          `Continuation Token is derived per provider (§6.1.1), so a request to anyone else ` +
+          `is \`not_tenant\`, billed on a paid route.`,
+        404
+      );
+    }
+    return member;
   }
 
   /**
@@ -1287,7 +1825,43 @@ export class WorkloadStore {
     return pubkey === undefined ? undefined : this.#deps.notes.read(pubkey, workloadId);
   }
 
-  #note(workloadId: string, note: Partial<WorkloadNote>): void {
+  /** The last thing THIS MEMBER said, or "nobody has asked it yet". */
+  #lastStatus(lease: LeaseView, member: LeaseMemberView): WorkloadStatus {
+    const note = this.#noteFor(lease.workloadId);
+    const held =
+      member.index === 0
+        ? (note?.members?.[member.pubkey]?.status ?? note?.status)
+        : note?.members?.[member.pubkey]?.status;
+    return (
+      held ?? {
+        kind: 'unread' as const,
+        reason:
+          'This member has not been asked about yet. Asking is free at the provider (§6.5).',
+        readAt: this.#at().toISOString(),
+      }
+    );
+  }
+
+  /**
+   * Write down what a member said.
+   *
+   * The PRIMARY's answer is written twice over: once under its own key and
+   * once in the note's own top-level fields, which are where every console
+   * before Standby Sets looked and where the card's headline still reads from.
+   * Keeping them in step is cheaper than a migration, and a note is a cache of
+   * a free read — losing it costs one refresh.
+   */
+  #note(lease: LeaseView, member: LeaseMemberView, note: Partial<WorkloadMemberNote>): void {
+    const pubkey = this.#deps.vault.status().pubkey;
+    if (pubkey === undefined) return;
+    this.#deps.notes.write(pubkey, lease.workloadId, {
+      members: { [member.pubkey]: note },
+      ...(member.index === 0 ? note : {}),
+    });
+  }
+
+  /** A note about the workload rather than about one of its members. */
+  #noteWorkload(workloadId: string, note: Partial<WorkloadNote>): void {
     const pubkey = this.#deps.vault.status().pubkey;
     if (pubkey === undefined) return;
     this.#deps.notes.write(pubkey, workloadId, note);
@@ -1319,6 +1893,55 @@ interface OpPlan {
   readonly chainKind: 'evm' | 'solana';
   readonly rpcUrl: string;
   readonly channelStore: ChannelStore;
+}
+
+/** §6.7's state, reduced to what the routes and the card branch on. */
+export function phaseOf(status: WorkloadStatus): MemberPhase | undefined {
+  if (status.kind !== 'read') return undefined;
+  return status.life.phase === 'ended' ? 'ended' : status.life.phase;
+}
+
+/** The set's summary line: how many, what a round costs, who is running it. */
+function setViewOf(
+  members: readonly WorkloadMemberView[],
+  takeover: { report?: TakeoverReport | undefined; unread?: string | undefined }
+): StandbySetView {
+  const running = members.find((member) => member.runningNow);
+  let total = 0n;
+  let priced = true;
+  for (const member of members) {
+    const price = member.extend.route?.price;
+    if (member.status.kind === 'read' && member.status.life.phase === 'ended') continue;
+    if (price === undefined) {
+      priced = false;
+      break;
+    }
+    try {
+      total += BigInt(price);
+    } catch {
+      priced = false;
+      break;
+    }
+  }
+  return {
+    members: members.length,
+    warm: members.length > 1,
+    ...(priced ? { pricePerInterval: total.toString() } : {}),
+    ...(priced
+      ? {}
+      : {
+          reason:
+            'At least one member of this set has no route this console can price right now, ' +
+            'so what one round of extensions costs is unknown.',
+        }),
+    ...(running === undefined
+      ? takeover.report === undefined
+        ? {}
+        : { runningMember: takeover.report.winner }
+      : { runningMember: running.pubkey }),
+    ...(takeover.report === undefined ? {} : { takeover: takeover.report }),
+    ...(takeover.unread === undefined ? {} : { takeoverUnread: takeover.unread }),
+  };
 }
 
 function viewOf(plan: OpPlan): OpRouteView {

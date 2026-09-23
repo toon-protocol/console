@@ -95,6 +95,29 @@ function card(overrides: Partial<WorkloadCard> = {}): WorkloadCard {
       workloadId: WORKLOAD,
       state: 'live',
       standbySet: [PROVIDER],
+      members: [
+        {
+          pubkey: PROVIDER,
+          index: 0,
+          role: 'standalone',
+          provider: {
+            pubkey: PROVIDER,
+            ilp_address: 'g.toon.provider',
+            connector_url: 'https://provider.test/ilp',
+            connector_seal_key: '0x04aa',
+          },
+          listing: {
+            name: 'basic',
+            version: 1,
+            address: `30432:${PROVIDER}:basic`,
+            lease_interval_s: 3600,
+            price: 1000,
+          },
+          paidAt: 'https://provider.test/ilp',
+          state: 'live',
+          known: true,
+        },
+      ],
       provider: {
         pubkey: PROVIDER,
         ilp_address: 'g.toon.provider',
@@ -159,6 +182,51 @@ function card(overrides: Partial<WorkloadCard> = {}): WorkloadCard {
         price: '1000',
       },
     },
+    members: [
+      {
+        pubkey: PROVIDER,
+        index: 0,
+        role: 'standalone',
+        provider: {
+          ilpAddress: 'g.toon.provider',
+          connectorUrl: 'https://provider.test/ilp',
+          hidden: false,
+          liveness: 'live',
+          inDirectory: true,
+        },
+        listing: {
+          name: 'basic',
+          version: 1,
+          address: `30432:${PROVIDER}:basic`,
+          lease_interval_s: 3600,
+          price: 1000,
+        },
+        status: {
+          kind: 'read',
+          life: { phase: 'running' },
+          role: 'standalone',
+          expiresAt: 1_790_003_600,
+          readAt: '2026-09-23T10:00:00.000Z',
+        },
+        extend: {
+          ok: true,
+          op: 'extend',
+          problems: [],
+          route: {
+            route: 'g.toon.provider.basic.v1.extend',
+            payAt: 'https://provider.test/ilp',
+            via: 'provider-connector',
+            reason: 'it terminates its own routes',
+            price: '1000',
+          },
+        },
+        runningNow: true,
+        selfStopped: false,
+        vaultState: 'live',
+        known: true,
+      },
+    ],
+    set: { members: 1, warm: false, pricePerInterval: '1000' },
     ...overrides,
   };
 }

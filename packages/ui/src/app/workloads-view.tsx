@@ -20,6 +20,8 @@ import type {
   PreflightView,
   ProviderView,
   SpawnRequestBody,
+  StandbySetPreflightView,
+  StandbySetRequestBody,
 } from '@/lib/daemon';
 import { WorkloadCard } from './workload-card';
 
@@ -383,6 +385,8 @@ const EMPTY_FORM = {
   volumeGb: '',
   chain: '',
   localOnly: false,
+  /** The Warm Standbys, in the order they take the workload over (spec §7). */
+  standbys: [] as { provider: string; listing: string }[],
 };
 
 type FormState = typeof EMPTY_FORM;
@@ -415,6 +419,23 @@ export function toSpawnRequest(form: FormState): SpawnRequestBody {
   };
 }
 
+/**
+ * The same form, as a Standby Set's request (spec §7).
+ *
+ * One content, one workload id, and a member per provider: the primary bought
+ * on `.spawn` at its listing's price and each Warm Standby on `.standby` at
+ * its own tier's `standby_price`. Every member names its own listing, because
+ * nothing makes two providers publish the same tier at the same version.
+ */
+export function toStandbySetRequest(form: FormState): StandbySetRequestBody {
+  return {
+    ...toSpawnRequest(form),
+    standbys: form.standbys
+      .filter((member) => member.provider !== '' && member.listing !== '')
+      .map((member) => ({ provider: member.provider, listing: member.listing })),
+  };
+}
+
 function SpawnForm({
   leases,
   directory,
@@ -431,18 +452,32 @@ function SpawnForm({
   const providers = directory?.state === 'ok' ? directory.providers : [];
   const chosen = providers.find((provider) => provider.pubkey === form.provider);
   const request = useMemo(() => toSpawnRequest(form), [form]);
-  const { check } = leases;
+  const setRequest = useMemo(() => toStandbySetRequest(form), [form]);
+  const warm = setRequest.standbys.length > 0;
+  const { check, checkSet } = leases;
 
   // The preflight is FREE and sends no packet, so it may run on a debounce.
-  // The spawn is not, and never runs from an effect.
+  // The spawn is not, and never runs from an effect. A Standby Set's preflight
+  // is free at EVERY member too, and it is the one that matters most: a set
+  // spends an interval at each one, so a mis-addressed set is billed several
+  // times over (§6.2 step 3, ADR 0003).
   useEffect(() => {
     if (request.provider === '' || request.listing === '') return;
-    const timer = setTimeout(() => void check(request), 250);
+    const timer = setTimeout(() => {
+      if (warm) {
+        void checkSet(setRequest);
+      } else {
+        void check(request);
+      }
+    }, 250);
     return () => clearTimeout(timer);
-  }, [check, request]);
+  }, [check, checkSet, request, setRequest, warm]);
 
   const preflight = leases.preflight;
-  const ready = preflight?.ok === true && !leases.busy;
+  const setPreflight = leases.standbySetPreflight;
+  const ready = warm
+    ? setPreflight?.ok === true && !leases.busy
+    : preflight?.ok === true && !leases.busy;
 
   return (
     <Card>
@@ -609,22 +644,211 @@ function SpawnForm({
           </span>
         </label>
 
-        {preflight && <Preflight preflight={preflight} localOnly={form.localOnly} />}
+        <Standbys form={form} set={set} providers={providers} />
+
+        {warm
+          ? setPreflight && (
+              <SetPreflight preflight={setPreflight} localOnly={form.localOnly} />
+            )
+          : preflight && <Preflight preflight={preflight} localOnly={form.localOnly} />}
 
         <Button
           disabled={!ready}
           onClick={() => {
-            void leases.spawn(request);
+            if (warm) {
+              void leases.spawnSet(setRequest);
+            } else {
+              void leases.spawn(request);
+            }
           }}
         >
           {leases.busy
             ? 'Spawning…'
-            : preflight?.listing
-              ? `Spawn — ${preflight.listing.price} µUSDC for ${preflight.listing.leaseIntervalSeconds} s`
-              : 'Spawn'}
+            : warm
+              ? `Spawn a Standby Set — ${setRequest.standbys.length + 1} members, ${setPreflight?.cost ?? '?'} base units`
+              : preflight?.listing
+                ? `Spawn — ${preflight.listing.price} µUSDC for ${preflight.listing.leaseIntervalSeconds} s`
+                : 'Spawn'}
         </Button>
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * Warm Standbys: the failover toggle, as a first-class part of the form.
+ *
+ * A Standby Set is one workload id bought from SEVERAL providers (spec §7), so
+ * every member picks its own provider and its own tier — and only a tier that
+ * publishes a `standby_price` sells one at all. A tier that prices none has no
+ * `.standby` route, and a reservation bought there is refused
+ * `wrong_listing_version` and billed (§4.2, §5), so the picker below offers
+ * only the tiers that do.
+ *
+ * It costs money to add one: `standby_price` per interval, for capacity that
+ * runs nothing until a Takeover. The panel says so before anything is chosen.
+ */
+function Standbys({
+  form,
+  set,
+  providers,
+}: {
+  form: FormState;
+  set: <K extends keyof FormState>(key: K, value: FormState[K]) => void;
+  providers: readonly ProviderView[];
+}) {
+  const others = providers.filter((provider) => provider.pubkey !== form.provider);
+  return (
+    <div className="space-y-2 rounded-lg border px-4 py-3">
+      <p className="text-sm font-medium">Warm Standbys</p>
+      <p className="text-muted-foreground text-xs">
+        A <strong>Standby Set</strong> is this workload id bought from several providers at
+        once: the primary runs it, and each Warm Standby holds capacity that runs nothing until
+        the primary goes silent (spec §7). A standby costs its tier&rsquo;s{' '}
+        <strong>standby price</strong> per interval, paid on <code>.standby.extend</code>, and
+        a reservation that lapses is protection that is gone. Takeover carries no workload
+        state: the standby starts from the image (ADR 0010).
+      </p>
+      {form.standbys.map((member, index) => {
+        const provider = others.find((candidate) => candidate.pubkey === member.provider);
+        const tiers = (provider?.listings ?? []).filter(
+          (listing) => listing.standbyPrice !== undefined
+        );
+        return (
+          <div key={index} className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
+            <select
+              aria-label={`Standby ${index + 1} provider`}
+              className="border-input bg-background h-9 w-full rounded-md border px-3 text-sm"
+              value={member.provider}
+              onChange={(event) => {
+                const next = [...form.standbys];
+                next[index] = { provider: event.target.value, listing: '' };
+                set('standbys', next);
+              }}
+            >
+              <option value="">Choose a provider…</option>
+              {others
+                .filter(
+                  (candidate) =>
+                    candidate.pubkey === member.provider ||
+                    !form.standbys.some((held) => held.provider === candidate.pubkey)
+                )
+                .map((candidate) => (
+                  <option key={candidate.pubkey} value={candidate.pubkey}>
+                    {candidate.profile.ilpAddress} ({candidate.liveness.state})
+                  </option>
+                ))}
+            </select>
+            <select
+              aria-label={`Standby ${index + 1} listing`}
+              className="border-input bg-background h-9 w-full rounded-md border px-3 text-sm"
+              value={member.listing}
+              disabled={!provider}
+              onChange={(event) => {
+                const next = [...form.standbys];
+                next[index] = { ...member, listing: event.target.value };
+                set('standbys', next);
+              }}
+            >
+              <option value="">
+                {provider && tiers.length === 0
+                  ? 'This provider sells no Warm Standby'
+                  : 'Choose a tier that prices a standby…'}
+              </option>
+              {tiers.map((listing) => (
+                <option key={listing.name} value={listing.name}>
+                  {listing.name} v{listing.version} — standby{' '}
+                  {listing.standbyPrice?.toLocaleString()} µUSDC /{' '}
+                  {listing.leaseIntervalSeconds} s
+                </option>
+              ))}
+            </select>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() =>
+                set(
+                  'standbys',
+                  form.standbys.filter((_, at) => at !== index)
+                )
+              }
+            >
+              Remove
+            </Button>
+          </div>
+        );
+      })}
+      <Button
+        size="sm"
+        variant="outline"
+        disabled={others.length <= form.standbys.length}
+        onClick={() => set('standbys', [...form.standbys, { provider: '', listing: '' }])}
+      >
+        {others.length <= form.standbys.length
+          ? 'No other provider in the directory to stand by'
+          : 'Add a Warm Standby'}
+      </Button>
+      {form.standbys.length > 0 && (
+        <p className="text-muted-foreground text-xs">
+          Membership cannot change later: changing it means new spawns under a new workload id
+          (spec §7).
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** What a Standby Set would cost, member by member, before any of it is paid. */
+function SetPreflight({
+  preflight,
+  localOnly,
+}: {
+  preflight: StandbySetPreflightView;
+  localOnly: boolean;
+}) {
+  return (
+    <div className="bg-muted/40 space-y-2 rounded-lg border px-4 py-3 text-sm">
+      <p>
+        <span className="font-medium">
+          One workload id, {preflight.members.length} members, one Root Secret.
+        </span>{' '}
+        {preflight.cost === undefined
+          ? 'Not every member quoted a price, so what this set would cost is unknown.'
+          : `${preflight.cost} base units for the first interval at every member.`}
+      </p>
+      {preflight.members.map((member) => (
+        <p key={member.pubkey} className="text-muted-foreground text-xs">
+          <span className="font-medium">{member.role}</span>{' '}
+          <code>{member.pubkey.slice(0, 12)}…</code>{' '}
+          {member.view.route ? <code>{member.view.route}</code> : 'no route'}
+          {member.view.payment?.routePrice === undefined
+            ? ''
+            : ` — ${member.view.payment.routePrice} base units at ${member.view.payment.connectorUrl}`}
+          {member.view.problems.length > 0 && (
+            <ul className="text-destructive list-disc space-y-1 pl-5">
+              {member.view.problems.map((problem) => (
+                <li key={problem}>{problem}</li>
+              ))}
+            </ul>
+          )}
+        </p>
+      ))}
+      <p className="text-muted-foreground text-xs">
+        {localOnly
+          ? 'The one Root Secret will be sealed and kept on this machine only. Every member’s Continuation Token is derived from it under that member’s own key, so no member can act as the tenant against another (spec §6.1.1).'
+          : preflight.vault.writes.ready
+            ? `The one Root Secret will be sealed to this account and written to ${preflight.vault.writes.relays.join(', ')} BEFORE anything is sent — one record naming the whole set, one paid packet.`
+            : (preflight.vault.writes.blockedBy ??
+              'The Root Secret cannot be written anywhere right now.')}
+      </p>
+      {preflight.problems.length > 0 && (
+        <ul className="text-destructive list-disc space-y-1 pl-5">
+          {preflight.problems.map((problem) => (
+            <li key={problem}>{problem}</li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 

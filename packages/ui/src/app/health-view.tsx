@@ -56,7 +56,8 @@ export function HealthView({ health }: { health: Health }) {
 
 function ConnectorBadge({ connector }: { connector: ConnectorHealth }) {
   if (connector.state === 'ok') return <Badge variant="success">answering</Badge>;
-  if (connector.state === 'unreachable') return <Badge variant="destructive">unreachable</Badge>;
+  if (connector.state === 'unreachable')
+    return <Badge variant="destructive">unreachable</Badge>;
   return <Badge variant="warning">not configured</Badge>;
 }
 

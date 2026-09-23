@@ -1,5 +1,10 @@
 import { createReadStream, existsSync, statSync } from 'node:fs';
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import {
+  createServer,
+  type IncomingMessage,
+  type Server,
+  type ServerResponse,
+} from 'node:http';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 
 import { handleApi, type ApiDeps } from './api.js';
@@ -167,7 +172,8 @@ function serveStatic(uiRoot: string, path: string, response: ServerResponse): vo
   const file = resolveWithin(uiRoot, path);
   // Anything that is not a file on disk is the SPA's own routing, so the shell
   // answers for it. A traversal attempt lands here too, which is the point.
-  const target = file && existsSync(file) && statSync(file).isFile() ? file : join(uiRoot, 'index.html');
+  const target =
+    file && existsSync(file) && statSync(file).isFile() ? file : join(uiRoot, 'index.html');
   if (!existsSync(target)) {
     sendJson(response, 404, { error: 'not_found', message: 'No such file.' });
     return;

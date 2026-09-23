@@ -97,9 +97,7 @@ export async function readConnectorHealth(
   }
 }
 
-function toSettlementView(
-  entry: NodeSelfDescription['settlements'][number]
-): SettlementView {
+function toSettlementView(entry: NodeSelfDescription['settlements'][number]): SettlementView {
   return {
     chain: entry.chain,
     kind: entry.kind,

@@ -108,6 +108,52 @@ export interface LeaseAccess {
 }
 
 /**
+ * What one member's own spawn did, as the vault records it.
+ *
+ * `spawning` is a member whose packet has not come back; `failed` is one that
+ * was definitively refused. A failed member is kept rather than dropped,
+ * because the account PAID for that refusal (ADR 0003) and because a set that
+ * silently lost a member would look like a set that never had one.
+ */
+export type MemberState = 'spawning' | 'live' | 'failed';
+
+/**
+ * One member of a **Standby Set** (spec §7), as the vault records it.
+ *
+ * A Standby Set is one workload id bought from several providers, and this is
+ * what the console needs to talk to each of them afterwards: where its
+ * connector is, which key to seal to, and which Listing at which version its
+ * lease was bought on — because a member's own tier decides its `.extend` and
+ * `.standby.extend` routes, and no two providers have to price alike.
+ *
+ * What is NOT here is a secret. There is one Root Secret per WORKLOAD
+ * (§6.1.1), held once on the record above; each member's Continuation Token is
+ * derived from it under that member's own public key, so no member can act as
+ * the tenant against another and nothing per member needs storing.
+ */
+export interface VaultedMember {
+  readonly pubkey: string;
+  /** Its position in `standby_set`. Index 0 is the primary (§7). */
+  readonly index: number;
+  readonly ilp_address: string;
+  readonly connector_url: string;
+  readonly connector_seal_key: string;
+  readonly hidden?: boolean | undefined;
+  readonly listing: VaultedLease['listing'];
+  /** The connector this member's own spawn was PAID at. */
+  readonly paid_at: string;
+  /** The settlement chain it was paid on; an extension must use the same. */
+  readonly paid_chain?: string | undefined;
+  readonly state: MemberState;
+  /** Why a member is `failed`, in the provider's own words. No secret. */
+  readonly failed_because?: string | undefined;
+  /** What the member answered: `primary`, `standby` or `standalone` (§6.2). */
+  readonly role?: string | undefined;
+  readonly expires_at?: number | undefined;
+  readonly access?: LeaseAccess | undefined;
+}
+
+/**
  * What one sealed record holds.
  *
  * Everything needed to act on the lease again from a machine that has only the
@@ -124,6 +170,17 @@ export interface VaultedLease {
   readonly root_secret: string;
   /** Every member of the Standby Set, primary first. One member is standalone. */
   readonly standby_set: readonly string[];
+  /**
+   * Where each member of the set is, and what its lease was bought on (§7).
+   *
+   * Absent on a record written before Standby Sets could be bought
+   * (TOON_Network#95), and on nothing else: a record with one member has one
+   * entry here, saying exactly what `provider` and `listing` below say. The
+   * two are kept in step rather than one replacing the other, so an older
+   * console reading this record still finds the lease it knows how to act on
+   * at `provider`, and a newer one finds the whole set here.
+   */
+  readonly members?: readonly VaultedMember[] | undefined;
   readonly provider: {
     readonly pubkey: string;
     readonly ilp_address: string;
@@ -181,6 +238,39 @@ export interface VaultedLease {
 }
 
 /**
+ * One member of a Standby Set, as everything outside this module sees it.
+ *
+ * Always present, and always one entry per name in `standbySet`, whether or
+ * not the record says where that member is: a set whose second member is a
+ * pubkey and nothing else is still a set with two members, and hiding the one
+ * this console cannot reach would be the wrong answer to "who else holds this
+ * workload". `known` is what says which kind it is.
+ */
+export interface LeaseMemberView {
+  readonly pubkey: string;
+  /** Its position in the set. Index 0 is the primary (§7). */
+  readonly index: number;
+  /**
+   * Its position in words, which a Takeover never changes (§6.7): a standby
+   * that won still answers `role: "standby"`. `standalone` is the role of the
+   * only member of a set of one — a lease with no Warm Standby at all.
+   */
+  readonly role: 'standalone' | 'primary' | 'standby';
+  readonly provider: VaultedLease['provider'];
+  readonly listing: VaultedLease['listing'];
+  readonly paidAt: string;
+  readonly paidChain?: string | undefined;
+  readonly state: MemberState;
+  readonly failedBecause?: string | undefined;
+  /** What this member answered about itself at spawn: `primary`, `standby`… */
+  readonly answeredRole?: string | undefined;
+  readonly expiresAt?: number | undefined;
+  readonly access?: LeaseAccess | undefined;
+  /** False when the record names this member but not where to reach it. */
+  readonly known: boolean;
+}
+
+/**
  * One lease, as everything outside this module sees it.
  *
  * Note what is missing and always will be: `root_secret`. The type has no such
@@ -190,6 +280,8 @@ export interface LeaseView {
   readonly workloadId: string;
   readonly state: LeaseVaultState;
   readonly standbySet: readonly string[];
+  /** One per name in `standbySet`, primary first (§7). Never empty. */
+  readonly members: readonly LeaseMemberView[];
   readonly provider: VaultedLease['provider'];
   readonly paidAt: string;
   /** The chain the spawn was paid on, when the record names one. */
@@ -528,9 +620,24 @@ export class LeaseVault {
     const held = this.#open.get(leaseVaultD(workloadId));
     if (!held)
       return { confirmed: false, reason: 'this console holds no record of that lease' };
+    // The member entry for this provider moves with the record's own fields:
+    // a record of one member says the same thing twice, and the two must not
+    // be able to disagree (§7, TOON_Network#95).
+    const members = (held.record.members ?? []).map((member) =>
+      member.pubkey === held.record.provider.pubkey
+        ? {
+            ...member,
+            state: 'live' as const,
+            ...(answered.role === undefined ? {} : { role: answered.role }),
+            ...(answered.expires_at === undefined ? {} : { expires_at: answered.expires_at }),
+            ...(answered.access === undefined ? {} : { access: answered.access }),
+          }
+        : member
+    );
     const record: VaultedLease = {
       ...held.record,
       state: 'live',
+      ...(held.record.members === undefined ? {} : { members }),
       ...(answered.role === undefined ? {} : { role: answered.role }),
       ...(answered.expires_at === undefined ? {} : { expires_at: answered.expires_at }),
       ...(answered.access === undefined ? {} : { access: answered.access }),
@@ -541,6 +648,75 @@ export class LeaseVault {
     } catch (error) {
       // The in-memory view still moves on: the lease IS live, whatever the
       // relay did about saying so.
+      this.#open.set(leaseVaultD(workloadId), { ...held, record });
+      return {
+        confirmed: false,
+        reason: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  /**
+   * Fill in what EVERY member of a Standby Set answered, in one write.
+   *
+   * One write and not one per member, deliberately. A vault write is a paid
+   * packet (TOON_Network#120) and the record is one event per workload
+   * (ADR 0021, §6.1.1) — so a set of three confirmed member by member would
+   * buy three writes of the same event and race NIP-01 replacement against
+   * itself for no gain. Best effort, exactly like `confirm`: the Root Secret
+   * is already safe, and a confirmation that could not be published must not
+   * make a set that really was bought look like one that was not.
+   */
+  async confirmSet(
+    workloadId: string,
+    answered: readonly {
+      pubkey: string;
+      state: MemberState;
+      role?: string | undefined;
+      expires_at?: number | undefined;
+      access?: LeaseAccess | undefined;
+      failed_because?: string | undefined;
+    }[]
+  ): Promise<{ confirmed: boolean; reason?: string }> {
+    const held = this.#open.get(leaseVaultD(workloadId));
+    if (!held)
+      return { confirmed: false, reason: 'this console holds no record of that lease' };
+    const byPubkey = new Map(answered.map((entry) => [entry.pubkey, entry]));
+    const members = (held.record.members ?? []).map((member) => {
+      const entry = byPubkey.get(member.pubkey);
+      if (entry === undefined) return member;
+      return {
+        ...member,
+        state: entry.state,
+        ...(entry.role === undefined ? {} : { role: entry.role }),
+        ...(entry.expires_at === undefined ? {} : { expires_at: entry.expires_at }),
+        ...(entry.access === undefined ? {} : { access: entry.access }),
+        ...(entry.failed_because === undefined
+          ? {}
+          : { failed_because: entry.failed_because }),
+      };
+    });
+    // The record's own `state`, `role`, `expires_at` and `access` describe the
+    // PRIMARY, which is `standby_set[0]` and the provider the record names.
+    // They are kept in step so that a console that knows nothing about sets
+    // still reads this record as the lease it can act on.
+    const primary = byPubkey.get(held.record.provider.pubkey);
+    const record: VaultedLease = {
+      ...held.record,
+      members,
+      ...(primary === undefined
+        ? {}
+        : {
+            state: primary.state === 'live' ? ('live' as const) : held.record.state,
+            ...(primary.role === undefined ? {} : { role: primary.role }),
+            ...(primary.expires_at === undefined ? {} : { expires_at: primary.expires_at }),
+            ...(primary.access === undefined ? {} : { access: primary.access }),
+          }),
+    };
+    try {
+      await this.publish(record);
+      return { confirmed: true };
+    } catch (error) {
       this.#open.set(leaseVaultD(workloadId), { ...held, record });
       return {
         confirmed: false,
@@ -842,12 +1018,101 @@ export class LeaseVault {
  */
 const ZERO_SECRET = '0'.repeat(64);
 
+/**
+ * The Standby Set's members, from whatever the record actually holds.
+ *
+ * Three shapes arrive here and all three have to come out as one list.
+ *
+ * 1. A record written with `members` (TOON_Network#95): use it.
+ * 2. A record written before that field existed, whose `standby_set` names one
+ *    provider: that provider IS the member, and `provider`/`listing`/`paid_at`
+ *    describe it.
+ * 3. A record that names a member with nothing else about it — an older record
+ *    of a set, or a member the console could not describe. It is listed with
+ *    `known: false`, because a set with a member this console cannot reach is
+ *    still a set with that member, and dropping it would understate who holds
+ *    the workload.
+ *
+ * The order is `standby_set`'s, which is the order the protocol reads it in:
+ * index 0 is the primary, and a Takeover's ties break by the lower index
+ * (§7.1 step 3).
+ */
+function membersOf(record: VaultedLease): readonly LeaseMemberView[] {
+  const set = record.standby_set.length > 0 ? record.standby_set : [record.provider.pubkey];
+  const byPubkey = new Map((record.members ?? []).map((member) => [member.pubkey, member]));
+  return set.map((pubkey, index) => {
+    const role = roleAt(index, set.length);
+    const held = byPubkey.get(pubkey);
+    if (held !== undefined) {
+      return {
+        pubkey,
+        index,
+        role,
+        provider: {
+          pubkey,
+          ilp_address: held.ilp_address,
+          connector_url: held.connector_url,
+          connector_seal_key: held.connector_seal_key,
+          ...(held.hidden === true ? { hidden: true } : {}),
+        },
+        listing: held.listing,
+        paidAt: held.paid_at,
+        ...(held.paid_chain === undefined ? {} : { paidChain: held.paid_chain }),
+        state: held.state,
+        ...(held.failed_because === undefined ? {} : { failedBecause: held.failed_because }),
+        ...(held.role === undefined ? {} : { answeredRole: held.role }),
+        ...(held.expires_at === undefined ? {} : { expiresAt: held.expires_at }),
+        ...(held.access === undefined ? {} : { access: held.access }),
+        known: true,
+      };
+    }
+    if (pubkey === record.provider.pubkey) {
+      return {
+        pubkey,
+        index,
+        role,
+        provider: record.provider,
+        listing: record.listing,
+        paidAt: record.paid_at,
+        ...(record.paid_chain === undefined ? {} : { paidChain: record.paid_chain }),
+        state: record.state === 'live' ? ('live' as const) : ('spawning' as const),
+        ...(record.role === undefined ? {} : { answeredRole: record.role }),
+        ...(record.expires_at === undefined ? {} : { expiresAt: record.expires_at }),
+        ...(record.access === undefined ? {} : { access: record.access }),
+        known: true,
+      };
+    }
+    return {
+      pubkey,
+      index,
+      role,
+      provider: {
+        pubkey,
+        ilp_address: '',
+        connector_url: '',
+        connector_seal_key: '',
+      },
+      listing: record.listing,
+      paidAt: '',
+      state: 'spawning' as const,
+      known: false,
+    };
+  });
+}
+
+/** §7: index 0 is the primary; a set of one is a standalone lease (§6.2). */
+export function roleAt(index: number, members: number): LeaseMemberView['role'] {
+  if (members <= 1) return 'standalone';
+  return index === 0 ? 'primary' : 'standby';
+}
+
 function toView(held: OpenLease): LeaseView {
   const { record } = held;
   return {
     workloadId: record.workload_id,
     state: record.state,
     standbySet: record.standby_set,
+    members: membersOf(record),
     provider: record.provider,
     paidAt: record.paid_at,
     ...(record.paid_chain === undefined ? {} : { paidChain: record.paid_chain }),
