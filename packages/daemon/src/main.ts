@@ -20,6 +20,7 @@ import { activeProfileFilePath, consolePaths, launchFilePath } from './paths.js'
 import { ProfileStore } from './profile-store.js';
 import { startServer } from './server.js';
 import { SignerIndex, signerIndexPath } from './signer-index.js';
+import { readTemplates } from './templates.js';
 import { daemonVersion } from './version.js';
 
 /**
@@ -103,6 +104,10 @@ export async function main(): Promise<void> {
       startedAt: new Date(),
       readHealth: (profile, options) => readConnectorHealth(profile, reader, options),
       readDirectory: (profile, filters) => readDirectory({ profile, filters }),
+      readTemplates: (profile) => readTemplates({ profile }),
+      // `spawnFromTemplate` is deliberately not passed: buying the lease is
+      // TOON_Network#92's, and until it lands `POST /api/templates/spawn`
+      // answers 501 with the expansion rather than a half-done purchase.
     },
   }).catch((error: unknown) => {
     if (isAddressInUse(error)) {

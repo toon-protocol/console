@@ -89,6 +89,8 @@ describe('the chain seed routes', () => {
         Promise.resolve({ state: 'unconfigured', reason: 'not asked in this test' }),
       readDirectory: () =>
         Promise.resolve({ state: 'unconfigured', reason: 'not asked in this test' }),
+      readTemplates: () =>
+        Promise.resolve({ state: 'unconfigured', reason: 'not asked in this test' }),
     };
   });
 

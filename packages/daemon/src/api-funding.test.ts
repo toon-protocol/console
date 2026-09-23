@@ -83,6 +83,7 @@ describe('the funding routes', () => {
       startedAt: new Date('2026-09-22T00:00:00Z'),
       readHealth: () => Promise.resolve({ state: 'unconfigured', reason: 'not asked' }),
       readDirectory: () => Promise.resolve({ state: 'unconfigured', reason: 'not asked' }),
+      readTemplates: () => Promise.resolve({ state: 'unconfigured', reason: 'not asked' }),
     };
   });
 

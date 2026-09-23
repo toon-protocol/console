@@ -9,8 +9,9 @@ lives on a server anyone else operates ([ADR 0019][adr19]).
 It installs, starts and opens, it knows which network it is pointed at, it can tell you what
 that network's connector says about itself, it browses the Provider Directory, an
 **Account** can sign in with its **Signer** and seal itself a **Chain Seed** ([#89][i89]),
-and that account can deposit, open a payment channel and watch its balances
-([#90][i90]). The workload dashboard ([#93][i93] onward) builds on it.
+that account can deposit, open a payment channel and watch its balances ([#90][i90]),
+and it browses **Templates** and expands one into the spawn it would send ([#94][i94]).
+The workload dashboard ([#93][i93] onward) builds on it.
 
 ## What is here
 
@@ -216,6 +217,39 @@ curl -H "authorization: Bearer $TOKEN" \
   'http://127.0.0.1:7797/api/directory?arch=amd64&capability=docker'
 ```
 
+## Templates
+
+The **Templates** view reads published **Templates** (kind `30436`) and shows each one's
+image **by its content address** ([#94][i94], spec §8.3). A Template is a publisher's
+signed description of a spawn — an image, its ports, the settings it fixes and the settings
+a tenant may set — and it **grants no capability** (ADR 0004): what a lease may do comes
+from its Listing and from nowhere else.
+
+- **The tenant expands it.** In v1 the tenant, not the provider, turns a Template into a
+  spawn; `template` in a spawn is informational and a provider never reads one (§8.3, §11
+  item 5). "Preview the spawn" shows the §6.2 content that would be sent, and it is built
+  by the same `buildSpawnContent` a manual spawn uses — `template-spawn.test.ts` compares
+  the two field by field, which is what "the same result as the equivalent manual spawn"
+  has to mean.
+- **Only what the Template marks tenant-settable can be edited.** The fixed settings are
+  shown and have no input; setting one is refused by the daemon, not merely hidden by the
+  window. The daemon re-reads the publisher's signed event on every expansion, so nothing
+  the browser says about the Template is believed.
+- **A Template whose image cannot be resolved is shown as unavailable, with the reason,**
+  and cannot be expanded. Resolution follows §8.4 as far as the RECORDS go and no further:
+  the Image Registry entry (`30434`) must be on a relay, be the signer its address names,
+  and be about the same digest, with a known source for every blob; a digest-alone Template
+  needs a well-formed Blob Record (`30435`) found by `#x`. The console fetches **no image
+  bytes** — the provider does, and verifies every one of them against the digest
+  ([ADR 0006][adr6], §8.4). Each card says which of those was checked.
+
+Buying the lease is [#92][i92]: `POST /api/templates/spawn` expands and then hands the
+content to that seam, and answers `501` with the expansion while it is unwired.
+
+```bash
+curl -H "authorization: Bearer $TOKEN" 'http://127.0.0.1:7797/api/templates'
+```
+
 ## Security
 
 The daemon binds `127.0.0.1` and refuses a request whose `Host` is not a loopback name. The
@@ -255,6 +289,7 @@ published identity; nothing in this repository should suggest otherwise.
 [spec]: https://github.com/toon-protocol/TOON_Network
 [context]: https://github.com/toon-protocol/TOON_Network/blob/main/CONTEXT.md
 [client]: https://www.npmjs.com/package/@toon-protocol/client
+[adr6]: https://github.com/toon-protocol/TOON_Network/blob/main/docs/adr/0006-image-bytes-are-verified-by-digest-wherever-they-are-stored.md
 [adr19]: https://github.com/toon-protocol/TOON_Network/blob/main/docs/adr/0019-the-console-is-a-local-app-not-a-website.md
 [adr20]: https://github.com/toon-protocol/TOON_Network/blob/main/docs/adr/0020-an-accounts-chain-keys-come-from-a-seed-sealed-to-it.md
 [adr21]: https://github.com/toon-protocol/TOON_Network/blob/main/docs/adr/0021-root-secrets-are-vaulted-on-the-accounts-own-relays.md
@@ -263,4 +298,5 @@ published identity; nothing in this repository should suggest otherwise.
 [i91]: https://github.com/toon-protocol/TOON_Network/issues/91
 [i92]: https://github.com/toon-protocol/TOON_Network/issues/92
 [i93]: https://github.com/toon-protocol/TOON_Network/issues/93
+[i94]: https://github.com/toon-protocol/TOON_Network/issues/94
 [i82]: https://github.com/toon-protocol/TOON_Network/issues/82
