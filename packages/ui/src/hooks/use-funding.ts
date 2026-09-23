@@ -29,7 +29,17 @@ export interface FundingState {
   reload(): void;
   refresh(): void;
   clearError(): void;
-  openChannel(request: { chain: string; deposit?: string }): Promise<boolean>;
+  /**
+   * `connector` names which connector to open WITH. Absent is the active
+   * profile's own; a spawn paid at a provider's connector needs a channel
+   * with that one (#92), and so does a gas job paid at a gas station's
+   * (TOON_Network#119).
+   */
+  openChannel(request: {
+    chain: string;
+    deposit?: string;
+    connector?: string;
+  }): Promise<boolean>;
   drip(chain: string): Promise<boolean>;
 }
 

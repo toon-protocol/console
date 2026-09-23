@@ -237,6 +237,22 @@ export interface GasBuyChain {
   readonly price?: string | undefined;
   /** How many lamports this console would ask the station to move. */
   readonly lamports?: string | undefined;
+  /**
+   * A connector to open a channel with, when that is what stands between this
+   * account and a door (TOON_Network#92's `connector` on
+   * `POST /api/funding/channel` is how).
+   *
+   * It appears for one reason, and it is a reason nothing on the wire
+   * publishes: **a connector prices a route's prefix and never says which
+   * handler path it terminates at**, so which door takes a quote and which
+   * takes an execute is learned from a refusal. On devnet the relay hub
+   * forwards exactly one of the gas station's three doors, and it is the
+   * execute-only one — so a quote bought through the channel this account
+   * already holds is refused F00, billed, and gets nothing. The station's own
+   * connector terminates all three. Opening a channel there is the way
+   * through, and this is where it is named.
+   */
+  readonly openChannelWith?: string | undefined;
 }
 
 export interface GasStationView {
@@ -747,12 +763,15 @@ export class GasStationStore {
       }
     }
     if (found.length === 0) return { kind: 'no_channel' };
-    // A channel whose remaining collateral is KNOWN and non-zero beats one
-    // whose watermark could not be squared, and the edge order above breaks
-    // the rest. An unknown figure is never read as zero — it just does not win
-    // a tie.
-    const best =
-      found.find((entry) => entry.available !== undefined && entry.available > 0n) ?? found[0];
+    // The edge order above decides it, and a balance only ever REMOVES a
+    // candidate — never promotes one. **An unknown figure is not a zero**, and
+    // this is the line where reading it as one would cost the most: a channel
+    // opened seconds ago has no watermark entry yet, so its remaining
+    // collateral is unknown and it is precisely the channel a person just went
+    // and opened in order to reach a door the other one cannot. Preferring a
+    // KNOWN balance here sent every purchase back through the edge that had
+    // already refused it.
+    const best = found.find((entry) => entry.available === undefined || entry.available > 0n);
     if (best === undefined) return { kind: 'no_channel' };
     return {
       kind: 'ready',
@@ -821,18 +840,37 @@ export class GasStationStore {
     }
 
     const doors = this.#doors(station, own, payer.payer);
-    const door = doors[0];
+    // A door already learned to refuse a phase is no longer a door for that
+    // phase, and a purchase needs BOTH. Subtracting them here is what turns a
+    // lesson paid for once into a plan that does not pay for it again.
+    const usable = (['quote', 'execute'] as const).map((phase) =>
+      doors.filter((entry) => this.#refuses.get(phase)?.has(entry.destination) !== true)
+    );
+    const door = usable.every((set) => set.length > 0) ? doors[0] : undefined;
     if (door === undefined) {
+      const elsewhere =
+        payer.payer.via === 'forwarded' && station.ilpAddresses.length > doors.length
+          ? station.selfEndpoint
+          : undefined;
       return {
         ...base,
         verdict: 'no_route',
         payer: payer.payer,
+        ...(elsewhere === undefined ? {} : { openChannelWith: elsewhere }),
         reason:
-          `Nothing the gas station's connector terminates can be paid for from the channel ` +
-          `this account holds at ${payer.payer.payAt}. The station publishes ` +
-          `${station.ilpAddresses.join(', ') || 'no address at all'}; that edge quotes a price ` +
-          `for none of them. A channel with the station's own connector reaches every door it ` +
-          `publishes.`,
+          (doors.length === 0
+            ? `Nothing the gas station's connector terminates can be paid for from the ` +
+              `channel this account holds at ${payer.payer.payAt}.`
+            : `The only door that channel can reach — ` +
+              `${doors.map((entry) => entry.destination).join(', ')} — has already refused a ` +
+              `quote or an execute from this console, and a purchase needs both.`) +
+          ` The station publishes ${station.ilpAddresses.join(', ') || 'no address at all'}, ` +
+          `and a connector prices a route without ever saying which handler path it ` +
+          `terminates at — so which door takes which phase is learned from a refusal. ` +
+          (elsewhere === undefined
+            ? `A channel with the station's own connector reaches every door it publishes.`
+            : `Open a channel with the station's own connector at ${elsewhere}: it ` +
+              `terminates all of them, so no door is out of reach and nothing is forwarded.`),
       };
     }
 

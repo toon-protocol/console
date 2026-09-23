@@ -80,7 +80,7 @@ export function FundingView({
       {funding.error && <Problem funding={funding} />}
       {status.heldSeed && <HeldSeed held={status.heldSeed} />}
       {status.supersededSeeds > 0 && <SupersededSeeds count={status.supersededSeeds} />}
-      <GasGate status={status} {...(gas === undefined ? {} : { gas })} />
+      <GasGate status={status} funding={funding} {...(gas === undefined ? {} : { gas })} />
       {status.chains.map((chain) => (
         <ChainCard
           key={chain.chain}
@@ -140,7 +140,15 @@ function NotYet({ status, funding }: { status: FundingStatus; funding: FundingSt
  * wrong yet. It names the coin, says plainly that nothing here can supply it,
  * and gives the one thing that does work per chain.
  */
-function GasGate({ status, gas }: { status: FundingStatus; gas?: GasStationState }) {
+function GasGate({
+  status,
+  gas,
+  funding,
+}: {
+  status: FundingStatus;
+  gas?: GasStationState;
+  funding: FundingState;
+}) {
   const stuck = status.chains.filter((chain) => chain.gas.verdict !== 'present');
   if (stuck.length === 0) return null;
   const none = stuck.filter((chain) => chain.gas.verdict === 'none');
@@ -186,7 +194,7 @@ function GasGate({ status, gas }: { status: FundingStatus; gas?: GasStationState
             <p className="text-sm">{chain.gas.headline}</p>
             <p className="text-sm">{chain.gas.detail}</p>
             {chain.gas.command && <CopyLine label="Run this" value={chain.gas.command} />}
-            {gas && <BuyGas chain={chain.chain} gas={gas} />}
+            {gas && <BuyGas chain={chain.chain} gas={gas} funding={funding} />}
           </div>
         ))}
       </CardContent>
@@ -215,7 +223,15 @@ function GasGate({ status, gas }: { status: FundingStatus; gas?: GasStationState
  * request is still billed, and a panel that hid that would be the silent loss
  * this ticket exists to rule out.
  */
-function BuyGas({ chain, gas }: { chain: string; gas: GasStationState }) {
+function BuyGas({
+  chain,
+  gas,
+  funding,
+}: {
+  chain: string;
+  gas: GasStationState;
+  funding: FundingState;
+}) {
   const plan = gas.status?.chains.find((entry) => entry.chain === chain);
   if (!plan || plan.verdict === 'not_blocked') return null;
 
@@ -224,9 +240,33 @@ function BuyGas({ chain, gas }: { chain: string; gas: GasStationState }) {
 
   if (plan.verdict !== 'buyable') {
     return (
-      <p className="text-muted-foreground text-sm" data-testid={`gas-buy-${chain}`}>
-        {plan.reason}
-      </p>
+      <div className="space-y-2" data-testid={`gas-buy-${chain}`}>
+        <p className="text-muted-foreground text-sm">{plan.reason}</p>
+        {/*
+          The one case where a dead end has a door in it. Which of a gas
+          station's doors takes which phase is published nowhere, so it is
+          learned from a refusal — and what the console learns is that the
+          channel it holds cannot reach the door it needs. Opening one with the
+          station's own connector reaches all of them. It spends collateral and
+          the chain's own gas, so it is a button and not something the daemon
+          does quietly: `gas-station.ts` never opens a channel.
+        */}
+        {plan.openChannelWith && plan.payer && (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={funding.busy}
+            onClick={() =>
+              void funding.openChannel({
+                chain: plan.payer?.chain ?? '',
+                connector: plan.openChannelWith ?? '',
+              })
+            }
+          >
+            Open a channel with the gas station&rsquo;s connector on {plan.payer.chain}
+          </Button>
+        )}
+      </div>
     );
   }
 

@@ -77,6 +77,40 @@ The Console shows your native balance beside your USDC balance and refuses to op
 channel it can see you cannot pay gas for, rather than sending a transaction that reverts.
 If both faucets are dry, wait. This is a testnet and that is what testnets are like.
 
+## Buying the next chain's gas
+
+The paragraph above is true of your **first** chain and no longer true of the rest.
+
+A **gas station** is a TOON app that spends its own native token on somebody else's
+transaction — and it is paid over a payment channel. A claim signed against a channel is
+not a transaction and costs no gas on any chain, so once you hold ONE funded channel, the
+Console can buy native gas for a chain you cannot transact on at all. The Funds tab offers
+it on any chain that is blocked, shows you the station's own quote first, and pays for the
+quote it showed you.
+
+The gas lands at **your** address — the one your Chain Seed derives — and the blocked chain
+then opens a channel with no help from anywhere.
+
+Four things worth knowing before you press it:
+
+- **The first channel on the first chain still has no route through this.** Paying a gas
+  station needs a channel; opening a channel needs gas. The Console says so in those words
+  whenever you hold no channel anywhere, and offers no button that pretends otherwise.
+- **It works on Solana and not on EVM, and that is a decision rather than a gap.** A gas
+  station's EVM job relays a call _you_ signed and pays the miner for it; its target must be
+  the connector's own payment-channel contract, and the native value it may carry is zero.
+  One that sent ETH to any address that asked would be a faucet, and would be emptied by the
+  first caller. So Base Sepolia's ETH still has to come from a wallet that holds some.
+- **A quote is a paid packet, and so is a refusal.** A purchase is two packets at the
+  connector's own price — on devnet, 1000 µUSDC each — plus one more the first time, to
+  learn the station's fee-payer address. Every one of them is reported with what it cost,
+  including the ones that came back empty.
+- **It may ask you to open a second channel.** A connector publishes a route's price and
+  never says which of a station's doors it terminates at, so which door takes a quote and
+  which takes an execute is learned from a refusal. When the channel you hold cannot reach
+  the door, the Console says so and offers to open one with the gas station's own connector,
+  which terminates all of them.
+
 ## Opening a channel
 
 From the Funds tab, choose a chain and a deposit amount and open. The deposit is a whole

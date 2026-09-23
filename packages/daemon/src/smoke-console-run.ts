@@ -157,6 +157,16 @@ function gasTargetFor(chain: ChainView, held: bigint, asked?: string): bigint {
 
 /** How long a channel open is given before the run calls it stuck. */
 const OPEN_TIMEOUT_MS = 180_000;
+
+/**
+ * How long bought gas is given to show up in a balance read.
+ *
+ * The gas station answers only after the transaction has CONFIRMED, so this is
+ * the gap between a confirmation and an RPC replica agreeing — seconds on a
+ * local validator, and long enough on a public cluster that a tighter deadline
+ * would read as "the purchase failed" on a purchase that worked.
+ */
+const GAS_ARRIVAL_TIMEOUT_MS = 90_000;
 /** How long a fresh container is given to report `running`. */
 const RUNNING_TIMEOUT_MS = 180_000;
 
@@ -411,6 +421,272 @@ export async function runSmoke(options: SmokeOptions): Promise<SmokeReport> {
       };
     });
     if (funded === undefined) return run.report();
+
+    // Buying the next chain's gas with the chain that is already paid for
+    // (TOON_Network#119). It goes HERE, after `funds` and before anything is
+    // spawned, because that is where it belongs in a person's day: one chain
+    // is funded, another is not, and this is the step that closes the gap
+    // without sending them outside the network.
+    //
+    // It proves the thing and then proves it MATTERED: a chain the console
+    // refused to open on for want of gas, gas bought over the other chain's
+    // channel, and then the same open going through unaided.
+    await run.run('gas-station', async (step) => {
+      const plan = await api.get('/api/funding/gas');
+      must(plan.status === 200, `GET /api/funding/gas answered ${plan.status}`);
+      const view = plan.body as GasStationStatus;
+      if (view.state !== 'ready') {
+        step.skip(
+          `this console has nothing to buy gas with here: ${view.reason ?? view.state}.`
+        );
+      }
+      if (view.chains.every((chain) => chain.verdict !== 'buyable')) {
+        step.skip(
+          'no chain on this network is both blocked for want of gas and buyable through a ' +
+            `gas station. ${view.chains
+              .map((chain) => `${chain.chain}: ${chain.verdict}`)
+              .join('; ')}. ` +
+            (view.firstChannel ?? '')
+        );
+      }
+      const target = present(
+        view.chains.find((chain) => chain.verdict === 'buyable'),
+        'a buyable chain was there a line ago'
+      );
+
+      // NOTHING is funded on this chain before the purchase. Not the gas,
+      // obviously — that is the thing being bought — but not the collateral
+      // either, because the funder's own transfer would be the second way
+      // money reached this address and a stage that used two could not say
+      // which one unblocked it.
+      const blocked = await chainAt(
+        api,
+        options.profile.connectorUrl,
+        options.profile,
+        target.chain
+      );
+      must(
+        !blocked.canOpen && blocked.gas?.verdict === 'none',
+        `${target.chain} was supposed to be blocked for want of gas before this stage and the ` +
+          `console says canOpen=${blocked.canOpen}, gas=${blocked.gas?.verdict ?? '?'}`
+      );
+      step.fact(
+        `${target.chain} will not open: ${blocked.blockedBy ?? 'no reason given'} — and the ` +
+          `claim that is about to buy that gas is signed on ${target.payer?.chain}, which ` +
+          `costs no gas on any chain`
+      );
+
+      // A quote, and — if the first one is refused — the one thing a person
+      // would do about it.
+      //
+      // Which door takes which phase is published nowhere: a connector prices
+      // a route's prefix and never names the handler path it terminates at.
+      // On devnet the relay hub forwards exactly ONE of the gas station's
+      // three doors and it is the execute-only one, so the first quote a
+      // fresh console sends through the channel it already holds is refused
+      // F00 — billed, and worth every bit of it, because the console then
+      // knows. What it says to do next is open a channel with the station's
+      // own connector, which terminates all three; that is a #92 open with a
+      // `connector`, it spends collateral and chain gas, and it is the
+      // PERSON's to decide — `gas-station.ts` never opens a channel on its
+      // own. This stage is that person.
+      let quoted = await api.post('/api/funding/gas/quote', { chain: target.chain });
+      if (quoted.status !== 200) {
+        const again = (
+          (await api.get('/api/funding/gas')).body as GasStationStatus
+        ).chains.find((chain) => chain.chain === target.chain);
+        const elsewhere = again?.openChannelWith;
+        must(
+          elsewhere !== undefined,
+          `quoting gas for ${target.chain} answered ${quoted.status}: ${text(quoted.body)}`
+        );
+        step.fact(
+          `the first quote was refused and billed; the console now says why and where to go ` +
+            `instead: ${again?.reason ?? ''}`
+        );
+        const payOn = present(target.payer, 'a buyable chain named no payer').chain;
+        // That channel is a THIRD one on the paying chain, so it wants its own
+        // collateral and its own gas: the first two took what `funds` sent.
+        const payView = await chainAt(api, elsewhere, options.profile, payOn);
+        const stationDeposit = BigInt(options.deposit ?? payView.suggestedDeposit ?? '0');
+        const funderHeld = present(
+          await funderBalances(payView, options.funder),
+          `the funder's balances on ${payOn} could not be read`
+        );
+        for (const line of await topUp(
+          payView,
+          options.funder,
+          stationDeposit,
+          gasTargetFor(payView, funderHeld.native, options.gas)
+        )) {
+          step.fact(`${payOn}: ${line}`);
+        }
+        const second = await api.post('/api/funding/channel', {
+          chain: payOn,
+          connector: elsewhere,
+          ...(stationDeposit > 0n ? { deposit: stationDeposit.toString() } : {}),
+        });
+        must(
+          second.status === 200,
+          `opening a channel with ${elsewhere} on ${payOn} answered ${second.status}: ` +
+            text(second.body)
+        );
+        const open = await waitForChannel(
+          api,
+          elsewhere,
+          options.profile,
+          payOn,
+          OPEN_TIMEOUT_MS
+        );
+        must(
+          open.phase === 'open',
+          `the channel with ${elsewhere} on ${payOn} is “${open.phase}”` +
+            (open.reason === undefined ? '' : `: ${open.reason}`)
+        );
+        step.fact(
+          `opened a channel with the gas station's own connector on ${payOn} ` +
+            `(${open.channelId?.slice(0, 18)}…), which terminates every door it publishes`
+        );
+        quoted = await api.post('/api/funding/gas/quote', { chain: target.chain });
+      }
+      must(
+        quoted.status === 200,
+        `quoting gas for ${target.chain} answered ${quoted.status}: ${text(quoted.body)}`
+      );
+      const quote = quoted.body as GasQuote;
+      step.spent(sum(quote.attempts.map((attempt) => attempt.cost)));
+      must(
+        quote.quoteId !== '' && quote.feePayer !== '' && quote.recentBlockhash !== '',
+        `the quote for ${target.chain} named no quoteId, fee payer or blockhash: ${text(quote)}`
+      );
+      must(
+        quote.recipient === blocked.deposit.address,
+        `the quote would send gas to ${quote.recipient} and this account's address on ` +
+          `${target.chain} is ${blocked.deposit.address}`
+      );
+      step.fact(
+        `quoted ${quote.lamports} lamports to ${quote.recipient.slice(0, 12)}… from the ` +
+          `station's fee payer ${quote.feePayer.slice(0, 12)}…, ceiling ${quote.maxLamports}, ` +
+          `on ${quote.destination} at ${quote.price} base units a packet`
+      );
+
+      const bought = await api.post('/api/funding/gas/buy', {
+        chain: target.chain,
+        quoteId: quote.quoteId,
+      });
+      must(
+        bought.status === 200,
+        `buying gas for ${target.chain} answered ${bought.status}: ${text(bought.body)}`
+      );
+      const purchase = bought.body as GasPurchase;
+      step.spent(
+        sum(purchase.attempts.slice(quote.attempts.length).map((attempt) => attempt.cost))
+      );
+      must(
+        purchase.state === 'delivered',
+        `the gas station did not deliver: ${purchase.state} ` +
+          `${purchase.reason ?? ''} ${purchase.detail ?? ''}`.trim()
+      );
+      step.fact(
+        `the station co-signed and broadcast it: ${purchase.signature?.slice(0, 16)}…, ` +
+          `${purchase.lamports} lamports, ${purchase.cost ?? '0'} base units all in`
+      );
+
+      // The chain, not the receipt. A transaction that was broadcast is not a
+      // balance; what decides this stage is the console reading the address
+      // and changing its own mind about the open.
+      const arrived = await waitFor(
+        async () => {
+          const chain = await chainAt(
+            api,
+            options.profile.connectorUrl,
+            options.profile,
+            target.chain
+          );
+          return chain.canOpen ? chain : undefined;
+        },
+        GAS_ARRIVAL_TIMEOUT_MS,
+        () =>
+          `${target.chain} still cannot open ${Math.round(GAS_ARRIVAL_TIMEOUT_MS / 1000)}s ` +
+          `after the gas station broadcast the transfer`,
+        3_000
+      );
+      step.fact(
+        `the console re-read ${target.chain} and changed its mind: it now holds ` +
+          `${arrived.balances.native?.amount ?? '?'} base units of the native coin, and the ` +
+          `open is no longer blocked`
+      );
+
+      // Only now the collateral, and ONLY the collateral: nothing here sends
+      // the native coin, so the coin this channel opens on is the coin the gas
+      // station sold.
+      //
+      // The token is asked of the FAUCET first, through the console's own
+      // route. That is the division this whole ticket is arranged around, run
+      // in order: the faucet gives the settlement token and no gas, the gas
+      // station gives the gas and no token, and between them an address that
+      // held neither can open a channel. The funder is the fallback for a
+      // network with no faucet — the sandbox.
+      let held = arrived;
+      if (options.profile.faucetUrl !== undefined && options.profile.faucetUrl !== '') {
+        const drip = await api.post('/api/funding/faucet', { chain: target.chain });
+        const last = (drip.body as { faucet?: { lastDrip?: { message?: string } } }).faucet
+          ?.lastDrip;
+        step.fact(
+          `the faucet was asked for the settlement token on ${target.chain}: ` +
+            `${last?.message ?? 'it said nothing'} — it gives the token and no gas, which is ` +
+            `the other half of what an open costs`
+        );
+        held = await chainAt(api, options.profile.connectorUrl, options.profile, target.chain);
+      }
+      if (BigInt(held.balances.token?.amount ?? '0') === 0n) {
+        for (const line of await topUp(
+          held,
+          options.funder,
+          BigInt(options.deposit ?? held.suggestedDeposit ?? '0'),
+          0n
+        )) {
+          step.fact(`${target.chain}: ${line}`);
+        }
+        held = await chainAt(api, options.profile.connectorUrl, options.profile, target.chain);
+      }
+
+      // Whatever the token balance now is, capped at what the connector
+      // suggests. The figure is not the point — that this address can open at
+      // all, on gas it bought, is.
+      const suggested = BigInt(options.deposit ?? held.suggestedDeposit ?? '0');
+      const balance = BigInt(held.balances.token?.amount ?? '0');
+      const collateral = suggested > 0n && suggested < balance ? suggested : balance;
+      must(
+        collateral > 0n,
+        `${target.chain} holds no settlement token, so there is no collateral to open with. ` +
+          `The gas arrived; the token did not.`
+      );
+      const answer = await api.post('/api/funding/channel', {
+        chain: target.chain,
+        deposit: collateral.toString(),
+      });
+      must(
+        answer.status === 200,
+        `opening a channel on ${target.chain} answered ${answer.status}: ${text(answer.body)}`
+      );
+      const open = await waitForChannel(
+        api,
+        options.profile.connectorUrl,
+        options.profile,
+        target.chain,
+        OPEN_TIMEOUT_MS
+      );
+      must(
+        open.phase === 'open',
+        `the channel on ${target.chain} is “${open.phase}” after the bought gas` +
+          (open.reason === undefined ? '' : `: ${open.reason}`)
+      );
+      step.fact(
+        `${target.chain} opened a channel UNAIDED on gas bought over ${target.payer?.chain}: ` +
+          `${open.channelId?.slice(0, 18)}…, ${open.deposit} base units of collateral`
+      );
+    });
 
     await run.run('publish-seed', async (step) => {
       const published = await api.post('/api/chain-seed/publish', {});
@@ -1129,9 +1405,76 @@ interface ChainView {
     readonly available?: string;
     readonly reason?: string;
   };
+  readonly gas?: { readonly verdict: string; readonly symbol?: string };
   readonly canOpen: boolean;
   readonly blockedBy?: string;
   readonly suggestedDeposit?: string;
+}
+
+/**
+ * The gas-station views, mirrored here as every other daemon type in this file
+ * is: the smoke drives the API over HTTP, so what it holds is the JSON's shape
+ * and not the daemon's own types.
+ */
+interface GasStationStatus {
+  readonly state: string;
+  readonly chains: readonly GasBuyChain[];
+  readonly firstChannel?: string;
+  readonly reason?: string;
+}
+
+interface GasBuyChain {
+  readonly chain: string;
+  readonly recipient: string;
+  readonly verdict: string;
+  readonly reason: string;
+  readonly payer?: { readonly chain: string; readonly payAt: string };
+  readonly destination?: string;
+  readonly price?: string;
+  readonly openChannelWith?: string;
+}
+
+interface GasAttempt {
+  readonly destination: string;
+  readonly phase: string;
+  readonly outcome: string;
+  readonly cost?: string;
+}
+
+interface GasQuote {
+  readonly quoteId: string;
+  readonly feePayer: string;
+  readonly recipient: string;
+  readonly lamports: string;
+  readonly maxLamports: string;
+  readonly recentBlockhash: string;
+  readonly destination: string;
+  readonly price: string;
+  readonly attempts: readonly GasAttempt[];
+}
+
+interface GasPurchase {
+  readonly state: string;
+  readonly signature?: string;
+  readonly lamports?: string;
+  readonly reason?: string;
+  readonly detail?: string;
+  readonly attempts: readonly GasAttempt[];
+  readonly cost?: string;
+}
+
+/** Base-unit strings summed. `undefined` is "nothing reported a cost", not zero. */
+function sum(values: readonly (string | undefined)[]): string | undefined {
+  let total: bigint | undefined;
+  for (const value of values) {
+    if (value === undefined) continue;
+    try {
+      total = (total ?? 0n) + BigInt(value);
+    } catch {
+      continue;
+    }
+  }
+  return total?.toString();
 }
 
 function funderAddress(mnemonic: string, kind: 'evm' | 'solana'): string {

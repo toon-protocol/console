@@ -302,6 +302,31 @@ describe('buying the next chain’s gas', () => {
       expect(status.reason).toMatch(/names no gas station/u);
     });
 
+    it('pays at the station’s own edge over the hub, even with no watermark yet', async () => {
+      // The case this got wrong once, live: a channel opened seconds ago has
+      // no watermark entry, so what is left in it is UNKNOWN — and an unknown
+      // figure must never lose to a known one. It is precisely the channel a
+      // person went and opened to reach a door the hub cannot carry, and
+      // preferring the hub sent the purchase back to the edge that had
+      // already refused it.
+      channelWith(HUB, 'evm:31337');
+      const channels = channelStoreFor(paths, PROFILE.id);
+      channels.store.saveBinding?.(`${STATION}|evm:31337|network`, {
+        channelId: '0xfresh',
+        context: { chainType: 'evm', chainId: 0, tokenNetworkAddress: 'network' },
+        depositTotal: 500_000n,
+        openedAt: '2026-09-23T11:59:59.000Z',
+      });
+      // Deliberately NO `channels.store.save('0xfresh', …)`: no watermark.
+
+      const solana = (await store().status()).chains.find((chain) => chain.chain === 'solana');
+      expect(solana?.payer?.payAt).toBe(STATION);
+      expect(solana?.payer?.via).toBe('station-connector');
+      expect(solana?.payer?.available).toBeUndefined();
+      // And at that edge the station's own price applies, not the hub's.
+      expect(solana?.price).toBe('1000');
+    });
+
     it('says a channel with too little left in it cannot buy a packet', async () => {
       channelWith(HUB, 'evm:31337', 10n);
       const status = await store().status();

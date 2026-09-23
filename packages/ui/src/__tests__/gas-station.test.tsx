@@ -329,6 +329,38 @@ describe('buying the next chain’s gas', () => {
     expect(screen.queryByTestId('gas-quote-solana')).toBeNull();
   });
 
+  it('offers the channel that reaches the door, when a refusal taught it there is one', async () => {
+    stub.gas = {
+      ...buyable,
+      chains: buyable.chains.map((chain) =>
+        chain.verdict === 'buyable'
+          ? {
+              ...chain,
+              verdict: 'no_route' as const,
+              reason:
+                'The only door that channel can reach — g.toon.relay.gas — has already ' +
+                'refused a quote or an execute from this console, and a purchase needs both.',
+              openChannelWith: 'https://proxy.gas.test/ilp',
+            }
+          : chain
+      ),
+      checkedAt: '2026-09-22T00:00:00.000Z',
+    };
+    stubDaemon(stub);
+    await openFunds();
+
+    const panel = await screen.findByTestId('gas-buy-solana');
+    expect(panel.textContent).toContain('has already refused');
+    // There is no quote button on a dead end — but there IS the one thing that
+    // opens it, and it names the chain the channel would be opened on.
+    expect(within(panel).queryByRole('button', { name: /Get a quote/u })).toBeNull();
+    expect(
+      within(panel).getByRole('button', {
+        name: /Open a channel with the gas station’s connector on evm:84532/u,
+      })
+    ).toBeTruthy();
+  });
+
   it('keeps saying the first channel has no route through this', async () => {
     stub.gas = {
       state: 'ready',

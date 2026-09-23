@@ -700,6 +700,12 @@ export interface GasBuyChain {
   destination?: string;
   price?: string;
   lamports?: string;
+  /**
+   * A connector to open a channel with, when that is what stands between this
+   * account and a door the gas station publishes. Pass it as `connector` to
+   * `openChannel` (#92).
+   */
+  openChannelWith?: string;
 }
 
 export interface GasStationView {
