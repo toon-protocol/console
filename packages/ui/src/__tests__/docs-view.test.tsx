@@ -31,6 +31,7 @@ const HEALTH = {
     connectorUrl: 'https://connector.test/ilp',
     relayUrl: 'wss://relay.test',
     gatewayDomain: 'gw.devnet.toonprotocol.dev',
+    gatewayConnectorUrl: 'https://gateway.test/ilp',
     rpc: {},
     origin: 'built-in',
     configured: true,
