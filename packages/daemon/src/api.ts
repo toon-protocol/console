@@ -22,6 +22,7 @@ import type { ConsolePaths } from './paths.js';
 import { isConfigured, type NetworkProfile } from './profiles.js';
 import { UnknownProfileError, type ProfileStore } from './profile-store.js';
 import { RelayListError, type RelayMode } from './relay-list.js';
+import { RelayWriteError } from './relay-write.js';
 import { RemoteSignerError } from './remote-signer.js';
 import { SealingError } from './signer.js';
 import {
@@ -339,6 +340,13 @@ async function handleChainSeed(
 
   if (at('/api/chain-seed/acknowledge', 'POST')) return ok(seed.acknowledgeWarning());
   if (at('/api/chain-seed/mint', 'POST')) return ok(await seed.mint());
+
+  // The third step of #120's ordering, and the only thing that clears "not
+  // yet recoverable". It **spends money**: one paid relay write, at the price
+  // the connector quotes. A mint no longer publishes anything, so this is a
+  // route of its own rather than a flag on that one — a person decides to
+  // publish once they have a channel to publish from.
+  if (at('/api/chain-seed/publish', 'POST')) return ok(await seed.publish());
 
   if (at('/api/chain-seed/import', 'POST')) {
     const mnemonic = string(asRecord(body), 'mnemonic');
@@ -762,6 +770,20 @@ function accountProblem(error: unknown): ApiResponse {
   if (error instanceof RemoteSignerError) return problem(502, error.code, error.message);
   if (error instanceof SessionError) return problem(error.status, error.code, error.message);
   if (error instanceof RelayListError) return problem(400, error.code, error.message);
+  if (error instanceof RelayWriteError) {
+    // A paid write that did not land. The per-write detail travels with the
+    // problem — which route, what it cost anyway — because "it was not
+    // written" is only useful beside what the connector said. None of it comes
+    // from the request body.
+    return {
+      status: error.status,
+      body: {
+        error: error.code,
+        message: error.message,
+        ...(error.writes ? { relays: error.writes } : {}),
+      },
+    };
+  }
   if (error instanceof FundingError) return problem(error.status, error.code, error.message);
   if (error instanceof SealingError) return problem(409, error.code, error.message);
   if (error instanceof LeaseVaultError) {

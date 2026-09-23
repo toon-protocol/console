@@ -22,6 +22,11 @@ section: Console, Account, Signer, Chain Seed, Lease Vault) and `docs/adr/` (001
   `packages/daemon/src/profiles.test.ts` is the test that says so.
 - The daemon binds `127.0.0.1` only, and every `/api/*` route is behind the per-launch
   token.
+- **Every write to a relay is a paid TOON packet**, and `packages/daemon/src/relay-write.ts`
+  is the only writer (TOON_Network#120). A relay on this network refuses a plain websocket
+  write outright (`restricted: writes require ILP payment`), so a module that wants to
+  publish an event asks that writer for it and is told what it cost. Reads stay free over
+  NIP-01 in `relay-pool.ts`, which reads and only reads.
 - A private key never reaches a log line, an API response or the UI's storage. Key material
   lives in a **Signer** — a NIP-46 remote signer, or the local keystore in libsecret or the
   passphrase-encrypted file (ADR 0020). Write against `ConsoleSigner`, never against a key;

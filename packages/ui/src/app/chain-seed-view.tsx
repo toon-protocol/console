@@ -15,7 +15,7 @@ import type { ChainSeedState } from '@/hooks/use-chain-seed';
 import type { ChainSeedStatus } from '@/lib/daemon';
 
 /**
- * The Chain Seed: one card, four states.
+ * The Chain Seed: one card, five states.
  *
  * ADR 0020 in a screen. An account's payer keys on Base and Solana come from
  * one BIP-39 phrase sealed to its Nostr key, so what this card shows is where
@@ -28,6 +28,15 @@ import type { ChainSeedStatus } from '@/lib/daemon';
  * acknowledged once. It is not decoration: an account's whole balance follows
  * its Nostr key from here on, and that is the one sentence a person cannot be
  * allowed to find out later.
+ *
+ * The fifth state is the one TOON_Network#120 added, and it is the reason this
+ * card is loud in a way the others are not. A Chain Seed cannot pay for its
+ * own publication — the key that pays is derived from the seed — so between
+ * minting it and publishing it there is a window where one disk holds
+ * everything. In that window the card says **NOT YET RECOVERABLE**, in a
+ * panel, above the addresses it is inviting deposits to, with the steps out of
+ * it and the button that takes the last one. It is impossible to confuse with
+ * a published seed: there is no record to show, and the badge says so.
  */
 export function ChainSeedCard({ seed }: { seed: ChainSeedState }) {
   const status = seed.status;
@@ -49,7 +58,9 @@ export function ChainSeedCard({ seed }: { seed: ChainSeedState }) {
       <CardContent className="space-y-4">
         {seed.error && <Problem seed={seed} />}
 
-        {status.state === 'ready' ? (
+        {status.state === 'not_yet_recoverable' ? (
+          <NotYetRecoverable status={status} seed={seed} />
+        ) : status.state === 'ready' ? (
           <Ready status={status} seed={seed} />
         ) : status.state === 'unreadable' ? (
           <p className="text-sm">
@@ -71,6 +82,9 @@ function StateBadge({ status }: { status: ChainSeedStatus }) {
     return (
       <Badge variant="success">{status.origin === 'imported' ? 'imported' : 'minted'}</Badge>
     );
+  }
+  if (status.state === 'not_yet_recoverable') {
+    return <Badge variant="destructive">not yet recoverable</Badge>;
   }
   if (status.state === 'unreadable') return <Badge variant="destructive">not readable</Badge>;
   if (status.state === 'absent') return <Badge variant="warning">none yet</Badge>;
@@ -125,6 +139,76 @@ function Ready({ status, seed }: { status: ChainSeedStatus; seed: ChainSeedState
   );
 }
 
+/**
+ * The held state: the sentence, the steps, the addresses, and the one button.
+ *
+ * The sentence and the steps are the daemon's own words — it is a consequence
+ * of #120's ordering, not a piece of copy, and a console that phrased it
+ * differently here would be a second version of the same promise.
+ */
+function NotYetRecoverable({
+  status,
+  seed,
+}: {
+  status: ChainSeedStatus;
+  seed: ChainSeedState;
+}) {
+  const held = status.held;
+  const addresses = status.addresses;
+  const writes = status.writes;
+  return (
+    <div className="space-y-3">
+      <div
+        role="alert"
+        className="border-destructive/40 bg-destructive/10 space-y-2 rounded-lg border px-4 py-3 text-sm"
+      >
+        <p className="font-semibold">This Chain Seed is not yet recoverable</p>
+        <p>{held?.text}</p>
+        <ol className="list-decimal space-y-1 pl-5 text-xs">
+          {(held?.steps ?? []).map((step) => (
+            <li key={step}>{step}</li>
+          ))}
+        </ol>
+        {held?.lastAttempt && (
+          <p className="text-xs" data-testid="held-last-attempt">
+            The last attempt to publish it: {held.lastAttempt}
+          </p>
+        )}
+      </div>
+
+      {addresses && (
+        <div className="grid gap-3 sm:grid-cols-2">
+          <AddressBlock
+            chain="EVM (Base)"
+            address={addresses.evm.address}
+            path={addresses.evm.path}
+          />
+          <AddressBlock
+            chain="Solana"
+            address={addresses.solana.address}
+            path={addresses.solana.path}
+          />
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          size="sm"
+          disabled={seed.busy || !writes.ready}
+          onClick={() => void seed.publish()}
+        >
+          {seed.busy ? 'Publishing…' : 'Publish it — one paid write'}
+        </Button>
+        <p className="text-muted-foreground text-xs">
+          {writes.ready
+            ? `One packet on ${writes.destination}: ${writes.price} base units of this network’s settlement token, paid from this account’s own channel.`
+            : writes.blockedBy}
+        </p>
+      </div>
+    </div>
+  );
+}
+
 function AddressBlock({
   chain,
   address,
@@ -175,7 +259,9 @@ function NoSeedYet({ status, seed }: { status: ChainSeedStatus; seed: ChainSeedS
     <div className="space-y-4">
       <p className="text-sm">
         This account has no Chain Seed yet. Mint a new one, or import a phrase you already use
-        so that your chain keys match another wallet.
+        so that your chain keys match another wallet. Either way it is held here until you have
+        a payment channel to publish it from — a relay write is a paid packet, and the key that
+        pays for it comes from the seed.
       </p>
       <div className="flex flex-wrap gap-2">
         <Button size="sm" disabled={seed.busy} onClick={() => void seed.mint()}>
@@ -216,8 +302,8 @@ function NoSeedYet({ status, seed }: { status: ChainSeedStatus; seed: ChainSeedS
             className="border-input bg-background placeholder:text-muted-foreground focus-visible:ring-ring/50 w-full rounded-md border px-3 py-2 font-mono text-sm shadow-xs outline-none focus-visible:ring-[3px]"
           />
           <p className="text-muted-foreground text-xs">
-            Sealed to this account and published; it is never shown again and never leaves the
-            daemon in the clear.
+            Sealed to this account and held on this machine until you publish it; it is never
+            shown again and never leaves the daemon in the clear.
           </p>
           <Button size="sm" type="submit" disabled={seed.busy || mnemonic.trim() === ''}>
             {seed.busy ? 'Sealing…' : 'Import as the Chain Seed'}
@@ -229,31 +315,39 @@ function NoSeedYet({ status, seed }: { status: ChainSeedStatus; seed: ChainSeedS
 }
 
 /**
- * Where the seed goes, and the offer when the account has named nowhere.
+ * Where the seed is kept, and where a write is bought.
  *
- * The awkward corner of this ticket, on screen: an account with no NIP-65 list
- * has only the network profile's relay to write to, that relay charges for
- * writes, and the console cannot open a payment channel yet. So the card says
- * so before a person tries, and offers the way out — a relay list of their own.
+ * Two different questions since #120, and the card keeps them apart. A write
+ * goes to the relay this console can buy a packet to, at the price that
+ * connector quotes. A NIP-65 list is about READING: it says where this
+ * account's records are to be looked for, by this console on a new machine and
+ * by every other Nostr client. It is offered, not required.
  */
 function RelayList({ status, seed }: { status: ChainSeedStatus; seed: ChainSeedState }) {
   const [url, setUrl] = useState('');
   const list = status.relayList;
+  const writes = status.writes;
   const offering = list.state === 'none' && status.state !== 'signed_out';
 
   return (
     <div className="space-y-2 border-t pt-3">
       <p className="text-muted-foreground text-xs tracking-wide uppercase">Where it is kept</p>
+      <p className="text-sm">
+        {writes.ready
+          ? `Records are written to ${listOf(writes.relays)} as paid packets on ${writes.destination ?? 'this network’s relay route'} — ${writes.price} base units of the settlement token each, from this account’s own payment channel.`
+          : (writes.blockedBy ??
+            'This console cannot buy a relay write on this network right now.')}
+      </p>
       {list.state === 'present' ? (
         <p className="text-sm">
-          This account writes to {listOf(list.write)} (its NIP-65 relay list).
+          This account&rsquo;s NIP-65 list names {listOf(list.write)} to write to and{' '}
+          {listOf(list.read)} to read from; the console looks on all of them.
         </p>
       ) : (
         <p className="text-sm">
-          This account has published no NIP-65 relay list, so the only place the console can
-          write is {listOf(list.writeTargets)} — the network profile&rsquo;s relay, which
-          charges 1 µUSDC per write and cannot be paid until a payment channel exists. Name a
-          relay of your own instead.
+          This account has published no NIP-65 relay list. Publishing one says where its
+          records are to be looked for — on a new machine, and by any other Nostr client. It is
+          one paid write like any other.
         </p>
       )}
 

@@ -3,43 +3,43 @@ import { generateSecretKey, getPublicKey } from 'nostr-tools/pure';
 import { eventMatchesFilter } from './directory.testkit.js';
 import { isEventShape, tagValue, supersedes, type NostrEvent } from './nostr.js';
 import type { RelayConnection, RelayDialer, RelayHandlers } from './relay-pool.js';
+import {
+  RelayWriteError,
+  type RelayWriteReceipt,
+  type RelayWriteTargets,
+  type RelayWriter,
+} from './relay-write.js';
 import { LocalKeySigner, type AccountSigning } from './signer.js';
 
 /**
- * A relay that also takes writes, for the Chain Seed's tests.
+ * A relay, for the tests of everything that reads one and everything that
+ * writes to one.
  *
- * `directory.testkit.ts`'s fake answers a REQ and nothing else, which was the
- * whole of what reading the Provider Directory needed. Publishing needs the
- * other half, and it needs a relay that can be told to REFUSE — because the
- * refusal is the interesting case: a TOON relay answers an unpaid write with
- * `restricted: writes require ILP payment`, and how the console behaves when
- * every relay says that is the one behaviour this ticket most has to get
- * right.
+ * Two halves, and the split is the shape of the network rather than a
+ * convenience. `fakeRelayNetwork` is the READ side: a socket that answers a
+ * REQ, which is free and is all a relay's websocket does for a client.
+ * `fakePaidWriter` is the WRITE side: a stand-in for the console's one writer,
+ * which buys each write as a TOON packet (TOON_Network#120) — so a test drives
+ * a refusal by refusing a PAYMENT, which is the only way a write is refused
+ * now, and never by making a socket say `restricted`.
  *
  * Replaceable-event semantics are implemented for real (NIP-01: one event per
- * author, kind and `d`, later wins) so that a test can publish twice and see
+ * author, kind and `d`, later wins) so that a test can write twice and see
  * what a relay would actually then serve back.
  */
 
 export interface FakeRelayServer {
   readonly url: string;
   events: NostrEvent[];
-  /** Refuse every write with this `OK … false` message. */
-  refuse?: string;
-  /** Answer nothing at all. */
+  /** Answer nothing at all: a relay that is not there. */
   down?: boolean;
-  /** Take the write and say nothing, so a caller's deadline is exercised. */
-  silent?: boolean;
 }
 
 export function fakeRelayServer(
   url: string,
   options: Partial<Omit<FakeRelayServer, 'url'>> = {}
 ): FakeRelayServer {
-  // A relay that is down never gets as far as refusing anything, so `down`
-  // clears `refuse`: a test says one thing about a relay, not two.
-  const { down, ...rest } = options;
-  return { url, events: [], ...(down === true ? { down } : rest) };
+  return { url, events: [], ...options };
 }
 
 /** The dialer to hand a `ChainSeedStore` as its `dial`. */
@@ -71,16 +71,9 @@ export function fakeRelayNetwork(relays: readonly FakeRelayServer[]): RelayDiale
           handlers.onMessage(JSON.stringify(['EOSE', subscriptionId]));
           return;
         }
-        if (parsed[0] !== 'EVENT') return;
-        const event = parsed[1];
-        if (!isEventShape(event)) return;
-        if (relay.silent === true) return;
-        if (relay.refuse !== undefined) {
-          handlers.onMessage(JSON.stringify(['OK', event.id, false, relay.refuse]));
-          return;
-        }
-        store(relay, event);
-        handlers.onMessage(JSON.stringify(['OK', event.id, true, '']));
+        // Anything but a REQ is ignored, because a TOON relay's socket is for
+        // asking: a plain `EVENT` on it is refused `restricted: writes require
+        // ILP payment`, and the console no longer sends one (#120).
       },
       close() {
         // Nothing to release: the fake holds no socket.
@@ -90,7 +83,7 @@ export function fakeRelayNetwork(relays: readonly FakeRelayServer[]): RelayDiale
 }
 
 /** NIP-01 replacement, as a relay applies it to the 10000 and 30000 ranges. */
-function store(relay: FakeRelayServer, event: NostrEvent): void {
+export function store(relay: FakeRelayServer, event: NostrEvent): void {
   const addressable = event.kind >= 30_000 && event.kind < 40_000;
   const replaceable = event.kind >= 10_000 && event.kind < 20_000;
   if (!addressable && !replaceable) {
@@ -140,4 +133,110 @@ export async function publishRelayListEvent(
   })) as unknown as NostrEvent;
   for (const relay of relays) store(relay, event);
   return event;
+}
+
+/**
+ * The console's writer, without a connector, a chain or a channel.
+ *
+ * It behaves like the real one in the two ways the modules above depend on:
+ * a write that lands puts the event on the relay (so the next READ finds it,
+ * which is what recovery means) and reports a cost, and a write that does not
+ * land throws `RelayWriteError` and leaves the relay untouched.
+ *
+ * Refusals are set on the writer rather than on the relay, because that is
+ * where they happen now: no channel, a rejected claim, a connector that would
+ * not route. `cost` defaults to the devnet relay's own price for one write.
+ */
+export interface FakeWriter extends RelayWriter {
+  /** Every event it was asked to write, in order. */
+  readonly written: NostrEvent[];
+  /** Refuse every write from now on, as the writer's own error. */
+  refuse?: RelayWriteError;
+  /** What a write costs, in base units. */
+  cost: string;
+  /** Turn the whole writer off: `targets()` says why, `write()` throws it. */
+  blockedBy?: RelayWriteError;
+}
+
+export const FAKE_DESTINATION = 'g.toon.relay';
+export const FAKE_PAY_AT = 'https://connector.test/ilp';
+
+export function fakePaidWriter(
+  relay: FakeRelayServer | undefined,
+  options: { cost?: string } = {}
+): FakeWriter {
+  const writer: FakeWriter = {
+    written: [],
+    cost: options.cost ?? '1',
+    targets(): Promise<RelayWriteTargets> {
+      const blocked = writer.blockedBy ?? writer.refuse;
+      if (relay === undefined || blocked !== undefined) {
+        return Promise.resolve({
+          relays: relay === undefined ? [] : [relay.url],
+          ready: false,
+          blockedBy: blocked?.message ?? 'This network names no relay.',
+        });
+      }
+      return Promise.resolve({
+        relays: [relay.url],
+        destination: FAKE_DESTINATION,
+        payAt: FAKE_PAY_AT,
+        price: writer.cost,
+        chain: 'evm:31337',
+        channelId: '0xchannel',
+        ready: true,
+      });
+    },
+    write({ event, what }): Promise<RelayWriteReceipt> {
+      const blocked = writer.blockedBy ?? writer.refuse;
+      if (blocked !== undefined) return Promise.reject(blocked);
+      if (relay === undefined || relay.down === true) {
+        return Promise.reject(
+          new RelayWriteError(
+            'write_unconfirmed',
+            `${what} was NOT written: no relay answered.`,
+            504
+          )
+        );
+      }
+      if (!isEventShape(event)) {
+        return Promise.reject(
+          new RelayWriteError('invalid_event', 'That is not a signed Nostr event.', 400)
+        );
+      }
+      writer.written.push(event);
+      store(relay, event);
+      return Promise.resolve({
+        at: new Date(1_790_000_000_000).toISOString(),
+        what,
+        relays: [relay.url],
+        destination: FAKE_DESTINATION,
+        payAt: FAKE_PAY_AT,
+        chain: 'evm:31337',
+        channelId: '0xchannel',
+        cost: writer.cost,
+        writes: [
+          {
+            url: relay.url,
+            destination: FAKE_DESTINATION,
+            state: 'written',
+            cost: writer.cost,
+          },
+        ],
+      });
+    },
+  };
+  return writer;
+}
+
+/** A writer with nothing to pay from: every write refused, nothing written. */
+export function brokeWriter(relay?: FakeRelayServer): FakeWriter {
+  const writer = fakePaidWriter(relay);
+  writer.blockedBy = new RelayWriteError(
+    'no_channel',
+    'This account holds no payment channel with the connector at https://connector.test/ilp, ' +
+      'so a write to this network’s relay cannot be paid for.',
+    402
+  );
+  return writer;
 }

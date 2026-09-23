@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { DaemonError, daemon, type ChainSeedStatus, type PublishOutcome } from '@/lib/daemon';
+import {
+  DaemonError,
+  daemon,
+  type ChainSeedStatus,
+  type RelayWriteOutcome,
+} from '@/lib/daemon';
 
 /**
  * The account's Chain Seed, from the window's side.
@@ -26,12 +31,14 @@ export interface ChainSeedState {
   readonly error?: string;
   readonly errorCode?: string;
   /** Per-relay detail when a publish persisted nothing. */
-  readonly refusals?: PublishOutcome[];
+  readonly refusals?: RelayWriteOutcome[];
   reload(): void;
   clearError(): void;
   refresh(relays?: string[]): Promise<boolean>;
   acknowledge(): Promise<boolean>;
   mint(): Promise<boolean>;
+  /** Publishes the held record. One paid write, and the end of "held". */
+  publish(): Promise<boolean>;
   importMnemonic(mnemonic: string): Promise<boolean>;
   publishRelayList(
     relays: { url: string; mode?: 'read' | 'write' | 'both' }[]
@@ -44,7 +51,7 @@ export function useChainSeed(options: { pubkey?: string | undefined } = {}): Cha
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [errorCode, setErrorCode] = useState<string>();
-  const [refusals, setRefusals] = useState<PublishOutcome[]>();
+  const [refusals, setRefusals] = useState<RelayWriteOutcome[]>();
   const alive = useRef(true);
 
   useEffect(() => {
@@ -101,6 +108,7 @@ export function useChainSeed(options: { pubkey?: string | undefined } = {}): Cha
     refresh: (relays) => run(() => daemon.refreshChainSeed(relays)),
     acknowledge: () => run(() => daemon.acknowledgeCustody()),
     mint: () => run(() => daemon.mintChainSeed()),
+    publish: () => run(() => daemon.publishChainSeed()),
     importMnemonic: (mnemonic) => run(() => daemon.importChainSeed(mnemonic)),
     publishRelayList: (relays) => run(() => daemon.publishRelayList(relays)),
   };

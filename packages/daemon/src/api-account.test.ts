@@ -1,3 +1,4 @@
+import { fakePaidWriter } from './chain-seed.testkit.js';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -41,12 +42,14 @@ describe('the account routes', () => {
         signer: () => session.signingPort(),
         seedRelays: () => [],
         cache: new InMemoryChainSeedCache(),
+        writer: () => fakePaidWriter(undefined),
       }),
       funding: fundingStoreFor({
         chainSeed: new ChainSeedStore({
           signer: () => undefined,
           seedRelays: () => [],
           cache: new InMemoryChainSeedCache(),
+          writer: () => fakePaidWriter(undefined),
         }),
         paths,
         chains: fakeChainPort(),

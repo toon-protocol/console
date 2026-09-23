@@ -12,6 +12,7 @@ import { activeProfileFilePath, consolePaths } from './paths.js';
 import { ProfileStore } from './profile-store.js';
 import { ChainSeedStore } from './chain-seed.js';
 import { InMemoryChainSeedCache } from './chain-seed-cache.js';
+import { fakePaidWriter } from './chain-seed.testkit.js';
 import { fakeChainPort, fundingStoreFor } from './funding.testkit.js';
 import { idleLeases } from './lease.testkit.js';
 import { startServer, type RunningServer } from './server.js';
@@ -61,12 +62,14 @@ describe('the daemon server', () => {
         signer: () => session.signingPort(),
         seedRelays: () => [],
         cache: new InMemoryChainSeedCache(),
+        writer: () => fakePaidWriter(undefined),
       }),
       funding: fundingStoreFor({
         chainSeed: new ChainSeedStore({
           signer: () => undefined,
           seedRelays: () => [],
           cache: new InMemoryChainSeedCache(),
+          writer: () => fakePaidWriter(undefined),
         }),
         paths,
         chains: fakeChainPort(),

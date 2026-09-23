@@ -1,13 +1,14 @@
 import type { LeaseVaultCache } from './lease-vault-cache.js';
 import { supersedes, tagValue, type NostrEvent } from './nostr.js';
 import { NO_RELAY_LIST, readRelayListOf, type RelayList } from './relay-list.js';
+import { queryRelays, type RelayDialer } from './relay-pool.js';
 import {
-  isPersisted,
-  publishToRelays,
-  queryRelays,
-  type PublishOutcome,
-  type RelayDialer,
-} from './relay-pool.js';
+  RelayWriteError,
+  type RelayWriteOutcome,
+  type RelayWriteReceipt,
+  type RelayWriteTargets,
+  type RelayWriter,
+} from './relay-write.js';
 import { SealingError, type AccountSigning } from './signer.js';
 import { HEX_32, type SpawnImage, type SpawnPort } from './spawn-content.js';
 
@@ -16,30 +17,39 @@ import { HEX_32, type SpawnImage, type SpawnPort } from './spawn-content.js';
  *
  * One NIP-78 app-data event per lease — kind 30078, `d` =
  * `toon-console/lease/<workload id>` — with its contents NIP-44-sealed to the
- * account itself and published to the account's NIP-65 **write** relays, with
- * a local cache. An account that signs in on a new machine gets its leases
- * back, because the one thing that cannot be recovered any other way is in
- * them: the lease's **Root Secret**. Lose it and the lease is lost — not
- * merely inaccessible, lost, because nothing in the protocol can produce the
- * Continuation Token again (spec §6.1.1).
+ * account itself and published as a **paid TOON packet** on the account's
+ * relay, with a local cache. An account that signs in on a new machine gets
+ * its leases back, because the one thing that cannot be recovered any other
+ * way is in them: the lease's **Root Secret**. Lose it and the lease is lost —
+ * not merely inaccessible, lost, because nothing in the protocol can produce
+ * the Continuation Token again (spec §6.1.1).
  *
  * Four rules shape this module.
  *
+ * **Every write here is bought.** The record, its confirmation, its retraction
+ * and the NIP-09 deletion beside it all go through `relay-write.ts`, which is
+ * the console's one writer (TOON_Network#120). A vault write costs what the
+ * connector quotes for a relay write — one µUSDC on devnet's relay, against a
+ * lease that costs an interval — and the cost of each is reported, because a
+ * person is entitled to know what their record-keeping costs them.
+ *
  * **The record is written BEFORE the spawn is sent.** That ordering is the
- * whole point of the vault, and it is the one this ticket is measured against.
- * The dangerous window is between minting a Root Secret and learning what the
- * provider did with it: a spawn that succeeds and whose answer is then lost —
- * a dropped socket, a killed daemon — has bought a running workload whose
- * secret exists nowhere. Publishing first closes that window. It costs one
- * relay write against a lease that may never start, which `retract` below
- * cleans up, and that is the cheaper side of the trade by a wide margin.
+ * whole point of the vault. The dangerous window is between minting a Root
+ * Secret and learning what the provider did with it: a spawn that succeeds and
+ * whose answer is then lost — a dropped socket, a killed daemon — has bought a
+ * running workload whose secret exists nowhere. Publishing first closes that
+ * window. It costs one relay write against a lease that may never start, which
+ * `retract` below cleans up, and that is the cheaper side of the trade by a
+ * wide margin.
  *
  * **A record that no relay took is not a vault record.** `publish` refuses
- * rather than caching quietly, exactly as the Chain Seed does, and the spawn
- * it was for is then never sent. A console that pretended otherwise would be
- * telling a person their lease follows them when it does not, and the lie
- * would surface on the day the disk died. The one exception is a lease marked
- * **local only**, where the person has said so.
+ * rather than caching quietly, and the spawn it was for is then never sent. A
+ * console that pretended otherwise would be telling a person their lease
+ * follows them when it does not, and the lie would surface on the day the disk
+ * died. The one exception is a lease marked **local only** — which since #120
+ * is a privacy choice and nothing else: an account with a channel can always
+ * vault a lease, so choosing not to is choosing to keep the workload id off
+ * even its own relay (ADR 0021), at the price of one disk holding the secret.
  *
  * **Nothing here ever hands a Root Secret out.** `list()` returns views with
  * no secret in them; the secret goes in through `publish` and comes out only
@@ -138,7 +148,15 @@ export interface VaultedLease {
   /** The Template this spawn's values came from, when one did (§8.3, #94). */
   readonly template?: string | undefined;
   readonly created_at: string;
-  /** Marked local only: this record was never published anywhere (ADR 0021). */
+  /**
+   * Marked local only: this record was never published anywhere (ADR 0021).
+   *
+   * A PRIVACY choice since #120, and nothing else. It used to double as the
+   * way out for an account that could not pay for a relay write; an account
+   * with a channel can always vault a lease now, so choosing local-only is
+   * choosing to keep this workload id off even the account's own relay, and
+   * accepting that one disk holds the Root Secret.
+   */
   readonly local_only?: boolean | undefined;
   readonly role?: string | undefined;
   readonly expires_at?: number | undefined;
@@ -182,17 +200,21 @@ export interface VaultPublishReport {
   readonly at: string;
   readonly workloadId: string;
   readonly what: 'stage' | 'confirm' | 'retract';
-  readonly relays: readonly PublishOutcome[];
+  readonly relays: readonly RelayWriteOutcome[];
   readonly accepted: readonly string[];
+  /** What these writes cost, in base units of the settlement token. */
+  readonly cost?: string | undefined;
+  readonly destination?: string | undefined;
+  readonly payAt?: string | undefined;
+  readonly chain?: string | undefined;
 }
 
 export interface LeaseVaultStatus {
   readonly state: 'signed_out' | 'unknown' | 'ready';
   readonly pubkey?: string | undefined;
   readonly leases: readonly LeaseView[];
-  /** Where a vault record would go right now, and why there. */
-  readonly writeTargets: readonly string[];
-  readonly writeTargetSource: 'nip65' | 'profile' | 'none';
+  /** Where a vault record would go right now, what it costs, and what stops it. */
+  readonly writes: RelayWriteTargets;
   /** Records found that this signer could not open. Never silently zero. */
   readonly unreadable: number;
   readonly lastPublish?: VaultPublishReport | undefined;
@@ -202,12 +224,12 @@ export interface LeaseVaultStatus {
 export class LeaseVaultError extends Error {
   readonly code: string;
   readonly status: number;
-  readonly relays?: readonly PublishOutcome[];
+  readonly relays?: readonly RelayWriteOutcome[];
   constructor(
     code: string,
     message: string,
     status = 400,
-    relays?: readonly PublishOutcome[]
+    relays?: readonly RelayWriteOutcome[]
   ) {
     super(message);
     this.name = 'LeaseVaultError';
@@ -223,6 +245,8 @@ export interface LeaseVaultDeps {
   /** The active network profile's relays: the seed for NIP-65 discovery. */
   readonly seedRelays: () => readonly string[];
   readonly cache: LeaseVaultCache;
+  /** The console's one writer (#120). Every write below goes through it. */
+  readonly writer: RelayWriter;
   readonly dial?: RelayDialer | undefined;
   readonly timeoutMs?: number | undefined;
   readonly now?: (() => Date) | undefined;
@@ -245,6 +269,8 @@ export class LeaseVault {
   #relayList: RelayList | undefined;
   #unreadable = 0;
   #lastPublish: VaultPublishReport | undefined;
+  /** The last answer from the writer, so `status()` can stay synchronous. */
+  #writes: RelayWriteTargets = UNREAD_TARGETS;
 
   constructor(deps: LeaseVaultDeps) {
     this.#deps = deps;
@@ -257,19 +283,16 @@ export class LeaseVault {
       return {
         state: 'signed_out',
         leases: [],
-        writeTargets: [],
-        writeTargetSource: 'none',
+        writes: this.#writes,
         unreadable: 0,
         checkedAt,
       };
     }
-    const targets = this.#writeTargets();
     return {
       state: this.#looked ? 'ready' : 'unknown',
       pubkey: signer.pubkey,
       leases: this.list(),
-      writeTargets: targets.relays,
-      writeTargetSource: targets.source,
+      writes: this.#writes,
       unreadable: this.#unreadable,
       ...(this.#lastPublish ? { lastPublish: this.#lastPublish } : {}),
       checkedAt,
@@ -304,6 +327,7 @@ export class LeaseVault {
   async refresh(): Promise<LeaseVaultStatus> {
     const signer = this.#require();
     this.#relayList = await this.#readRelayList(signer.pubkey);
+    this.#writes = await this.#deps.writer.targets();
 
     const cached = this.#deps.cache.read(signer.pubkey);
     const candidates = new Map<string, { event: NostrEvent; source: 'cache' | 'relays' }[]>();
@@ -360,37 +384,33 @@ export class LeaseVault {
   }
 
   /**
-   * Where a vault record would go right now — having actually LOOKED.
+   * Where a vault record would go right now, what it would cost, and what
+   * stops it — having actually ASKED.
    *
    * The same shape of care as `FundingStore`'s "look for a seed before saying
-   * there is none". A vault that has not read the account's NIP-65 list yet
-   * would answer with the network profile's relay, which on every TOON network
-   * is a relay that charges for writes — so a preflight would tell a person
-   * their Root Secret is about to be refused, and a spawn would refuse it, for
-   * an account that has a perfectly good relay of its own. One relay read,
-   * cached for the session, is the whole fix.
+   * there is none", and it is what makes a spawn's preflight honest: a person
+   * is told that the Root Secret's write has nothing to pay from BEFORE they
+   * fill in a form, rather than after a lease is bought and the record refused
+   * (TOON_Network#115).
    */
-  async targets(): Promise<{
-    relays: readonly string[];
-    source: 'nip65' | 'profile' | 'none';
-  }> {
+  async targets(): Promise<RelayWriteTargets> {
     const signer = this.#signerOrReset();
-    if (!signer) return { relays: [], source: 'none' };
-    await this.#ensureRelayList(signer.pubkey);
-    return this.#writeTargets();
+    if (!signer) return UNREAD_TARGETS;
+    this.#writes = await this.#deps.writer.targets();
+    return this.#writes;
   }
 
   /**
-   * Seal, sign, publish — and only then let the caller spend anything.
+   * Seal, sign, buy the write — and only then let the caller spend anything.
    *
-   * Returns once some relay has answered `OK … true`, or throws. A local-only
-   * lease skips the relays and is still sealed and signed, so the file on disk
-   * is the same shape and is no more readable than the relay's copy would have
-   * been.
+   * Returns once the relay holds the record, or throws. A local-only lease
+   * skips the relay and is still sealed and signed, so the file on disk is the
+   * same shape and is no more readable than the relay's copy would have been;
+   * it is also the one path here that costs nothing.
    *
-   * @throws {LeaseVaultError} when nothing took it. Nothing is cached, and the
-   *   caller must not go on to spawn: the secret would be lost on the next
-   *   restart.
+   * @throws {LeaseVaultError} when the write did not land. Nothing is cached,
+   *   and the caller must not go on to spawn: the secret would be lost on the
+   *   next restart.
    */
   async publish(record: VaultedLease): Promise<LeaseView> {
     const signer = this.#require();
@@ -426,8 +446,9 @@ export class LeaseVault {
       // `d` is public. It says that this account keeps a console lease record
       // and gives its workload id; the id is what ADR 0016 took off PUBLIC
       // relays, and ADR 0021 weighs putting it on the account's OWN relays
-      // against losing every lease with one disk. Local-only is the way out
-      // for an account that wants no such trail.
+      // against losing every lease with one disk. Local-only is the choice for
+      // an account that wants no such trail — a privacy choice, freely made,
+      // not a way round a write it could not pay for (#120).
       tags: [['d', d]],
       content,
     })) as unknown as NostrEvent;
@@ -443,46 +464,27 @@ export class LeaseVault {
       });
     }
 
-    await this.#ensureRelayList(signer.pubkey);
-    const targets = this.#writeTargets();
-    if (targets.relays.length === 0) {
-      throw new LeaseVaultError(
-        'no_relay',
-        'There is nowhere to publish this lease record. This account has published no NIP-65 ' +
-          'relay list, and the active network profile names no relay either — so the Root ' +
-          'Secret would exist on this disk alone, and losing the disk would lose the lease. ' +
-          'Publish a relay list naming a relay this account can write to, or mark this lease ' +
-          '"local only" and accept that it lives on one machine.',
-        409
-      );
-    }
-
-    const result = await publishToRelays({
-      event: signed,
-      relays: targets.relays,
-      ...(this.#deps.dial === undefined ? {} : { dial: this.#deps.dial }),
-      ...(this.#deps.timeoutMs === undefined ? {} : { timeoutMs: this.#deps.timeoutMs }),
-    });
-    this.#lastPublish = {
-      at: this.#at().toISOString(),
-      workloadId: record.workload_id,
-      what: record.state === 'live' ? 'confirm' : 'stage',
-      relays: result.relays,
-      accepted: result.accepted,
-    };
-    if (result.accepted.length === 0) throw notPersisted(result.relays, targets.source);
+    const what = record.state === 'live' ? ('confirm' as const) : ('stage' as const);
+    const receipt = await this.#write(signed, `This lease's vault record`).catch(
+      (error: unknown) => {
+        if (error instanceof RelayWriteError) throw notPersisted(error);
+        throw error;
+      }
+    );
+    this.#lastPublish = reportOf(record.workload_id, what, receipt);
+    this.#writes = await this.#deps.writer.targets();
 
     this.#deps.cache.write(signer.pubkey, d, {
       event: signed,
-      relays: result.accepted,
+      relays: receipt.relays,
       published: true,
     });
-    this.#deps.cache.rememberRelays(signer.pubkey, result.accepted);
+    this.#deps.cache.rememberRelays(signer.pubkey, receipt.relays);
     return this.#hold(d, {
       record,
       event: signed,
       source: 'relays',
-      relays: result.accepted,
+      relays: receipt.relays,
       published: true,
     });
   }
@@ -560,9 +562,6 @@ export class LeaseVault {
     if (!signer || !held) return { retracted: true };
     if (!held.published) return { retracted: true };
 
-    const relays = held.relays.length > 0 ? held.relays : this.#writeTargets().relays;
-    if (relays.length === 0) return { retracted: true };
-
     try {
       const tombstone: VaultedLease = {
         ...held.record,
@@ -571,14 +570,17 @@ export class LeaseVault {
         retracted_because: because,
       };
       const sealed = await signer.sealToSelf(JSON.stringify(tombstone));
-      const replacement = await signer.sign({
+      const replacement = (await signer.sign({
         kind: LEASE_VAULT_KIND,
         created_at: this.#after(held.event),
         tags: [['d', d]],
         content: sealed,
-      });
-      const first = await this.#publishRaw(replacement, relays);
-      const deletion = await signer.sign({
+      })) as unknown as NostrEvent;
+      // Two paid writes, and the first is the one that matters: a caller that
+      // sees `retracted: true` has been told that every relay serving this `d`
+      // now serves a tombstone under it.
+      const first = await this.#write(replacement, 'This lease record’s retraction');
+      const deletion = (await signer.sign({
         kind: DELETION_KIND,
         created_at: this.#seconds(),
         tags: [
@@ -586,22 +588,39 @@ export class LeaseVault {
           ['k', String(LEASE_VAULT_KIND)],
         ],
         content: 'the spawn this record was written for was refused',
-      });
-      const second = await this.#publishRaw(deletion, relays);
+      })) as unknown as NostrEvent;
+      // Best effort, and paid for separately: a relay that honours NIP-09
+      // drops the record altogether, and one that does not still serves the
+      // tombstone. A deletion that cannot be bought is not worth failing a
+      // retraction over.
+      const second = await this.#write(deletion, 'This lease record’s deletion').catch(
+        () => undefined
+      );
       this.#lastPublish = {
         at: this.#at().toISOString(),
         workloadId,
         what: 'retract',
-        relays: [...first.relays, ...second.relays],
-        accepted: [...new Set([...first.accepted, ...second.accepted])],
+        relays: [...first.writes, ...(second?.writes ?? [])],
+        accepted: [...new Set([...first.relays, ...(second?.relays ?? [])])],
+        ...(totalCost([first, second]) === undefined
+          ? {}
+          : { cost: totalCost([first, second]) }),
+        destination: first.destination,
+        payAt: first.payAt,
+        chain: first.chain,
       };
-      return first.accepted.length > 0
-        ? { retracted: true }
-        : {
-            retracted: false,
-            reason: `no relay took the retraction: ${describeRefusals(first.relays)}`,
-          };
+      return { retracted: true };
     } catch (error) {
+      const writes = error instanceof RelayWriteError ? error.writes : undefined;
+      if (writes !== undefined) {
+        this.#lastPublish = {
+          at: this.#at().toISOString(),
+          workloadId,
+          what: 'retract',
+          relays: writes,
+          accepted: [],
+        };
+      }
       return {
         retracted: false,
         reason: error instanceof Error ? error.message : String(error),
@@ -617,6 +636,7 @@ export class LeaseVault {
     this.#relayList = undefined;
     this.#unreadable = 0;
     this.#lastPublish = undefined;
+    this.#writes = UNREAD_TARGETS;
   }
 
   #hold(d: string, entry: OpenLease): LeaseView {
@@ -625,37 +645,9 @@ export class LeaseVault {
     return toView(entry);
   }
 
-  async #publishRaw(event: unknown, relays: readonly string[]) {
-    return publishToRelays({
-      event,
-      relays,
-      ...(this.#deps.dial === undefined ? {} : { dial: this.#deps.dial }),
-      ...(this.#deps.timeoutMs === undefined ? {} : { timeoutMs: this.#deps.timeoutMs }),
-    });
-  }
-
-  /**
-   * Where a vault record goes: the account's NIP-65 WRITE relays, or the
-   * network profile's when it has named none.
-   *
-   * The same policy as the Chain Seed's, and the same awkward second case: the
-   * profile's relay is a TOON relay, which prices its writes at 1 µUSDC and
-   * refuses an unpaid one outright. `notPersisted` says so in the words the
-   * relay used, rather than caching the record and calling it published.
-   */
-  #writeTargets(): { relays: readonly string[]; source: 'nip65' | 'profile' | 'none' } {
-    const write = this.#relayList?.write ?? [];
-    if (write.length > 0) return { relays: write, source: 'nip65' };
-    const seeds = this.#deps.seedRelays().filter((url) => url.length > 0);
-    return seeds.length > 0
-      ? { relays: seeds, source: 'profile' }
-      : { relays: [], source: 'none' };
-  }
-
-  /** Read the account's NIP-65 list once per session, on first need. */
-  async #ensureRelayList(pubkey: string): Promise<void> {
-    if (this.#relayList !== undefined) return;
-    this.#relayList = await this.#readRelayList(pubkey);
+  /** One paid write. There is no other kind here (TOON_Network#120). */
+  async #write(event: NostrEvent, what: string): Promise<RelayWriteReceipt> {
+    return this.#deps.writer.write({ event, what });
   }
 
   async #readRelayList(pubkey: string): Promise<RelayList> {
@@ -811,51 +803,65 @@ function toView(held: OpenLease): LeaseView {
   };
 }
 
-/** The paid-relay seam, spelled out rather than swallowed (as in #89). */
-function notPersisted(
-  relays: readonly PublishOutcome[],
-  source: 'nip65' | 'profile' | 'none'
-): LeaseVaultError {
-  const paid = relays.filter(looksLikePaidWrite);
-  if (paid.length > 0 && paid.length === relays.length) {
-    const where =
-      source === 'profile'
-        ? 'This account has published no NIP-65 relay list, so the only relay the console had ' +
-          'to try was the network profile’s — and that one charges for writes.'
-        : 'Every relay this account writes to charges for writes.';
-    return new LeaseVaultError(
-      'relay_payment_required',
-      `The lease record was NOT published, so the spawn was not sent: a Root Secret that only ` +
-        `one disk holds is not recoverable, and paying for a lease whose secret could vanish is ` +
-        `worse than not spawning. ${where} ${describeRefusals(relays)} A paid write costs ` +
-        `1 µUSDC from a payment channel. Publish a relay list naming a relay this account can ` +
-        `write to for free, or mark this lease "local only" and accept one disk holding it.`,
-      402,
-      relays
-    );
+/** Before the writer has been asked anything. Never mistaken for "ready". */
+const UNREAD_TARGETS: RelayWriteTargets = {
+  relays: [],
+  ready: false,
+  blockedBy: 'Nothing has asked this network’s connector what a relay write costs yet.',
+};
+
+/** One paid write, as the status reports it. The cost is never recomputed. */
+function reportOf(
+  workloadId: string,
+  what: VaultPublishReport['what'],
+  receipt: RelayWriteReceipt
+): VaultPublishReport {
+  return {
+    at: receipt.at,
+    workloadId,
+    what,
+    relays: receipt.writes,
+    accepted: receipt.relays,
+    ...(receipt.cost === undefined ? {} : { cost: receipt.cost }),
+    destination: receipt.destination,
+    payAt: receipt.payAt,
+    chain: receipt.chain,
+  };
+}
+
+/** What several writes cost together, when every one of them reported one. */
+function totalCost(receipts: readonly (RelayWriteReceipt | undefined)[]): string | undefined {
+  let sum = 0n;
+  let seen = false;
+  for (const receipt of receipts) {
+    if (receipt?.cost === undefined) continue;
+    try {
+      sum += BigInt(receipt.cost);
+      seen = true;
+    } catch {
+      return undefined;
+    }
   }
+  return seen ? sum.toString() : undefined;
+}
+
+/**
+ * A vault write that did not land, told as what it means for the spawn.
+ *
+ * The write is paid for now, so the interesting refusals are a payment's
+ * refusals — no channel, a rejected claim, a connector that would not route —
+ * and the writer has already said which in its own words. What this adds is
+ * the consequence: the spawn was not sent, so nothing else was paid, and the
+ * Root Secret was dropped unused.
+ */
+function notPersisted(error: RelayWriteError): LeaseVaultError {
   return new LeaseVaultError(
-    'not_persisted',
-    `The lease record was NOT published, so the spawn was not sent and nothing was paid. ` +
-      `${describeRefusals(relays)} Nothing was lost: the Root Secret was dropped unused, and ` +
-      `no lease was bought with it.`,
-    502,
-    relays
+    error.code === 'no_channel' ? 'relay_payment_required' : error.code,
+    `${error.message} The spawn was NOT sent: a Root Secret that only one disk holds is not ` +
+      `recoverable, and paying for a lease whose secret could vanish is worse than not ` +
+      `spawning. The secret was dropped unused and no lease was bought with it. Mark this ` +
+      `lease "local only" if you would rather one machine held it.`,
+    error.status,
+    error.writes
   );
-}
-
-/** A refusal that is really a price. */
-function looksLikePaidWrite(outcome: PublishOutcome): boolean {
-  if (outcome.state !== 'rejected') return false;
-  return /pay|paid|payment|invoice|ilp|usdc|sats?\b|price/iu.test(outcome.reason ?? '');
-}
-
-function describeRefusals(relays: readonly PublishOutcome[]): string {
-  if (relays.length === 0) return 'No relay was tried.';
-  return relays
-    .filter((outcome) => !isPersisted(outcome))
-    .map(
-      (outcome) => `${outcome.url} ${outcome.state}: ${outcome.reason ?? 'no reason given'}.`
-    )
-    .join(' ');
 }

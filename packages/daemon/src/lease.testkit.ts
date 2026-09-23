@@ -1,5 +1,6 @@
 import { ChainSeedStore } from './chain-seed.js';
 import { InMemoryChainSeedCache } from './chain-seed-cache.js';
+import { fakePaidWriter, type FakeWriter } from './chain-seed.testkit.js';
 import type { ConnectorHealth, SettlementView } from './connector-health.js';
 import { channelStoreFor } from './channel-store.js';
 import type { DirectoryResult, ProviderView } from './directory.js';
@@ -14,6 +15,7 @@ import { InMemoryLeaseVaultCache, type LeaseVaultCache } from './lease-vault-cac
 import type { ConsolePaths } from './paths.js';
 import { SANDBOX, type NetworkProfile } from './profiles.js';
 import type { RelayDialer } from './relay-pool.js';
+import type { FakeRelayServer } from './chain-seed.testkit.js';
 import type { AccountSigning } from './signer.js';
 
 /**
@@ -140,11 +142,13 @@ export function connectorHealth(input: {
   endpoint: string;
   routes?: readonly { prefix: string; price: string }[];
   settlements?: readonly SettlementView[];
+  /** What this node answers for itself — where a relay write is bought (#120). */
+  ilpAddresses?: readonly string[];
 }): ConnectorHealth {
   return {
     state: 'ok',
     endpoint: input.endpoint,
-    ilpAddresses: ['g.toon.relay'],
+    ilpAddresses: input.ilpAddresses ?? ['g.toon.relay'],
     settlements: input.settlements ?? [
       {
         chain: 'evm:31337',
@@ -189,6 +193,8 @@ export interface LeaseFixture {
   readonly leases: LeaseStore;
   readonly provider: FakeProviderPort;
   readonly cache: LeaseVaultCache;
+  /** The console's writer, faked: every vault write is bought through it. */
+  readonly writer: FakeWriter;
 }
 
 /** A vault and a lease store over fakes, with everything else supplied. */
@@ -198,19 +204,27 @@ export function leaseFixture(input: {
   paths: ConsolePaths;
   dial: RelayDialer;
   relays: readonly string[];
+  /** The relay a paid write lands on, so a later READ finds what was written. */
+  relayServer?: FakeRelayServer;
   profile?: NetworkProfile;
   directory?: () => Promise<DirectoryResult>;
   health?: (profile: NetworkProfile) => Promise<ConnectorHealth>;
   provider?: FakeProviderPort;
   cache?: LeaseVaultCache;
+  writer?: FakeWriter;
   now?: () => Date;
 }): LeaseFixture {
   const profile = input.profile ?? SANDBOX;
   const cache = input.cache ?? new InMemoryLeaseVaultCache();
+  // A writer that can pay, unless a test says otherwise: "this account cannot
+  // buy a relay write" is a case of its own, and every other case would
+  // otherwise silently become it.
+  const writer = input.writer ?? fakePaidWriter(input.relayServer);
   const vault = new LeaseVault({
     signer: () => input.account,
     seedRelays: () => input.relays,
     cache,
+    writer,
     dial: input.dial,
     timeoutMs: 200,
     ...(input.now === undefined ? {} : { now: input.now }),
@@ -239,7 +253,7 @@ export function leaseFixture(input: {
     paths: input.paths,
     ...(input.now === undefined ? {} : { now: input.now }),
   });
-  return { vault, leases, provider, cache };
+  return { vault, leases, provider, cache, writer };
 }
 
 /** A well-formed spawn of the image the fleet's smokes use. */
@@ -271,11 +285,13 @@ export function idleLeases(paths: ConsolePaths): {
     signer: () => undefined,
     seedRelays: () => [],
     cache: new InMemoryChainSeedCache(),
+    writer: () => fakePaidWriter(undefined),
   });
   const vault = new LeaseVault({
     signer: () => undefined,
     seedRelays: () => [],
     cache: new InMemoryLeaseVaultCache(),
+    writer: fakePaidWriter(undefined),
   });
   const leases = new LeaseStore({
     profile: () => SANDBOX,

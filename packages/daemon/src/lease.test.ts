@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ChainSeedStore } from './chain-seed.js';
 import { InMemoryChainSeedCache } from './chain-seed-cache.js';
 import {
+  fakePaidWriter,
   fakeAccount,
   fakeRelayNetwork,
   fakeRelayServer,
@@ -84,6 +85,7 @@ describe('spawning a workload', () => {
       paths,
       dial: fakeRelayNetwork([relay]),
       relays: [RELAY],
+      relayServer: relay,
       provider: port,
       cache: new InMemoryLeaseVaultCache(),
       ...(input.directory === undefined ? {} : { directory: input.directory }),
@@ -139,6 +141,7 @@ describe('spawning a workload', () => {
       signer: () => account,
       seedRelays: () => [RELAY],
       cache: new InMemoryChainSeedCache(),
+      writer: () => fakePaidWriter(relay),
       dial: fakeRelayNetwork([relay]),
       timeoutMs: 200,
     });
@@ -395,12 +398,14 @@ describe('spawning a workload', () => {
           signer: () => stranger,
           seedRelays: () => [RELAY],
           cache: new InMemoryChainSeedCache(),
+          writer: () => fakePaidWriter(relay),
           dial: fakeRelayNetwork([relay]),
           timeoutMs: 200,
         }),
         paths,
         dial: fakeRelayNetwork([relay]),
         relays: [RELAY],
+        relayServer: relay,
         provider: port,
         cache: new InMemoryLeaseVaultCache(),
       });
@@ -425,6 +430,7 @@ describe('spawning a workload', () => {
         paths,
         dial: fakeRelayNetwork([relay]),
         relays: [RELAY],
+        relayServer: relay,
         provider: port,
         cache: new InMemoryLeaseVaultCache(),
       });

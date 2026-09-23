@@ -425,31 +425,70 @@ export interface RelayListView {
   read: string[];
   write: string[];
   publishedAt?: string;
-  writeTargets: string[];
-  writeTargetSource: 'nip65' | 'profile' | 'none';
 }
 
-export interface PublishOutcome {
+/**
+ * Where a paid write goes, what it costs, and what stops it
+ * (TOON_Network#120).
+ *
+ * Every relay write the console makes is a TOON packet paid from the
+ * account's own channel, so this is the shape of "can I write at all" —
+ * and every figure in it is one the connector quoted, never one computed
+ * here.
+ */
+export interface RelayWriteTargets {
+  relays: string[];
+  destination?: string;
+  payAt?: string;
+  /** Base units per write, verbatim from the connector. */
+  price?: string;
+  chain?: string;
+  channelId?: string;
+  ready: boolean;
+  blockedBy?: string;
+}
+
+export interface RelayWriteOutcome {
   url: string;
-  state: 'accepted' | 'rejected' | 'timeout' | 'failed';
+  destination: string;
+  state: 'written' | 'refused' | 'unknown';
   reason?: string;
   code?: string;
+  /** What it cost — present on a refusal too: a refusal is billed. */
+  cost?: string;
 }
 
 export interface PublishReport {
   at: string;
   what: 'chain-seed' | 'relay-list';
-  relays: PublishOutcome[];
+  relays: RelayWriteOutcome[];
   accepted: string[];
+  cost?: string;
+  destination?: string;
+  payAt?: string;
+  chain?: string;
+}
+
+/** A Chain Seed that exists on one disk and nowhere else (#120). */
+export interface HeldSeedView {
+  since: string;
+  origin: 'minted' | 'imported';
+  text: string;
+  steps: string[];
+  lastAttempt?: string;
 }
 
 export interface ChainSeedStatus {
-  state: 'signed_out' | 'unknown' | 'absent' | 'ready' | 'unreadable';
+  state: 'signed_out' | 'unknown' | 'absent' | 'not_yet_recoverable' | 'ready' | 'unreadable';
   pubkey?: string;
   addresses?: ChainAddresses;
   origin?: 'minted' | 'imported';
+  /** The PUBLISHED record. Absent while a seed is only held. */
   record?: SeedRecordView;
+  /** Set exactly when `state` is `not_yet_recoverable`. */
+  held?: HeldSeedView;
   relayList: RelayListView;
+  writes: RelayWriteTargets;
   warning: { text: string; acknowledgedAt?: string };
   supersededSeeds: number;
   lastPublish?: PublishReport;
@@ -567,6 +606,8 @@ export interface FundingStatus {
   pubkey?: string;
   custody: { text: string; acknowledgedAt?: string };
   supersededSeeds: number;
+  /** Set while the seed behind these addresses is not yet recoverable (#120). */
+  heldSeed?: HeldSeedView;
   chains: ChainFundingView[];
   quote?: QuoteView;
   faucet?: FaucetView;
@@ -642,15 +683,19 @@ export interface LeaseVaultStatus {
   state: 'signed_out' | 'unknown' | 'ready';
   pubkey?: string;
   leases: LeaseView[];
-  writeTargets: string[];
-  writeTargetSource: 'nip65' | 'profile' | 'none';
+  /** Where a vault record would go, what it costs, and what stops it. */
+  writes: RelayWriteTargets;
   unreadable: number;
   lastPublish?: {
     at: string;
     workloadId: string;
     what: 'stage' | 'confirm' | 'retract';
-    relays: PublishOutcome[];
+    relays: RelayWriteOutcome[];
     accepted: string[];
+    cost?: string;
+    destination?: string;
+    payAt?: string;
+    chain?: string;
   };
   checkedAt: string;
 }
@@ -682,7 +727,8 @@ export interface PreflightView {
     channelId?: string;
     routePrice?: string;
   };
-  vault: { localOnly: boolean; relays: string[]; source: 'nip65' | 'profile' | 'none' };
+  /** Where the Root Secret would be written, and what THAT write costs. */
+  vault: { localOnly: boolean; writes: RelayWriteTargets };
 }
 
 export interface SpawnResult {
@@ -722,9 +768,9 @@ export class DaemonError extends Error {
   readonly code: string;
   /** A provider's OWN refusal code, when a paid route refused (spec §5). */
   providerError?: string;
-  /** Per-relay detail on a publish that persisted nothing, when there is any. */
-  readonly relays?: PublishOutcome[];
-  constructor(status: number, message: string, code = 'error', relays?: PublishOutcome[]) {
+  /** Per-write detail on a paid write that did not land, when there is any. */
+  readonly relays?: RelayWriteOutcome[];
+  constructor(status: number, message: string, code = 'error', relays?: RelayWriteOutcome[]) {
     super(message);
     this.name = 'DaemonError';
     this.status = status;
@@ -753,7 +799,7 @@ async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
     const problem = (await response.json().catch(() => null)) as {
       message?: string;
       error?: string;
-      relays?: PublishOutcome[];
+      relays?: RelayWriteOutcome[];
       providerError?: string;
     } | null;
     const failure = new DaemonError(
@@ -823,7 +869,18 @@ export const daemon = {
       relays && relays.length > 0 ? { relays: relays.map((url) => ({ url })) } : undefined
     ),
   acknowledgeCustody: () => post<ChainSeedStatus>('/api/chain-seed/acknowledge'),
+  /**
+   * Mints a Chain Seed and HOLDS it. The answer says `not_yet_recoverable`:
+   * the seed is on this disk and on nothing else, because publishing it is a
+   * paid write and the key that pays is derived from the seed itself (#120).
+   */
   mintChainSeed: () => post<ChainSeedStatus>('/api/chain-seed/mint'),
+  /**
+   * Publishes the held Chain Seed record. This **spends money**: one paid
+   * relay write, at the price the connector quotes. It is the only thing that
+   * clears "not yet recoverable".
+   */
+  publishChainSeed: () => post<ChainSeedStatus>('/api/chain-seed/publish'),
   // One way only: the words go to the daemon, and the answer is addresses.
   importChainSeed: (mnemonic: string) =>
     post<ChainSeedStatus>('/api/chain-seed/import', { mnemonic }),
