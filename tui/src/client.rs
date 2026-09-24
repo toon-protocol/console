@@ -16,7 +16,9 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use reqwest::Method;
 use serde::de::DeserializeOwned;
+use serde::Serialize;
 use tokio::sync::RwLock;
 
 use crate::launch::{read_launch_record, LaunchError, LaunchRecord};
@@ -67,7 +69,41 @@ impl DaemonClient {
 
     /// `GET <path>`, decoded as `T`. `path` is joined onto the record's `url`.
     pub async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T, ClientError> {
-        let first = self.try_get(path).await;
+        self.send(Method::GET, path, None).await
+    }
+
+    /// `POST <path>` with a JSON body, decoded as `T`.
+    pub async fn post<B: Serialize, T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<T, ClientError> {
+        let value =
+            serde_json::to_value(body).map_err(|err| ClientError::Decode(err.to_string()))?;
+        self.send(Method::POST, path, Some(value)).await
+    }
+
+    /// `POST <path>` with no body (a sign-out, say), decoded as `T`.
+    pub async fn post_empty<T: DeserializeOwned>(&self, path: &str) -> Result<T, ClientError> {
+        self.send(Method::POST, path, None).await
+    }
+
+    /// `DELETE <path>`, decoded as `T`.
+    pub async fn delete<T: DeserializeOwned>(&self, path: &str) -> Result<T, ClientError> {
+        self.send(Method::DELETE, path, None).await
+    }
+
+    /// One request, with the daemon's 401-then-restarted-daemon retry from
+    /// this module's doc comment. Every public method above is this call
+    /// with a fixed `Method` — the retry-on-401 contract lives here once,
+    /// rather than once per verb.
+    async fn send<T: DeserializeOwned>(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<serde_json::Value>,
+    ) -> Result<T, ClientError> {
+        let first = self.try_send(method.clone(), path, body.as_ref()).await;
         match first {
             Err(ClientError::Status { status: 401, .. }) => {
                 // Covers a daemon that restarted since we last read the
@@ -77,10 +113,12 @@ impl DaemonClient {
                 let changed = reread.token != self.record.read().await.token;
                 *self.record.write().await = reread;
                 if changed {
-                    self.try_get(path).await.map_err(|err| match err {
-                        ClientError::Status { status: 401, .. } => ClientError::Unauthorized,
-                        other => other,
-                    })
+                    self.try_send(method, path, body.as_ref())
+                        .await
+                        .map_err(|err| match err {
+                            ClientError::Status { status: 401, .. } => ClientError::Unauthorized,
+                            other => other,
+                        })
                 } else {
                     Err(ClientError::Unauthorized)
                 }
@@ -89,15 +127,21 @@ impl DaemonClient {
         }
     }
 
-    async fn try_get<T: DeserializeOwned>(&self, path: &str) -> Result<T, ClientError> {
+    async fn try_send<T: DeserializeOwned>(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<&serde_json::Value>,
+    ) -> Result<T, ClientError> {
         let (url, token) = {
             let record = self.record.read().await;
             (join_url(&record.url, path), record.token.clone())
         };
-        let response = self
-            .http
-            .get(&url)
-            .bearer_auth(&token)
+        let mut request = self.http.request(method, &url).bearer_auth(&token);
+        if let Some(value) = body {
+            request = request.json(value);
+        }
+        let response = request
             .send()
             .await
             .map_err(|err| ClientError::Unreachable {

@@ -27,6 +27,32 @@ pub fn format_time_of_day(iso: &str) -> String {
     iso.get(11..19).unwrap_or(iso).to_string()
 }
 
+/// Mirrors `shortNpub` in `packages/ui/src/app/account-view.tsx`: enough of
+/// an npub to recognise it at a glance, not all sixty-three characters —
+/// used both by the header (TOON_Network#141) and the Account view itself.
+pub fn short_npub(npub: &str) -> String {
+    if npub.len() <= 16 {
+        return npub.to_string();
+    }
+    format!("{}…{}", &npub[..10], &npub[npub.len() - 4..])
+}
+
+/// The name shown for a signed-in account: its kind-0 `displayName`, then
+/// its `name`, then its short npub — `AccountChip`'s own fallback chain in
+/// `packages/ui/src/app/account-view.tsx`.
+pub fn account_display_name(view: &crate::types::AccountView) -> String {
+    view.profile
+        .as_ref()
+        .and_then(|profile| profile.metadata.as_ref())
+        .and_then(|metadata| {
+            metadata
+                .display_name
+                .clone()
+                .or_else(|| metadata.name.clone())
+        })
+        .unwrap_or_else(|| short_npub(&view.npub))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -59,5 +85,16 @@ mod tests {
     #[test]
     fn time_of_day_falls_back_to_the_raw_string_if_it_is_too_short() {
         assert_eq!(format_time_of_day("bad"), "bad");
+    }
+
+    #[test]
+    fn a_short_npub_is_shown_in_full() {
+        assert_eq!(short_npub("npub1abc"), "npub1abc");
+    }
+
+    #[test]
+    fn a_full_length_npub_is_shortened_to_its_ends() {
+        let npub = "npub1exampleexampleexampleexampleexampleexampleexampleexamplex";
+        assert_eq!(short_npub(npub), "npub1examp…plex");
     }
 }

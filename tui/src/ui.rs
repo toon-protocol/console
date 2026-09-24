@@ -62,9 +62,7 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
         .as_ref()
         .map(|h| h.profile.label.clone())
         .unwrap_or_else(|| "…".to_string());
-    // The Account view is not built yet, so this always reads "signed out"
-    // for now — a later ticket makes it read the account instead.
-    let account = "signed out";
+    let account = account_label(app);
 
     let line = Line::from(vec![
         Span::styled(
@@ -81,6 +79,20 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
     ]);
     let block = Block::default().borders(Borders::ALL);
     frame.render_widget(Paragraph::new(line).block(block), area);
+}
+
+/// What the header shows for "who is signed in" (TOON_Network#141) — read
+/// from the same `app.account` every view's Account data comes from, so the
+/// header agrees with the Account view rather than keeping its own copy.
+fn account_label(app: &App) -> String {
+    match &app.account {
+        None => "…".to_string(),
+        Some(status) if !status.signed_in => "signed out".to_string(),
+        Some(status) => match &status.account {
+            None => "signed in".to_string(),
+            Some(view) => crate::format::account_display_name(view),
+        },
+    }
 }
 
 /// Draws the sidebar and returns each row's screen `y` alongside the `View`
@@ -123,6 +135,17 @@ fn draw_content(frame: &mut Frame, area: Rect, app: &App) {
             Some(health) => views::health::draw(frame, area, health),
             None => draw_loading(frame, area, "Health"),
         },
+        (View::Account, _) => match &app.account {
+            Some(status) => views::account::draw(
+                frame,
+                area,
+                &app.account_view,
+                status,
+                app.profiles.as_ref(),
+                app.account_error.as_deref(),
+            ),
+            None => draw_loading(frame, area, "Account"),
+        },
         (view, _) => views::placeholder::draw(frame, area, view.title()),
     }
 }
@@ -159,6 +182,11 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     if app.view == View::Health {
         spans.push(Span::raw(" r refresh "));
     }
+    if app.view == View::Account {
+        spans.push(Span::raw(
+            " j/k move  Enter edit/act  Esc stop editing  r refresh ",
+        ));
+    }
     spans.push(Span::raw(" ? help  q quit "));
     let block = Block::default().borders(Borders::ALL);
     frame.render_widget(Paragraph::new(Line::from(spans)).block(block), area);
@@ -169,14 +197,17 @@ const HELP_LINES: &[&str] = &[
     "Tab        next view",
     "Shift+Tab  previous view",
     "h / l      previous / next view",
-    "r          refresh Health",
+    "r          refresh Health, or the Account view",
+    "j / k      Account: move between fields and buttons",
+    "Enter      Account: edit a field, or act on a button",
+    "Esc        Account: stop typing (while editing a field)",
     "mouse      click a sidebar row to select it",
     "?          toggle this help",
     "q / Esc    quit",
 ];
 
 fn draw_help(frame: &mut Frame, area: Rect) {
-    let width = 44u16.min(area.width.saturating_sub(4)).max(10);
+    let width = 64u16.min(area.width.saturating_sub(4)).max(10);
     let height = (HELP_LINES.len() as u16 + 2).min(area.height.saturating_sub(2));
     let popup = centered(area, width, height);
     frame.render_widget(Clear, popup);

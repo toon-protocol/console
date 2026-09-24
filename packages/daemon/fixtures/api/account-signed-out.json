@@ -1,0 +1,9 @@
+{
+  "signedIn": false,
+  "signers": [],
+  "keystore": {
+    "backend": "file",
+    "location": "/tmp/toon-console-api-account-5awTCc/.config/toon-console/keystore.json (passphrase-encrypted)",
+    "needsPassphrase": true
+  }
+}

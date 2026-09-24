@@ -1,0 +1,35 @@
+{
+  "signedIn": true,
+  "account": {
+    "pubkey": "2715748b63c38f352e667ddd27c014a69bb211eff9f28312e2be77b3e541e383",
+    "npub": "npub1yu2hfzmrcw8n2tnx0hwj0sq556dmyy00l8egxyhzhemm8e2puwpsxcdcd6",
+    "signerId": "8e206a9e-d86c-419e-b0d8-cd8b6d7a387b",
+    "signerKind": "local",
+    "signerLabel": "agent",
+    "signedInAt": "2026-09-24T11:51:09.424Z",
+    "profileState": "none",
+    "profile": {
+      "relays": [],
+      "relaySource": "none",
+      "readAt": "2026-09-24T11:51:09.424Z"
+    }
+  },
+  "signers": [
+    {
+      "id": "8e206a9e-d86c-419e-b0d8-cd8b6d7a387b",
+      "kind": "local",
+      "label": "agent",
+      "pubkey": "2715748b63c38f352e667ddd27c014a69bb211eff9f28312e2be77b3e541e383",
+      "npub": "npub1yu2hfzmrcw8n2tnx0hwj0sq556dmyy00l8egxyhzhemm8e2puwpsxcdcd6",
+      "backend": "file",
+      "origin": "generated",
+      "createdAt": "2026-09-24T11:51:09.289Z",
+      "lastUsedAt": "2026-09-24T11:51:09.424Z"
+    }
+  ],
+  "keystore": {
+    "backend": "file",
+    "location": "/tmp/toon-console-api-account-hG6kjt/.config/toon-console/keystore.json (passphrase-encrypted)",
+    "needsPassphrase": true
+  }
+}

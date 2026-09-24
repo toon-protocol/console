@@ -9,6 +9,7 @@
 //! - `desktop`   — the `/api/desktop` long poll.
 //! - `ui`        — the shell (header, sidebar, footer, help overlay).
 //! - `views::*`  — one module per sidebar view.
+//! - `widgets::*`— small reusable UI pieces shared by more than one view.
 //! - `format`    — small display formatters shared by views.
 
 pub mod app;
@@ -19,3 +20,4 @@ pub mod launch;
 pub mod types;
 pub mod ui;
 pub mod views;
+pub mod widgets;

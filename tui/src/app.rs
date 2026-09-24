@@ -8,7 +8,8 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
-use crate::types::Health;
+use crate::types::{Health, LocalSignerRequest, Profiles, SessionStatus};
+use crate::views::account::{self, AccountViewState};
 
 /// The seven views of the sidebar (ADR 0028), in the order `1`-`7` select
 /// them. `Health` is sixth, matching the spec's own numbering and the web
@@ -102,6 +103,26 @@ pub struct App {
     /// Set while a Health fetch is in flight, so the footer can say so
     /// instead of looking stuck.
     pub loading_health: bool,
+    /// Who is signed in (TOON_Network#141) — read once at connect, like
+    /// `health`, so the header can show it on every view, not only while the
+    /// Account view is open.
+    pub account: Option<SessionStatus>,
+    pub loading_account: bool,
+    /// The last account action's failure, if any (a wrong passphrase, an
+    /// invalid nsec) — shown by the Account view next to whichever form
+    /// caused it, and cleared the moment a fresh `SessionStatus` arrives.
+    pub account_error: Option<String>,
+    /// Every configured network profile, active one included — the
+    /// switcher's data. Also read once at connect.
+    pub profiles: Option<Profiles>,
+    /// The id being switched to while a profile switch is in flight, so the
+    /// switcher can show which one and disable the rest.
+    pub switching_profile: Option<String>,
+    /// The Account view's own form state (focus, typed fields). Kept out of
+    /// this struct's own fields, the way a view with no forms (Health) needs
+    /// none of its own — a later view ticket with a form follows this same
+    /// shape rather than growing `App` per field.
+    pub account_view: AccountViewState,
 }
 
 impl App {
@@ -113,6 +134,12 @@ impl App {
             daemon_status: DaemonStatus::Connecting,
             health: None,
             loading_health: false,
+            account: None,
+            loading_account: false,
+            account_error: None,
+            profiles: None,
+            switching_profile: None,
+            account_view: AccountViewState::new(),
         }
     }
 }
@@ -126,11 +153,28 @@ impl Default for App {
 /// What a keypress asks the runtime to do, once `handle_key` has already
 /// applied the parts of it that are pure state (switching views, opening
 /// help). The runtime owns quitting, redrawing and network calls.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     None,
     Quit,
     RefreshHealth,
+    /// Re-read `GET /api/account`, e.g. `r` on the Account view.
+    RefreshAccount,
+    AddLocalSigner(LocalSignerRequest),
+    AddBunkerSigner {
+        uri: String,
+        passphrase: Option<String>,
+    },
+    SignIn {
+        id: String,
+        passphrase: Option<String>,
+    },
+    SignOut,
+    ForgetSigner(String),
+    /// Switch the active network profile — every view with its own data
+    /// re-fetches once this lands (ADR 0028's "the new profile's connector
+    /// is a different machine with different terms").
+    SwitchProfile(String),
 }
 
 /// The one place a keypress becomes a decision.
@@ -145,6 +189,25 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> Command {
             _ => {}
         }
         return Command::None;
+    }
+
+    // The Account view has its own forms: while it is on screen, it gets
+    // first look at every key. It hands back `Some(command)` for a key it
+    // acted on (typing into a field, moving the highlighted row, submitting
+    // a form) and `None` for one it has no use for — a digit, `Tab`, `q` —
+    // so those still fall through to the global bindings below exactly as
+    // they do on every other view. The one exception is while a field is
+    // being typed into: then it claims everything, so a `q` in a passphrase
+    // does not quit the app.
+    if app.view == View::Account {
+        if let Some(command) = account::handle_key(
+            &mut app.account_view,
+            app.account.as_ref(),
+            app.profiles.as_ref(),
+            key,
+        ) {
+            return command;
+        }
     }
 
     match key.code {
@@ -184,6 +247,9 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> Command {
         }
         KeyCode::Char('r') | KeyCode::Char('R') if app.view == View::Health => {
             Command::RefreshHealth
+        }
+        KeyCode::Char('r') | KeyCode::Char('R') if app.view == View::Account => {
+            Command::RefreshAccount
         }
         _ => Command::None,
     }

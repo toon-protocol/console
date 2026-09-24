@@ -1,0 +1,22 @@
+---
+source: src/views/account.rs
+assertion_line: 1026
+expression: output
+---
+┌ Account ───────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Agent Smith                                                                                                 │
+│npub1exampleexampleexampleexampleexampleexampleexampleexamplex                                              │
+│                                                                                                            │
+│Signer: agent (local keystore)                                                                              │
+│Relays: the account's own relays (NIP-65): wss://relay.devnet.toonprotocol.dev                              │
+│Chain Seed: not shown here yet — see #142                                                                   │
+│                                                                                                            │
+│ Sign out                                                                                                   │
+│                                                                                                            │
+│                                                                                                            │
+│                                                                                                            │
+└────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ Network profile ───────────────────────────────────────────────────────────────────────────────────────────┐
+│ ● Devnet  ○ Sandbox                                                                                        │
+│                                                                                                            │
+└────────────────────────────────────────────────────────────────────────────────────────────────────────────┘

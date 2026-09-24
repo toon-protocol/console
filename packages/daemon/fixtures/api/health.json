@@ -3,9 +3,9 @@
     "name": "@toon-protocol/console-daemon",
     "version": "0.1.0",
     "node": "v26.7.0",
-    "pid": 206780,
+    "pid": 304472,
     "startedAt": "2026-09-22T00:00:00.000Z",
-    "uptimeSeconds": 214008
+    "uptimeSeconds": 215470
   },
   "profile": {
     "id": "devnet",
@@ -55,10 +55,10 @@
     "reason": "A SOCKS5h proxy answered at socks5h://127.0.0.1:9050, so a `.anyone` address can be dialled."
   },
   "storage": {
-    "data": "/tmp/toon-console-server-tZslvt/.local/share/toon-console",
-    "config": "/tmp/toon-console-server-tZslvt/.config/toon-console",
-    "runtime": "/tmp/toon-console-server-tZslvt/.local/share/toon-console/toon-console",
-    "channels": "/tmp/toon-console-server-tZslvt/.local/share/toon-console/profiles/devnet/channels/channels.json"
+    "data": "/tmp/toon-console-server-9BXyv3/.local/share/toon-console",
+    "config": "/tmp/toon-console-server-9BXyv3/.config/toon-console",
+    "runtime": "/tmp/toon-console-server-9BXyv3/.local/share/toon-console/toon-console",
+    "channels": "/tmp/toon-console-server-9BXyv3/.local/share/toon-console/profiles/devnet/channels/channels.json"
   },
-  "checkedAt": "2026-09-24T11:26:48.059Z"
+  "checkedAt": "2026-09-24T11:51:10.123Z"
 }

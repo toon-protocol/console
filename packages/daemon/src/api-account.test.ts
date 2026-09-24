@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { generateAccountKey, toNsec } from './account-key.js';
 import { AccountSession } from './account-session.js';
+import { writeApiFixture } from './api-fixtures.testkit.js';
 import { ChainSeedStore } from './chain-seed.js';
 import { InMemoryChainSeedCache } from './chain-seed-cache.js';
 import { handleApi, type ApiDeps, type ApiResponse } from './api.js';
@@ -76,6 +77,27 @@ describe('the account routes', () => {
     const answer = await call('GET', '/api/account');
     expect(answer.status).toBe(200);
     expect(answer.body).toMatchObject({ signedIn: false, keystore: { backend: 'file' } });
+
+    // The TUI's fixture contract (TOON_Network#139, ADR 0028; the route
+    // itself is TOON_Network#141's): the REAL response this assertion just
+    // checked, committed so the TUI's hand-kept `SessionStatus` type is
+    // checked against it without running this daemon.
+    writeApiFixture('account-signed-out', answer.body);
+  });
+
+  it('gives the TUI a fixture for the signed-in state (TOON_Network#141)', async () => {
+    const created = await call('POST', '/api/account/signers/local', {
+      mode: 'generate',
+      label: 'agent',
+      passphrase: PASSPHRASE,
+    });
+    expect(created.status).toBe(200);
+
+    const status = await call('GET', '/api/account');
+    expect(status.status).toBe(200);
+    expect(status.body).toMatchObject({ signedIn: true });
+
+    writeApiFixture('account-signed-in', status.body);
   });
 
   it('generates a key, signs in, and signs an event', async () => {

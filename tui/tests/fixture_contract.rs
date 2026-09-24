@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use toon_console_tui::types::Health;
+use toon_console_tui::types::{Health, Profiles, SessionStatus};
 
 type Check = fn(&str) -> Result<(), String>;
 
@@ -35,6 +35,12 @@ fn check<T: serde::de::DeserializeOwned>(text: &str) -> Result<(), String> {
 fn registry() -> BTreeMap<&'static str, Check> {
     let mut map: BTreeMap<&'static str, Check> = BTreeMap::new();
     map.insert("health", check::<Health> as Check);
+    // TOON_Network#141 (Account): `GET /api/account` answers the same
+    // `SessionStatus` shape signed in or out, so both fixtures check the
+    // same type.
+    map.insert("account-signed-out", check::<SessionStatus> as Check);
+    map.insert("account-signed-in", check::<SessionStatus> as Check);
+    map.insert("profiles", check::<Profiles> as Check);
     map
 }
 

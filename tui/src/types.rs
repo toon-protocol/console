@@ -174,6 +174,201 @@ pub struct DesktopView {
     pub at: String,
 }
 
+/// Who is signed in (TOON_Network#141), a mirror of `SessionStatus` and its
+/// neighbours in `daemon.ts`. `AccountSession.status()` in the daemon is the
+/// one place these are produced.
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SignerKind {
+    Local,
+    Remote,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum KeystoreBackend {
+    Libsecret,
+    File,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SignerOrigin {
+    Generated,
+    Nsec,
+    Nip06,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct SignerRecord {
+    pub id: String,
+    pub kind: SignerKind,
+    pub label: String,
+    pub pubkey: String,
+    pub npub: String,
+    pub backend: KeystoreBackend,
+    #[serde(default)]
+    pub origin: Option<SignerOrigin>,
+    #[serde(rename = "bunkerRelays")]
+    #[serde(default)]
+    pub bunker_relays: Option<Vec<String>>,
+    #[serde(rename = "bunkerPubkey")]
+    #[serde(default)]
+    pub bunker_pubkey: Option<String>,
+    #[serde(rename = "createdAt")]
+    pub created_at: String,
+    #[serde(rename = "lastUsedAt")]
+    #[serde(default)]
+    pub last_used_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Default)]
+pub struct AccountMetadata {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(rename = "displayName")]
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub about: Option<String>,
+    #[serde(default)]
+    pub picture: Option<String>,
+    #[serde(default)]
+    pub nip05: Option<String>,
+    #[serde(rename = "publishedAt")]
+    #[serde(default)]
+    pub published_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum RelaySource {
+    Nip65,
+    Profile,
+    None,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct AccountProfile {
+    #[serde(default)]
+    pub metadata: Option<AccountMetadata>,
+    pub relays: Vec<String>,
+    #[serde(rename = "relaySource")]
+    pub relay_source: RelaySource,
+    #[serde(rename = "readAt")]
+    pub read_at: String,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ProfileState {
+    Loading,
+    Ready,
+    None,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct AccountView {
+    pub pubkey: String,
+    pub npub: String,
+    #[serde(rename = "signerId")]
+    pub signer_id: String,
+    #[serde(rename = "signerKind")]
+    pub signer_kind: SignerKind,
+    #[serde(rename = "signerLabel")]
+    pub signer_label: String,
+    #[serde(rename = "signedInAt")]
+    pub signed_in_at: String,
+    #[serde(rename = "profileState")]
+    pub profile_state: ProfileState,
+    #[serde(default)]
+    pub profile: Option<AccountProfile>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum InvitationState {
+    Waiting,
+    Failed,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct Invitation {
+    pub uri: String,
+    pub state: InvitationState,
+    #[serde(rename = "expiresAt")]
+    pub expires_at: String,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct KeystoreInfo {
+    pub backend: KeystoreBackend,
+    pub location: String,
+    #[serde(rename = "needsPassphrase")]
+    pub needs_passphrase: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct SessionStatus {
+    #[serde(rename = "signedIn")]
+    pub signed_in: bool,
+    #[serde(default)]
+    pub account: Option<AccountView>,
+    pub signers: Vec<SignerRecord>,
+    pub keystore: KeystoreInfo,
+    #[serde(default)]
+    pub invitation: Option<Invitation>,
+}
+
+/// The daemon's `POST /api/account/signers/local` body. `mode` picks which
+/// of `nsec`/`mnemonic` (if either) it reads; the daemon ignores fields that
+/// do not apply to the chosen mode, the same as `daemon.ts`'s
+/// `LocalSignerRequest`.
+#[derive(Debug, Clone, Copy, serde::Serialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum LocalSignerMode {
+    #[default]
+    Generate,
+    Nsec,
+    Nip06,
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Default)]
+pub struct LocalSignerRequest {
+    pub mode: LocalSignerMode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nsec: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mnemonic: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub passphrase: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Default)]
+pub struct BunkerSignerRequest {
+    pub uri: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub passphrase: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+pub struct SignInRequest {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub passphrase: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+pub struct ProfileSwitchRequest {
+    pub id: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
