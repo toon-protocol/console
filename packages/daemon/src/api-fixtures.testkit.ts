@@ -77,7 +77,7 @@ const PLACEHOLDER_TEMP_DIR = `${tmpdir()}/toon-console-fixture`;
  * characters they allow (hex is a subset of what the base58 pattern alone
  * would accept) and the first match wins.
  */
-const IDENTIFIER_SHAPES: ReadonlyArray<{ pattern: RegExp; family: string }> = [
+const IDENTIFIER_SHAPES: readonly { pattern: RegExp; family: string }[] = [
   { pattern: /^0x[0-9a-fA-F]{40}$/, family: 'evm' },
   {
     pattern: /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
