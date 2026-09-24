@@ -1351,9 +1351,7 @@ fn spawn_standby_set_spawn(
 /// a path it would have to reach into this machine's filesystem for. No
 /// secret is ever in this file.
 fn read_template_file(path: &str) -> Result<serde_json::Value, String> {
-    let content =
-        std::fs::read_to_string(path).map_err(|err| format!("Could not read {path}: {err}"))?;
-    serde_json::from_str(&content).map_err(|err| format!("{path} is not valid JSON: {err}"))
+    toon_console_tui::views::template_publish::read_template_source(path)
 }
 
 /// `POST /api/templates/publish/preview` — free. `request` travels back

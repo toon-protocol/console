@@ -141,6 +141,34 @@ impl Default for TemplatePublishState {
 /// from the repo root has it right there. Best-effort only: an empty field
 /// is always fine, this just saves retyping the common case.
 fn find_ssh_box_template() -> Option<String> {
+    // The installed binary is a copy in ~/.local/bin with no repo beside it,
+    // so the Template it ships with is always there to fall back on.
+    Some(find_ssh_box_template_file().unwrap_or_else(|| BUILTIN_SSH_BOX.to_string()))
+}
+
+/// What the path field accepts for the ssh-box Template compiled into this
+/// binary — see [`read_template_source`].
+pub const BUILTIN_SSH_BOX: &str = "builtin:ssh-box";
+
+const SSH_BOX_TEMPLATE_JSON: &str = include_str!("../../../images/ssh-box/template.json");
+
+/// Reads the Template JSON the path field names: `builtin:ssh-box` for the
+/// one compiled into this binary, or a file, with a leading `~/` meaning the
+/// home directory, as it does in a shell.
+pub fn read_template_source(path: &str) -> Result<serde_json::Value, String> {
+    let content = if path.trim() == BUILTIN_SSH_BOX {
+        SSH_BOX_TEMPLATE_JSON.to_string()
+    } else {
+        let expanded = match (path.strip_prefix("~/"), std::env::var_os("HOME")) {
+            (Some(rest), Some(home)) => PathBuf::from(home).join(rest),
+            _ => PathBuf::from(path),
+        };
+        std::fs::read_to_string(&expanded).map_err(|err| format!("Could not read {path}: {err}"))?
+    };
+    serde_json::from_str(&content).map_err(|err| format!("{path} is not valid JSON: {err}"))
+}
+
+fn find_ssh_box_template_file() -> Option<String> {
     [
         PathBuf::from(SSH_BOX_TEMPLATE_RELATIVE),
         PathBuf::from("..").join(SSH_BOX_TEMPLATE_RELATIVE),
@@ -507,6 +535,13 @@ fn error_line(message: &str) -> Line<'static> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_builtin_ssh_box_template_reads_without_a_repo() {
+        let value = read_template_source(BUILTIN_SSH_BOX).unwrap();
+        assert!(value.is_object());
+        assert!(read_template_source("/no/such/file.json").is_err());
+    }
+
     use super::*;
     use crate::types::{RelayWriteTarget, RelayWriteTargets};
     use crossterm::event::KeyModifiers;
