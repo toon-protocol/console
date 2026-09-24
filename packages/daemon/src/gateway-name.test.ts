@@ -6,6 +6,7 @@ import {
   canonicalLabel,
   hostnameFor,
   probeUrlFor,
+  sameHostname,
 } from './gateway-name.js';
 
 /**
@@ -74,5 +75,14 @@ describe('the canonical hostname (spec §12.2)', () => {
     // The sandbox: no certificate authority issues for `.localhost`, so the
     // gateway there publishes a plain listener beside its TLS one.
     expect(probeUrlFor('label.gw.localhost:3280')).toBe('http://label.gw.localhost:3280/');
+  });
+
+  it('compares a served hostname with a derived one as names, port and case aside (#149)', () => {
+    // The sandbox's `gatewayDomain` is `gw.localhost:3280`; its gateway knows
+    // its domain as `gw.localhost` and answers without the host's port.
+    expect(sameHostname('label.gw.localhost', 'label.gw.localhost:3280')).toBe(true);
+    expect(sameHostname('LABEL.gw.localhost.', 'label.gw.localhost')).toBe(true);
+    expect(sameHostname('other.gw.localhost', 'label.gw.localhost:3280')).toBe(false);
+    expect(sameHostname('label.gw.example', 'label.gw.localhost:3280')).toBe(false);
   });
 });

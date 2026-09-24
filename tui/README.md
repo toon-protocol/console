@@ -15,6 +15,10 @@ and per-launch token from `$XDG_RUNTIME_DIR/toon-console/launch.json` (see
   keymap (`handle_key`, `handle_mouse`). No network code.
 - `src/client.rs` — `DaemonClient`, the one place an HTTP request is made.
   Handles the bearer token and the 401-then-reread-the-launch-record retry.
+- `src/api.rs` — one function per daemon route the TUI calls (account, Chain
+  Seed, funds, Templates, workloads): the path, verb and body `main.rs` sends
+  for each `Command`. `main.rs` wraps them in a `tokio::spawn`; the smoke
+  (below) calls them directly, so it proves these calls and not a copy.
 - `src/launch.rs` — reads and parses the launch record; the XDG path lookup
   mirrors `packages/daemon/src/paths.ts` exactly.
 - `src/types.rs` — hand-kept Rust types mirroring
@@ -51,8 +55,9 @@ and per-launch token from `$XDG_RUNTIME_DIR/toon-console/launch.json` (see
 3. Wire it into `draw_content` in `src/ui.rs`, replacing the
    `views::placeholder::draw` arm for that `View`.
 4. If the view needs data from the daemon, add the hand-kept type(s) to
-   `src/types.rs` and a method on `DaemonClient` (or call `client.get(...)`
-   directly from `main.rs`'s wiring, the way Health does).
+   `src/types.rs` and a function to `src/api.rs` that `main.rs`'s wiring
+   calls — not a `client.get(...)` of its own, so the smoke can drive the
+   same call.
 5. Add the daemon-side fixture and register it (next section) so the type
    is checked against the daemon's real response.
 
@@ -109,7 +114,24 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
+`cargo clippy --all-targets --all-features` also builds the smoke below,
+without running it.
+
 `cargo test` needs `packages/daemon/fixtures/api/*.json` to exist — run
 `npm test -w @toon-protocol/console-daemon` first if you have just pulled a
 branch that changed a fixture-writing test, or if `fixture_contract.rs`
 reports an empty directory.
+
+## The smoke
+
+`cargo test --features smoke` (`tests/smoke.rs`, TOON_Network#149) drives a
+real daemon through `src/api.rs` — sign in, spawn from a Template, extend,
+rotate, hand over to the gateway, terminate — re-reading the daemon's state
+after each step, and reports each step as proved, skipped (with the reason the
+network gave) or failed. It sits next to `npm run smoke:console` and reaches
+the same results where they overlap; the repository README's "The TUI smoke"
+has the recipe for starting a daemon of its own for it, which it insists on,
+and what it spends.
+
+It is a `harness = false` test behind the `smoke` feature: plain `cargo test`
+and CI never build it, and its report prints whether it passes or not.

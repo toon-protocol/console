@@ -828,6 +828,66 @@ policy, the summary's obligations and the image mapping, driven with fixtures. T
 judgement about what counts as proved is tested on every push even though the network is
 not.
 
+### The TUI smoke: the same life, through the terminal's own client
+
+`smoke:console` drives `/api/*` the way the web window does. The TUI has a client of its
+own — `tui/src/api.rs`, one function per route, decoded into `tui/src/types.rs` — and
+[#149][i149] is the proof that *it* can run a workload's whole life too:
+
+```bash
+npm ci && npm run build -w @toon-protocol/console-daemon   # the helper runs from dist/
+
+# A daemon of the smoke's own, on directories nobody else has:
+export SMOKE_HOME=$(mktemp -d)
+export XDG_RUNTIME_DIR=$SMOKE_HOME/run XDG_CONFIG_HOME=$SMOKE_HOME/config \
+       XDG_DATA_HOME=$SMOKE_HOME/data
+mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
+TOON_CONSOLE_PORT=0 TOON_CONSOLE_KEYSTORE=file node packages/daemon/dist/main.js &
+
+cd tui && cargo test --features smoke      # same shell: it reads that daemon's launch record
+kill %1 && rm -rf "$SMOKE_HOME"
+```
+
+It reads the daemon's launch record the way the TUI does, switches it to the sandbox
+profile (`TOON_TUI_SMOKE_PROFILE` picks another), and drives the six steps the ticket names
+— **sign in** with a local key, **spawn** from a Template, **extend**, **rotate**, hand the
+workload to the **gateway** (and withdraw it), **terminate** — through the same `api::`
+calls `tui/src/main.rs` makes for each `Command`, with the spawn bodies built by the New
+workload view's own builders. Between signing in and spawning it does what a spawn needs
+first, under the stage names `smoke:console` uses: `chain-seed`, `directory`, `funds`,
+`publish-seed`, `template`.
+
+- **Each step re-reads the daemon's state** and asserts that, not the 2xx: the account from
+  `GET /api/account`, the card from `GET /api/workloads?refresh=1` (running, the expiry the
+  provider now reports, the Template on the lease's record), the rotation from `GET
+  …/rotation`, the hostname from `GET …/gateway` — held after the handover, withdrawn after
+  the withdrawal.
+- **A skip is read from the network and never counted as a pass.** The gateway step is
+  decided by `smoke-console.ts`'s own `planConditional`, so the two smokes skip it for the
+  same reason, and the ending lists it under NOT PROVED.
+- **It will only drive a fresh daemon of its own.** It refuses to go on when
+  `XDG_RUNTIME_DIR` is the login session's (`/run/user/…`), when an account is already
+  signed in, or when the keystore is not the file — so the console you use is never signed
+  into, switched or spent from.
+- **The chain is read from the network**: the first one the profile's connector settles on
+  in the same token the chosen provider settles in, so nothing converts on the way. On the
+  sandbox that is Solana, which `smoke:console` is told with `--chain solana`.
+  `TOON_TUI_SMOKE_CHAIN` overrides it.
+
+Three things are not the console's to do, and `smoke:console` does them outside the daemon
+too: minting this run's keys, moving test money into the payer address from the funder's
+account 0 (`TOON_SMOKE_FUNDER_MNEMONIC`, as above), and publishing the Template. They are
+one shared copy, `packages/daemon/src/main-smoke-tui.ts`, which the Rust smoke runs with
+`node`.
+
+It is behind the `smoke` cargo feature with `harness = false`, so plain `cargo test` and CI
+never build it, and its report prints whether it passes or not. It spends, like
+`smoke:console`: one lease, one extension and five relay writes, plus every `status`
+re-read the sandbox hub bills for carrying — **2905 base units** on the sandbox the day it
+was written, against `smoke:console`'s 2605.
+
+[i149]: https://github.com/toon-protocol/TOON_Network/issues/149
+
 ## Development
 
 ```bash
@@ -836,6 +896,7 @@ npm run typecheck    # tsc, every package
 npm test             # vitest, every package
 npm run test:packaging  # node --test, guards on the install bundle
 npm run smoke:console   # the end-to-end acceptance test; it SPENDS (see above)
+(cd tui && cargo test --features smoke)  # the same, through the TUI's client (see above)
 ```
 
 The vocabulary — **Console**, **Account**, **Signer**, **Chain Seed**, **Lease Vault** — is

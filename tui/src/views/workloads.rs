@@ -1342,6 +1342,7 @@ mod tests {
                     ports: vec![],
                 }),
                 relays: vec!["wss://own.relay.test".to_string()],
+                template: None,
             },
             provider: WorkloadCardProvider {
                 ilp_address: "g.toon.provider".to_string(),
@@ -1355,6 +1356,8 @@ mod tests {
                     ssh_port: Some(40000),
                     ports: vec![],
                 }),
+                expires_at: None,
+                cost: None,
             },
             runway: runway_computed(259_200), // 3 days: clearly "healthy"
             extend: CardExtend {
@@ -1380,6 +1383,8 @@ mod tests {
                 status: WorkloadStatus::Read {
                     life: LeaseLife::Running,
                     access: None,
+                    expires_at: None,
+                    cost: None,
                 },
                 running_now: true,
             }],
@@ -1532,6 +1537,8 @@ mod tests {
             status: WorkloadStatus::Read {
                 life: LeaseLife::Reserved,
                 access: None,
+                expires_at: None,
+                cost: None,
             },
             running_now: false,
         });
@@ -2158,10 +2165,14 @@ mod tests {
         none_yet.status = WorkloadStatus::Read {
             life: LeaseLife::Provisioning,
             access: None,
+            expires_at: None,
+            cost: None,
         };
         none_yet.members[0].status = WorkloadStatus::Read {
             life: LeaseLife::Provisioning,
             access: None,
+            expires_at: None,
+            cost: None,
         };
         none_yet.members[0].running_now = false;
         state.dashboard = Some(dashboard(vec![none_yet]));

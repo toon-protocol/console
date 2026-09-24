@@ -10,7 +10,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 
 use crate::types::{
     ChainSeedStatus, DocsIndex, DocsPage, ExpandTemplateRequest, Health, LocalSignerRequest,
-    Profiles, SessionStatus, SpawnRequestBody, StandbySetRequestBody,
+    Profiles, SessionStatus, SpawnRequestBody, StandbySetRequestBody, TemplateSpawnRequestBody,
 };
 use crate::views::account::{self, AccountViewState};
 use crate::views::directory::{self, DirectoryCommand, DirectoryViewState};
@@ -387,13 +387,15 @@ pub enum Command {
     /// `POST /api/leases/standby-set/preflight` — free; the same moment as
     /// `PreflightSpawn`, but with at least one Warm Standby added.
     PreflightStandbySet(StandbySetRequestBody),
-    /// `POST /api/leases/spawn` — **spends money** (spec §5, ADR 0003).
+    /// `POST /api/templates/spawn` — **spends money** (spec §5, ADR 0003).
     /// Only ever reached after `widgets::confirm::Confirm`'s typed-`yes`
     /// dance (see `views::new_workload`); nothing in this module's keymap
-    /// can produce it from a single keypress.
-    SpawnWorkload(SpawnRequestBody),
+    /// can produce it from a single keypress. The Template route rather than
+    /// `POST /api/leases/spawn`, so the lease's record names its Template
+    /// (TOON_Network#149).
+    SpawnFromTemplate(TemplateSpawnRequestBody),
     /// `POST /api/leases/standby-set` — **spends at every member** (ADR
-    /// 0003). Same confirmation gate as `SpawnWorkload`.
+    /// 0003). Same confirmation gate as `SpawnFromTemplate`.
     SpawnStandbySet(StandbySetRequestBody),
 }
 

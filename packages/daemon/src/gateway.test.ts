@@ -344,6 +344,17 @@ describe('the Workload Gateway', () => {
       expect(result.view.held).toBe(true);
     });
 
+    it('matches a hostname under a gateway domain that carries a port, as the sandbox’s does (#149)', async () => {
+      // `gw.localhost:3280` is where the sandbox publishes its plain listener;
+      // the gateway itself answers `<label>.gw.localhost`, with no port.
+      build({ profile: gatewayProfile({ gatewayDomain: 'gw.localhost:3280' }) });
+      port.answer = handoverOk(`${canonicalLabel(workloadId)}.gw.localhost`, SECONDS + 3600);
+      const result = await gateway.handover(workloadId, { expiresIn: 3600 });
+
+      expect(result.expectedHostname).toBe(`${canonicalLabel(workloadId)}.gw.localhost:3280`);
+      expect(result.matches).toBe(true);
+    });
+
     it('says when the gateway answered a hostname this console did not derive', async () => {
       // Nothing in the protocol stops a gateway answering anything it likes,
       // and a person acting on a name nobody else can derive would be stuck.

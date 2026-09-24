@@ -62,7 +62,7 @@ use crate::types::{
     Directory, ExpandTemplateRequest, ExpandedTemplate, ListingView, PreflightView, ProviderView,
     RegistryEntryRequest, SpawnContentImage, SpawnImageRequest, SpawnPortRequest, SpawnRequestBody,
     StandbyMemberRequest, StandbySetPreflightView, StandbySetRequestBody, TemplateAvailability,
-    TemplateGallery, TemplateView,
+    TemplateGallery, TemplateSpawnRequestBody, TemplateView,
 };
 use crate::views::directory::{ListingPicker, PickerEvent};
 use crate::widgets::confirm::{Confirm, ConfirmOutcome};
@@ -168,8 +168,10 @@ pub struct StandbyMember {
 /// out by `main.rs`, the only place this crate calls the network.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SpawnAction {
-    Spawn(SpawnRequestBody),
-    StandbySet(StandbySetRequestBody),
+    Spawn(TemplateSpawnRequestBody),
+    // Boxed: a set carries every member, and the variant would otherwise be
+    // twice the size of an ordinary spawn.
+    StandbySet(Box<StandbySetRequestBody>),
 }
 
 pub struct NewWorkloadViewState {
@@ -193,6 +195,10 @@ pub struct NewWorkloadViewState {
     /// `POST /api/templates/expand` answers (`main.rs`), which is also what
     /// moves `stage` on to [`Stage::Listing`].
     pub expansion: Option<ExpandedTemplate>,
+    /// The settings that expansion was asked for — what
+    /// `POST /api/templates/spawn` is sent again, so the daemon expands the
+    /// same Template the same way when it buys the lease.
+    pub expanded_with: Option<ExpandTemplateRequest>,
 
     // -- Listing --
     /// Fed by [`apply_directory`] from the same `GET /api/directory` read
@@ -235,6 +241,7 @@ impl NewWorkloadViewState {
             expanding: false,
             expand_error: None,
             expansion: None,
+            expanded_with: None,
             picker: ListingPicker::new(),
             all_providers: Vec::new(),
             directory_error: None,
@@ -289,6 +296,7 @@ pub fn reset_wizard(state: &mut NewWorkloadViewState, status: impl Into<String>)
     state.expanding = false;
     state.expand_error = None;
     state.expansion = None;
+    state.expanded_with = None;
     state.standby_picker = ListingPicker::new();
     state.standbys.clear();
     state.local_only = false;
@@ -320,8 +328,8 @@ pub fn handle_key(state: &mut NewWorkloadViewState, key: KeyEvent) -> Option<Com
                 state.spawning = true;
                 state.spawn_error = None;
                 match action {
-                    SpawnAction::Spawn(body) => Command::SpawnWorkload(body),
-                    SpawnAction::StandbySet(body) => Command::SpawnStandbySet(body),
+                    SpawnAction::Spawn(body) => Command::SpawnFromTemplate(body),
+                    SpawnAction::StandbySet(body) => Command::SpawnStandbySet(*body),
                 }
             }
         });
@@ -387,6 +395,7 @@ fn gallery_handle_key(state: &mut NewWorkloadViewState, key: KeyEvent) -> Option
                         state.form = FormFields::new(&template);
                         state.template = Some(template);
                         state.expansion = None;
+                        state.expanded_with = None;
                         state.expand_error = None;
                         state.status = None;
                         state.stage = Stage::Form;
@@ -482,12 +491,14 @@ fn form_activate(state: &mut NewWorkloadViewState, target: FormTarget) -> Comman
                 };
                 state.expanding = true;
                 state.expand_error = None;
-                Command::ExpandTemplate(ExpandTemplateRequest {
+                let request = ExpandTemplateRequest {
                     template: template.address.clone(),
                     env: if env.is_empty() { None } else { Some(env) },
                     ssh_public_key,
                     volume_gb,
-                })
+                };
+                state.expanded_with = Some(request.clone());
+                Command::ExpandTemplate(request)
             }
             None => Command::None,
         },
@@ -675,9 +686,29 @@ fn build_spawn_request(state: &NewWorkloadViewState) -> Option<SpawnRequestBody>
     let expansion = state.expansion.as_ref()?;
     let template = state.template.as_ref()?;
     let (provider, listing) = state.picker.selected_listing()?;
-    Some(SpawnRequestBody {
-        provider: provider.pubkey.clone(),
-        listing: listing.name.clone(),
+    Some(spawn_request_from_expansion(
+        expansion,
+        &template.address,
+        &provider.pubkey,
+        &listing.name,
+        state.local_only,
+    ))
+}
+
+/// The spawn body for one Template's expansion and one chosen Listing — what
+/// [`build_spawn_request`] sends once the form, the expansion and the picker
+/// all have an answer. Public so the smoke (`tests/smoke.rs`,
+/// TOON_Network#149) spawns with exactly this body rather than a copy of it.
+pub fn spawn_request_from_expansion(
+    expansion: &ExpandedTemplate,
+    template_address: &str,
+    provider_pubkey: &str,
+    listing_name: &str,
+    local_only: bool,
+) -> SpawnRequestBody {
+    SpawnRequestBody {
+        provider: provider_pubkey.to_string(),
+        listing: listing_name.to_string(),
         image: spawn_image_request(&expansion.spawn.image),
         env: if expansion.spawn.env.is_empty() {
             None
@@ -703,10 +734,47 @@ fn build_spawn_request(state: &NewWorkloadViewState) -> Option<SpawnRequestBody>
         volume_gb: expansion.spawn.volume_gb,
         entrypoint: expansion.spawn.entrypoint.clone(),
         args: expansion.spawn.args.clone(),
-        template: Some(template.address.clone()),
-        local_only: if state.local_only { Some(true) } else { None },
+        template: Some(template_address.to_string()),
+        local_only: if local_only { Some(true) } else { None },
         chain: None,
-    })
+    }
+}
+
+/// What the confirmed spawn sends: the Template, the settings its expansion
+/// was asked for, and the chosen Listing — `None` until all three exist. The
+/// preflight before it prices [`build_spawn_request`]'s body, which is the
+/// same content: the daemon expands the Template again from these settings.
+fn build_template_spawn_request(state: &NewWorkloadViewState) -> Option<TemplateSpawnRequestBody> {
+    state.expansion.as_ref()?;
+    let settings = state.expanded_with.as_ref()?;
+    let (provider, listing) = state.picker.selected_listing()?;
+    Some(template_spawn_request(
+        settings,
+        &provider.pubkey,
+        listing,
+        state.local_only,
+    ))
+}
+
+/// `POST /api/templates/spawn`'s body for one expansion's settings and one
+/// Listing. Public so the smoke (`tests/smoke.rs`, TOON_Network#149) spawns
+/// with exactly this body.
+pub fn template_spawn_request(
+    settings: &ExpandTemplateRequest,
+    provider_pubkey: &str,
+    listing: &ListingView,
+    local_only: bool,
+) -> TemplateSpawnRequestBody {
+    TemplateSpawnRequestBody {
+        template: settings.template.clone(),
+        env: settings.env.clone(),
+        ssh_public_key: settings.ssh_public_key.clone(),
+        volume_gb: settings.volume_gb,
+        provider: provider_pubkey.to_string(),
+        listing: listing.name.clone(),
+        listing_version: listing.version,
+        local_only: if local_only { Some(true) } else { None },
+    }
 }
 
 /// `None` when no Warm Standby has been added — the caller falls back to
@@ -810,8 +878,8 @@ fn preflight_handle_key(state: &mut NewWorkloadViewState, key: KeyEvent) -> Opti
                 return Some(Command::None);
             }
             let action = match build_standby_set_request(state) {
-                Some(body) => SpawnAction::StandbySet(body),
-                None => match build_spawn_request(state) {
+                Some(body) => SpawnAction::StandbySet(Box::new(body)),
+                None => match build_template_spawn_request(state) {
                     Some(body) => SpawnAction::Spawn(body),
                     None => return Some(Command::None),
                 },
@@ -1326,6 +1394,19 @@ mod tests {
         }
     }
 
+    fn settings(template: &TemplateView) -> ExpandTemplateRequest {
+        ExpandTemplateRequest {
+            template: template.address.clone(),
+            env: Some(
+                [("GREETING".to_string(), "hello".to_string())]
+                    .into_iter()
+                    .collect(),
+            ),
+            ssh_public_key: "ssh-ed25519 AAAA test".to_string(),
+            volume_gb: Some(2),
+        }
+    }
+
     fn expansion(template: &TemplateView) -> ExpandedTemplate {
         ExpandedTemplate {
             template: template.address.clone(),
@@ -1476,6 +1557,7 @@ mod tests {
         let mut state = NewWorkloadViewState::new();
         let template = available_template("static-site");
         state.expansion = Some(expansion(&template));
+        state.expanded_with = Some(settings(&template));
         state.template = Some(template);
         state.all_providers = vec![provider(&"1".repeat(64), false)];
         state.picker.set_providers(state.all_providers.clone());
@@ -1497,6 +1579,7 @@ mod tests {
         let mut state = NewWorkloadViewState::new();
         let template = available_template("static-site");
         state.expansion = Some(expansion(&template));
+        state.expanded_with = Some(settings(&template));
         state.template = Some(template);
         state.all_providers = vec![
             provider(&"1".repeat(64), true),
@@ -1559,6 +1642,7 @@ mod tests {
         let mut state = NewWorkloadViewState::new();
         let template = available_template("static-site");
         state.expansion = Some(expansion(&template));
+        state.expanded_with = Some(settings(&template));
         state.template = Some(template);
         state.all_providers = vec![provider(&"1".repeat(64), false)];
         state.picker.set_providers(state.all_providers.clone());
@@ -1583,6 +1667,7 @@ mod tests {
         let mut state = NewWorkloadViewState::new();
         let template = available_template("static-site");
         state.expansion = Some(expansion(&template));
+        state.expanded_with = Some(settings(&template));
         state.template = Some(template);
         state.all_providers = vec![provider(&"1".repeat(64), false)];
         state.picker.set_providers(state.all_providers.clone());
@@ -1595,10 +1680,52 @@ mod tests {
         }
         let command = handle_key(&mut state, key(KeyCode::Enter));
         match command {
-            Some(Command::SpawnWorkload(body)) => assert_eq!(body.provider, "1".repeat(64)),
-            other => panic!("expected SpawnWorkload, got {other:?}"),
+            Some(Command::SpawnFromTemplate(body)) => assert_eq!(body.provider, "1".repeat(64)),
+            other => panic!("expected SpawnFromTemplate, got {other:?}"),
         }
         assert!(state.spawning);
+    }
+
+    /// TOON_Network#149: a spawn from a Template went to `POST
+    /// /api/leases/spawn`, which has no `template` field — so the lease's
+    /// vault record never named the Template it came from, and a recovered
+    /// lease could not say either. The confirmed spawn now names the Template,
+    /// the settings its expansion was asked for and the Listing's version,
+    /// which is what `POST /api/templates/spawn` buys with.
+    #[test]
+    fn a_confirmed_spawn_names_its_template_its_settings_and_the_listing_version() {
+        let mut state = NewWorkloadViewState::new();
+        let template = available_template("static-site");
+        let asked = settings(&template);
+        state.expansion = Some(expansion(&template));
+        state.expanded_with = Some(asked.clone());
+        state.template = Some(template.clone());
+        state.all_providers = vec![provider(&"1".repeat(64), false)];
+        state.picker.set_providers(state.all_providers.clone());
+        state.stage = Stage::Preflight;
+        state.preflight = Some(ready_preflight());
+        let (_, listing) = state
+            .picker
+            .selected_listing()
+            .expect("a listing is selected");
+        let listing = listing.clone();
+
+        preflight_handle_key(&mut state, key(KeyCode::Char('s')));
+        for c in "yes".chars() {
+            handle_key(&mut state, key(KeyCode::Char(c)));
+        }
+        match handle_key(&mut state, key(KeyCode::Enter)) {
+            Some(Command::SpawnFromTemplate(body)) => {
+                assert_eq!(body.template, template.address);
+                assert_eq!(body.listing, listing.name);
+                assert_eq!(body.listing_version, listing.version);
+                assert_eq!(body.env, asked.env);
+                assert_eq!(body.ssh_public_key, asked.ssh_public_key);
+                assert_eq!(body.volume_gb, asked.volume_gb);
+                assert_eq!(body.local_only, None);
+            }
+            other => panic!("expected SpawnFromTemplate, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1606,6 +1733,7 @@ mod tests {
         let mut state = NewWorkloadViewState::new();
         let template = available_template("static-site");
         state.expansion = Some(expansion(&template));
+        state.expanded_with = Some(settings(&template));
         state.template = Some(template);
         state.all_providers = vec![provider(&"1".repeat(64), false)];
         state.picker.set_providers(state.all_providers.clone());

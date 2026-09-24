@@ -8,6 +8,7 @@
 //! fetch Health once, and run the loop that turns input and background
 //! events into redraws.
 
+use std::future::Future;
 use std::io::{self, Stdout};
 use std::sync::Arc;
 use std::time::Duration;
@@ -24,8 +25,9 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
 use serde::Serialize;
 
+use toon_console_tui::api;
 use toon_console_tui::app::{handle_key, handle_mouse, now_ms, App, Command, DaemonStatus, View};
-use toon_console_tui::client::DaemonClient;
+use toon_console_tui::client::{ClientError, DaemonClient};
 use toon_console_tui::clipboard;
 use toon_console_tui::desktop;
 use toon_console_tui::launch::{launch_file_path, LaunchError};
@@ -33,13 +35,12 @@ use toon_console_tui::markdown;
 use toon_console_tui::types::{
     BunkerSignerRequest, ChainSeedStatus, Dashboard, Directory, DirectoryFilters, DocsIndex,
     DocsPage, ExpandTemplateRequest, ExpandedTemplate, ExtendResult, FundingStatus, GasPurchase,
-    GasQuote, GasStationStatus, GatewayView, HandoverResult, Health, ImportChainSeedRequest,
-    PreflightView, ProfileSwitchRequest, Profiles, RotationResult, RotationView, SessionStatus,
-    SignInRequest, SpawnRequestBody, SpawnResult, StandbySetPreflightView, StandbySetRequestBody,
-    StandbySetResult, TemplateGallery, TerminateResult, WithdrawalResult, WorkloadCard,
+    GasQuote, GasStationStatus, GatewayView, HandoverResult, Health, PreflightView, Profiles,
+    RotationResult, RotationView, SessionStatus, SignInRequest, SpawnRequestBody, SpawnResult,
+    StandbySetPreflightView, StandbySetRequestBody, StandbySetResult, TemplateGallery,
+    TemplateSpawnRequestBody, TerminateResult, WithdrawalResult, WorkloadCard,
 };
 use toon_console_tui::ui;
-use toon_console_tui::views::directory::directory_query;
 use toon_console_tui::views::new_workload;
 use toon_console_tui::views::workloads as workloads_view;
 
@@ -228,46 +229,43 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()
                             }
                             Command::AddLocalSigner(request) => {
                                 if let Some(client) = &client {
-                                    spawn_account_post(
-                                        client.clone(),
-                                        tx.clone(),
-                                        "/api/account/signers/local",
-                                        request,
-                                    );
+                                    spawn_account_call(client.clone(), tx.clone(), move |client| async move {
+                                        api::add_local_signer(&client, &request).await
+                                    });
                                 }
                             }
                             Command::AddBunkerSigner { uri, passphrase } => {
                                 if let Some(client) = &client {
-                                    spawn_account_post(
-                                        client.clone(),
-                                        tx.clone(),
-                                        "/api/account/signers/bunker",
-                                        BunkerSignerRequest {
-                                            uri,
-                                            label: None,
-                                            passphrase,
-                                        },
-                                    );
+                                    let request = BunkerSignerRequest {
+                                        uri,
+                                        label: None,
+                                        passphrase,
+                                    };
+                                    spawn_account_call(client.clone(), tx.clone(), move |client| async move {
+                                        api::add_bunker_signer(&client, &request).await
+                                    });
                                 }
                             }
                             Command::SignIn { id, passphrase } => {
                                 if let Some(client) = &client {
-                                    spawn_account_post(
-                                        client.clone(),
-                                        tx.clone(),
-                                        "/api/account/signin",
-                                        SignInRequest { id, passphrase },
-                                    );
+                                    let request = SignInRequest { id, passphrase };
+                                    spawn_account_call(client.clone(), tx.clone(), move |client| async move {
+                                        api::sign_in(&client, &request).await
+                                    });
                                 }
                             }
                             Command::SignOut => {
                                 if let Some(client) = &client {
-                                    spawn_account_signout(client.clone(), tx.clone());
+                                    spawn_account_call(client.clone(), tx.clone(), |client| async move {
+                                        api::sign_out(&client).await
+                                    });
                                 }
                             }
                             Command::ForgetSigner(id) => {
                                 if let Some(client) = &client {
-                                    spawn_forget_signer(client.clone(), tx.clone(), id);
+                                    spawn_account_call(client.clone(), tx.clone(), move |client| async move {
+                                        api::forget_signer(&client, &id).await
+                                    });
                                 }
                             }
                             Command::SwitchProfile(id) => {
@@ -278,30 +276,23 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()
                             }
                             Command::AcknowledgeChainSeedWarning => {
                                 if let Some(client) = &client {
-                                    spawn_chain_seed_post_empty(
-                                        client.clone(),
-                                        tx.clone(),
-                                        "/api/chain-seed/acknowledge",
-                                    );
+                                    spawn_chain_seed_call(client.clone(), tx.clone(), |client| async move {
+                                        api::acknowledge_chain_seed_warning(&client).await
+                                    });
                                 }
                             }
                             Command::MintChainSeed => {
                                 if let Some(client) = &client {
-                                    spawn_chain_seed_post_empty(
-                                        client.clone(),
-                                        tx.clone(),
-                                        "/api/chain-seed/mint",
-                                    );
+                                    spawn_chain_seed_call(client.clone(), tx.clone(), |client| async move {
+                                        api::mint_chain_seed(&client).await
+                                    });
                                 }
                             }
                             Command::ImportChainSeed(mnemonic) => {
                                 if let Some(client) = &client {
-                                    spawn_chain_seed_post(
-                                        client.clone(),
-                                        tx.clone(),
-                                        "/api/chain-seed/import",
-                                        ImportChainSeedRequest { mnemonic },
-                                    );
+                                    spawn_chain_seed_call(client.clone(), tx.clone(), move |client| async move {
+                                        api::import_chain_seed(&client, mnemonic).await
+                                    });
                                 }
                             }
                             // Only ever produced by the confirm modal's own
@@ -310,20 +301,16 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()
                             // `views::account::handle_key`.
                             Command::PublishChainSeed => {
                                 if let Some(client) = &client {
-                                    spawn_chain_seed_post_empty(
-                                        client.clone(),
-                                        tx.clone(),
-                                        "/api/chain-seed/publish",
-                                    );
+                                    spawn_chain_seed_call(client.clone(), tx.clone(), |client| async move {
+                                        api::publish_chain_seed(&client).await
+                                    });
                                 }
                             }
                             Command::RefreshChainSeed => {
                                 if let Some(client) = &client {
-                                    spawn_chain_seed_post_empty(
-                                        client.clone(),
-                                        tx.clone(),
-                                        "/api/chain-seed/refresh",
-                                    );
+                                    spawn_chain_seed_call(client.clone(), tx.clone(), |client| async move {
+                                        api::refresh_chain_seed(&client).await
+                                    });
                                 }
                             }
                             // -- Funds (TOON_Network#147) --
@@ -438,7 +425,7 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()
                             // Only ever produced by New workload's own
                             // typed-`yes`-then-`Enter` confirmation — see
                             // `views::new_workload::handle_key`.
-                            Command::SpawnWorkload(request) => {
+                            Command::SpawnFromTemplate(request) => {
                                 if let Some(client) = &client {
                                     spawn_workload_spawn(client.clone(), tx.clone(), request);
                                 }
@@ -943,10 +930,7 @@ fn spawn_desktop(client: Arc<DaemonClient>, tx: UnboundedSender<RuntimeEvent>) {
 /// auto-poll for Health, so this has none either.
 fn spawn_health_fetch(client: Arc<DaemonClient>, tx: UnboundedSender<RuntimeEvent>) {
     tokio::spawn(async move {
-        let result = client
-            .get::<Health>("/api/health")
-            .await
-            .map_err(|err| err.to_string());
+        let result = api::health(&client).await.map_err(|err| err.to_string());
         let _ = tx.send(RuntimeEvent::HealthLoaded(Box::new(result)));
     });
 }
@@ -960,9 +944,7 @@ fn spawn_directory_fetch(
     filters: DirectoryFilters,
 ) {
     tokio::spawn(async move {
-        let path = format!("/api/directory{}", directory_query(&filters));
-        let result = client
-            .get::<Directory>(&path)
+        let result = api::directory(&client, &filters)
             .await
             .map_err(|err| err.to_string());
         let _ = tx.send(RuntimeEvent::DirectoryLoaded(Box::new(result)));
@@ -977,10 +959,7 @@ fn spawn_directory_fetch(
 /// while the Gallery stage is showing.
 fn spawn_templates_fetch(client: Arc<DaemonClient>, tx: UnboundedSender<RuntimeEvent>) {
     tokio::spawn(async move {
-        let result = client
-            .get::<TemplateGallery>("/api/templates")
-            .await
-            .map_err(|err| err.to_string());
+        let result = api::templates(&client).await.map_err(|err| err.to_string());
         let _ = tx.send(RuntimeEvent::TemplatesLoaded(Box::new(result)));
     });
 }
@@ -994,8 +973,7 @@ fn spawn_expand_template(
     request: ExpandTemplateRequest,
 ) {
     tokio::spawn(async move {
-        let result = client
-            .post::<_, ExpandedTemplate>("/api/templates/expand", &request)
+        let result = api::expand_template(&client, &request)
             .await
             .map_err(|err| err.to_string());
         let _ = tx.send(RuntimeEvent::TemplateExpanded(Box::new(result)));
@@ -1010,8 +988,7 @@ fn spawn_preflight_spawn(
     request: SpawnRequestBody,
 ) {
     tokio::spawn(async move {
-        let result = client
-            .post::<_, PreflightView>("/api/leases/preflight", &request)
+        let result = api::preflight_spawn(&client, &request)
             .await
             .map_err(|err| err.to_string());
         let _ = tx.send(RuntimeEvent::SpawnPreflighted(Box::new(result)));
@@ -1034,18 +1011,17 @@ fn spawn_preflight_standby_set(
     });
 }
 
-/// `POST /api/leases/spawn` — **spends money** (spec §5, ADR 0003). Only
+/// `POST /api/templates/spawn` — **spends money** (spec §5, ADR 0003). Only
 /// ever reached after `views::new_workload::handle_key` has already
 /// required typing `yes` through `widgets::confirm`, the same rule every
 /// other spending command in this crate follows.
 fn spawn_workload_spawn(
     client: Arc<DaemonClient>,
     tx: UnboundedSender<RuntimeEvent>,
-    request: SpawnRequestBody,
+    request: TemplateSpawnRequestBody,
 ) {
     tokio::spawn(async move {
-        let result = client
-            .post::<_, SpawnResult>("/api/leases/spawn", &request)
+        let result = api::spawn_from_template(&client, &request)
             .await
             .map_err(|err| err.to_string());
         let _ = tx.send(RuntimeEvent::WorkloadSpawned(Box::new(result)));
@@ -1145,71 +1121,36 @@ fn spawn_open_link(href: String, tx: UnboundedSender<RuntimeEvent>) {
 /// while the Account view is open.
 fn spawn_account_fetch(client: Arc<DaemonClient>, tx: UnboundedSender<RuntimeEvent>) {
     tokio::spawn(async move {
-        let result = client
-            .get::<SessionStatus>("/api/account")
-            .await
-            .map_err(|err| err.to_string());
+        let result = api::account(&client).await.map_err(|err| err.to_string());
         let _ = tx.send(RuntimeEvent::AccountLoaded(Box::new(result)));
     });
 }
 
 fn spawn_profiles_fetch(client: Arc<DaemonClient>, tx: UnboundedSender<RuntimeEvent>) {
     tokio::spawn(async move {
-        let result = client
-            .get::<Profiles>("/api/profiles")
-            .await
-            .map_err(|err| err.to_string());
+        let result = api::profiles(&client).await.map_err(|err| err.to_string());
         let _ = tx.send(RuntimeEvent::ProfilesLoaded(Box::new(result)));
     });
 }
 
-/// Every account action that takes a body — add a local signer, add a
-/// bunker signer, sign back in with a saved one — answers with the same
-/// `SessionStatus` `GET /api/account` does, so one generic POST covers all
-/// of them.
-fn spawn_account_post<B: serde::Serialize + Send + Sync + 'static>(
-    client: Arc<DaemonClient>,
-    tx: UnboundedSender<RuntimeEvent>,
-    path: &'static str,
-    body: B,
-) {
+/// Every account action — add a local signer, add a bunker signer, sign
+/// back in with a saved one, sign out, forget a signer — answers with the
+/// same `SessionStatus` `GET /api/account` does, so one wrapper turns any of
+/// `api`'s account calls into an `AccountLoaded`.
+fn spawn_account_call<F, Fut>(client: Arc<DaemonClient>, tx: UnboundedSender<RuntimeEvent>, call: F)
+where
+    F: FnOnce(Arc<DaemonClient>) -> Fut + Send + 'static,
+    Fut: Future<Output = Result<SessionStatus, ClientError>> + Send,
+{
     tokio::spawn(async move {
-        let result = client
-            .post::<B, SessionStatus>(path, &body)
-            .await
-            .map_err(|err| err.to_string());
-        let _ = tx.send(RuntimeEvent::AccountLoaded(Box::new(result)));
-    });
-}
-
-fn spawn_account_signout(client: Arc<DaemonClient>, tx: UnboundedSender<RuntimeEvent>) {
-    tokio::spawn(async move {
-        let result = client
-            .post_empty::<SessionStatus>("/api/account/signout")
-            .await
-            .map_err(|err| err.to_string());
-        let _ = tx.send(RuntimeEvent::AccountLoaded(Box::new(result)));
-    });
-}
-
-fn spawn_forget_signer(client: Arc<DaemonClient>, tx: UnboundedSender<RuntimeEvent>, id: String) {
-    tokio::spawn(async move {
-        let path = format!("/api/account/signers/{}", encode_path_segment(&id));
-        let result = client
-            .delete::<SessionStatus>(&path)
-            .await
-            .map_err(|err| err.to_string());
+        let result = call(client).await.map_err(|err| err.to_string());
         let _ = tx.send(RuntimeEvent::AccountLoaded(Box::new(result)));
     });
 }
 
 fn spawn_switch_profile(client: Arc<DaemonClient>, tx: UnboundedSender<RuntimeEvent>, id: String) {
     tokio::spawn(async move {
-        let body = ProfileSwitchRequest { id };
-        match client
-            .post::<ProfileSwitchRequest, Profiles>("/api/profiles/active", &body)
-            .await
-        {
+        match api::switch_profile(&client, id).await {
             Ok(profiles) => {
                 let _ = tx.send(RuntimeEvent::ProfileSwitched(profiles));
             }
@@ -1223,65 +1164,31 @@ fn spawn_switch_profile(client: Arc<DaemonClient>, tx: UnboundedSender<RuntimeEv
 /// One-shot `GET /api/chain-seed` (TOON_Network#142). Read on connect once
 /// an account is known signed in, again on a pubkey change or a profile
 /// switch, and again whenever an action posts a body and gets a fresh
-/// `ChainSeedStatus` back (`spawn_chain_seed_post`/`_empty` below reuse this
+/// `ChainSeedStatus` back (`spawn_chain_seed_call` below reuses this
 /// same event).
 fn spawn_chain_seed_fetch(client: Arc<DaemonClient>, tx: UnboundedSender<RuntimeEvent>) {
     tokio::spawn(async move {
-        let result = client
-            .get::<ChainSeedStatus>("/api/chain-seed")
+        let result = api::chain_seed(&client)
             .await
             .map_err(|err| err.to_string());
         let _ = tx.send(RuntimeEvent::ChainSeedLoaded(Box::new(result)));
     });
 }
 
-/// Every Chain Seed action that takes a body (only `import`, today) answers
-/// with the same `ChainSeedStatus` `GET /api/chain-seed` does.
-fn spawn_chain_seed_post<B: serde::Serialize + Send + Sync + 'static>(
+/// Every Chain Seed action — acknowledge, mint, import, publish, refresh —
+/// answers with the same `ChainSeedStatus` `GET /api/chain-seed` does.
+fn spawn_chain_seed_call<F, Fut>(
     client: Arc<DaemonClient>,
     tx: UnboundedSender<RuntimeEvent>,
-    path: &'static str,
-    body: B,
-) {
+    call: F,
+) where
+    F: FnOnce(Arc<DaemonClient>) -> Fut + Send + 'static,
+    Fut: Future<Output = Result<ChainSeedStatus, ClientError>> + Send,
+{
     tokio::spawn(async move {
-        let result = client
-            .post::<B, ChainSeedStatus>(path, &body)
-            .await
-            .map_err(|err| err.to_string());
+        let result = call(client).await.map_err(|err| err.to_string());
         let _ = tx.send(RuntimeEvent::ChainSeedLoaded(Box::new(result)));
     });
-}
-
-/// Acknowledge, mint, publish and refresh all take no body.
-fn spawn_chain_seed_post_empty(
-    client: Arc<DaemonClient>,
-    tx: UnboundedSender<RuntimeEvent>,
-    path: &'static str,
-) {
-    tokio::spawn(async move {
-        let result = client
-            .post_empty::<ChainSeedStatus>(path)
-            .await
-            .map_err(|err| err.to_string());
-        let _ = tx.send(RuntimeEvent::ChainSeedLoaded(Box::new(result)));
-    });
-}
-
-/// A minimal `encodeURIComponent`-equivalent for one path segment — a
-/// signer id, always a UUID from `randomUUID()` in practice, but encoded
-/// properly rather than assumed safe, the way `daemon.ts`'s
-/// `forgetSigner` does with the real `encodeURIComponent`.
-fn encode_path_segment(segment: &str) -> String {
-    let mut out = String::with_capacity(segment.len());
-    for byte in segment.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(byte as char);
-            }
-            _ => out.push_str(&format!("%{byte:02X}")),
-        }
-    }
-    out
 }
 
 // -- Funds (TOON_Network#147): the daemon calls `views::funds` needs. --
@@ -1295,13 +1202,7 @@ fn spawn_funding_fetch(
     refresh: bool,
 ) {
     tokio::spawn(async move {
-        let path = if refresh {
-            "/api/funding?refresh=1"
-        } else {
-            "/api/funding"
-        };
-        let result = client
-            .get::<FundingStatus>(path)
+        let result = api::funding(&client, refresh)
             .await
             .map_err(|err| err.to_string());
         let _ = tx.send(RuntimeEvent::FundingLoaded(Box::new(result)));
@@ -1318,15 +1219,6 @@ fn spawn_gas_station_fetch(client: Arc<DaemonClient>, tx: UnboundedSender<Runtim
     });
 }
 
-#[derive(Serialize)]
-struct OpenChannelBody {
-    chain: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    deposit: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    connector: Option<String>,
-}
-
 /// Issued only from `Command::OpenChannel`, which `app::handle_key` only
 /// ever produces once a confirmation has been shown and accepted
 /// (`views::funds::handle_confirm_key`) — never straight from a keypress.
@@ -1338,13 +1230,7 @@ fn spawn_open_channel(
     connector: Option<String>,
 ) {
     tokio::spawn(async move {
-        let body = OpenChannelBody {
-            chain,
-            deposit,
-            connector,
-        };
-        let result = client
-            .post::<_, FundingStatus>("/api/funding/channel", &body)
+        let result = api::open_channel(&client, chain, deposit, connector)
             .await
             .map_err(|err| err.to_string());
         let _ = tx.send(RuntimeEvent::FundingLoaded(Box::new(result)));
@@ -1418,13 +1304,7 @@ fn spawn_workloads_fetch(
     refresh: bool,
 ) {
     tokio::spawn(async move {
-        let path = if refresh {
-            "/api/workloads?refresh=1"
-        } else {
-            "/api/workloads"
-        };
-        let result = client
-            .get::<Dashboard>(path)
+        let result = api::workloads(&client, refresh)
             .await
             .map_err(|err| err.to_string());
         let _ = tx.send(RuntimeEvent::WorkloadsLoaded(Box::new(result)));
@@ -1453,14 +1333,7 @@ fn spawn_extend(
     max_price: Option<String>,
 ) {
     tokio::spawn(async move {
-        #[derive(Serialize)]
-        struct Body {
-            #[serde(rename = "maxPrice", skip_serializing_if = "Option::is_none")]
-            max_price: Option<String>,
-        }
-        let path = format!("/api/workloads/{}/extend", workload_urlencode(&workload_id));
-        let result = client
-            .post::<_, ExtendResult>(&path, &Body { max_price })
+        let result = api::extend(&client, &workload_id, max_price)
             .await
             .map_err(|err| err.to_string());
         let _ = tx.send(RuntimeEvent::WorkloadExtended(Box::new(result)));
@@ -1475,12 +1348,7 @@ fn spawn_terminate(
     workload_id: String,
 ) {
     tokio::spawn(async move {
-        let path = format!(
-            "/api/workloads/{}/terminate",
-            workload_urlencode(&workload_id)
-        );
-        let result = client
-            .post::<_, TerminateResult>(&path, &serde_json::json!({}))
+        let result = api::terminate(&client, &workload_id)
             .await
             .map_err(|err| err.to_string());
         let _ = tx.send(RuntimeEvent::WorkloadTerminated(Box::new(result)));
@@ -1498,26 +1366,7 @@ fn spawn_arm_auto_extend(
     agreed_price: String,
 ) {
     tokio::spawn(async move {
-        #[derive(Serialize)]
-        struct Body {
-            budget: String,
-            #[serde(rename = "agreedPrice")]
-            agreed_price: String,
-            confirm: bool,
-        }
-        let path = format!(
-            "/api/workloads/{}/auto-extend",
-            workload_urlencode(&workload_id)
-        );
-        let result = client
-            .post::<_, WorkloadCard>(
-                &path,
-                &Body {
-                    budget,
-                    agreed_price,
-                    confirm: true,
-                },
-            )
+        let result = api::arm_auto_extend(&client, &workload_id, budget, agreed_price)
             .await
             .map_err(|err| err.to_string());
         let _ = tx.send(RuntimeEvent::AutoExtendArmed(Box::new(result)));
@@ -1532,12 +1381,7 @@ fn spawn_disarm_auto_extend(
     workload_id: String,
 ) {
     tokio::spawn(async move {
-        let path = format!(
-            "/api/workloads/{}/auto-extend",
-            workload_urlencode(&workload_id)
-        );
-        let result = client
-            .delete::<WorkloadCard>(&path)
+        let result = api::disarm_auto_extend(&client, &workload_id)
             .await
             .map_err(|err| err.to_string());
         let _ = tx.send(RuntimeEvent::AutoExtendDisarmed(Box::new(result)));
@@ -1549,9 +1393,7 @@ fn spawn_disarm_auto_extend(
 /// Free at the providers; only ever reached after a typed `yes`.
 fn spawn_rotate(client: Arc<DaemonClient>, tx: UnboundedSender<RuntimeEvent>, workload_id: String) {
     tokio::spawn(async move {
-        let path = format!("/api/workloads/{}/rotate", workload_urlencode(&workload_id));
-        let result = client
-            .post::<_, RotationResult>(&path, &serde_json::json!({}))
+        let result = api::rotate(&client, &workload_id)
             .await
             .map_err(|err| err.to_string());
         let _ = tx.send(RuntimeEvent::WorkloadRotated(Box::new(result)));
@@ -1568,12 +1410,7 @@ fn spawn_handover(
     workload_id: String,
 ) {
     tokio::spawn(async move {
-        let path = format!(
-            "/api/workloads/{}/gateway/handover",
-            workload_urlencode(&workload_id)
-        );
-        let result = client
-            .post::<_, HandoverResult>(&path, &serde_json::json!({}))
+        let result = api::handover(&client, &workload_id)
             .await
             .map_err(|err| err.to_string());
         let _ = tx.send(RuntimeEvent::WorkloadHandedOver(Box::new(result)));
@@ -1588,12 +1425,7 @@ fn spawn_withdraw(
     workload_id: String,
 ) {
     tokio::spawn(async move {
-        let path = format!(
-            "/api/workloads/{}/gateway/withdraw",
-            workload_urlencode(&workload_id)
-        );
-        let result = client
-            .post::<_, WithdrawalResult>(&path, &serde_json::json!({}))
+        let result = api::withdraw(&client, &workload_id)
             .await
             .map_err(|err| err.to_string());
         let _ = tx.send(RuntimeEvent::WorkloadWithdrawn(Box::new(result)));
@@ -1614,23 +1446,13 @@ fn spawn_workload_detail(
     let rotation_tx = tx.clone();
     let rotation_id = workload_id.clone();
     tokio::spawn(async move {
-        let path = format!(
-            "/api/workloads/{}/rotation",
-            workload_urlencode(&rotation_id)
-        );
-        let result = rotation_client
-            .get::<RotationView>(&path)
+        let result = api::rotation(&rotation_client, &rotation_id)
             .await
             .map_err(|err| err.to_string());
         let _ = rotation_tx.send(RuntimeEvent::RotationLoaded(Box::new(result)));
     });
     tokio::spawn(async move {
-        let path = format!(
-            "/api/workloads/{}/gateway",
-            workload_urlencode(&workload_id)
-        );
-        let result = client
-            .get::<GatewayView>(&path)
+        let result = api::gateway(&client, &workload_id)
             .await
             .map_err(|err| err.to_string());
         let _ = tx.send(RuntimeEvent::GatewayLoaded(Box::new(result)));
@@ -1647,17 +1469,6 @@ fn spawn_clipboard_copy(text: String, tx: UnboundedSender<RuntimeEvent>) {
             .unwrap_or_else(|err| clipboard::ClipboardOutcome::Failed(err.to_string()));
         let _ = tx.send(RuntimeEvent::ClipboardDone(outcome));
     });
-}
-
-/// A workload id is 64 lowercase hex characters (never `/`, `?`, `&`, ...),
-/// so this only ever needs to be a defensive no-op — but it is the same
-/// belt-and-suspenders the web client applies with `encodeURIComponent`
-/// before building the same route.
-fn workload_urlencode(workload_id: &str) -> String {
-    workload_id
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric())
-        .collect()
 }
 
 /// Puts one card's fresh answer back into the dashboard without disturbing
@@ -1734,29 +1545,5 @@ fn handover_summary(result: &HandoverResult) -> String {
     match &result.hostname {
         Some(hostname) => format!("Served at {hostname}."),
         None => "Handed over.".to_string(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::encode_path_segment;
-
-    // `main.rs` is wiring; almost every seam (the keymap, the client, the
-    // launch reader, a view's render) is unit-tested in its own module under
-    // `src/`, reachable without a terminal. `encode_path_segment` is the one
-    // piece of real logic added directly here (TOON_Network#141's
-    // forget-a-signer route), so it gets its own small test.
-
-    #[test]
-    fn a_uuid_passes_through_unchanged() {
-        assert_eq!(
-            encode_path_segment("9f3e2b1a-0000-4000-8000-000000000000"),
-            "9f3e2b1a-0000-4000-8000-000000000000"
-        );
-    }
-
-    #[test]
-    fn a_character_a_path_segment_cannot_contain_is_percent_encoded() {
-        assert_eq!(encode_path_segment("a/b c"), "a%2Fb%20c");
     }
 }

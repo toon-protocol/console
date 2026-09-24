@@ -3,7 +3,7 @@ import type { ChainSeedStore } from './chain-seed.js';
 import type { ConnectorHealth } from './connector-health.js';
 import { gatewaySub } from './continuation.js';
 import { resolveRpc } from './funding.js';
-import { hostnameFor, probeUrlFor } from './gateway-name.js';
+import { hostnameFor, probeUrlFor, sameHostname } from './gateway-name.js';
 import {
   HiddenTransportError,
   isHiddenServiceUrl,
@@ -433,7 +433,7 @@ export class GatewayStore {
       ...optional('expectedHostname', expected),
       ...(read.hostname === undefined || expected === undefined
         ? {}
-        : { matches: read.hostname.toLowerCase() === expected }),
+        : { matches: sameHostname(read.hostname, expected) }),
       expiresAt: read.expiresAt ?? expiresAt,
       view: await this.#view(lease),
     };

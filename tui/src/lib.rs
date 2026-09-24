@@ -3,6 +3,8 @@
 //!
 //! Module layout, for later view tickets:
 //! - `app`       — `View`, `App`, the keymap (`handle_key`, `handle_mouse`).
+//! - `api`       — one function per daemon route the TUI calls, shared by
+//!   `main.rs` and the smoke (`tests/smoke.rs`).
 //! - `client`    — `DaemonClient`: the one place an HTTP request is made.
 //! - `launch`    — the launch-record reader.
 //! - `types`     — hand-kept API types, mirroring `packages/ui/src/lib/daemon.ts`.
@@ -19,6 +21,7 @@
 //! - `markdown`  — Markdown -> ratatui `Text`, for the Docs view.
 //! - `clipboard` — `wl-copy`, or a message saying it is not there.
 
+pub mod api;
 pub mod app;
 pub mod client;
 pub mod clipboard;

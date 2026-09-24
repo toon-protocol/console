@@ -17,7 +17,7 @@ import { decode as nip19decode, npubEncode, nsecEncode } from 'nostr-tools/nip19
 
 import { defaultConnectorReader, readConnectorHealth } from './connector-health.js';
 import type { NostrEvent } from './nostr.js';
-import { consolePaths } from './paths.js';
+import { consolePaths, type ConsolePaths } from './paths.js';
 import type { NetworkProfile } from './profiles.js';
 import { PaidRelayWriter } from './relay-write.js';
 import { LiveRelayWritePort } from './relay-write-route.js';
@@ -148,7 +148,7 @@ const GAS_DEFAULT: Readonly<Record<'evm' | 'solana', string>> = {
  * capped at half of what the funder holds, which on a local chain never binds
  * and on a public one always does. `--gas` overrides it outright.
  */
-function gasTargetFor(chain: ChainView, held: bigint, asked?: string): bigint {
+export function gasTargetFor(chain: ChainView, held: bigint, asked?: string): bigint {
   if (asked !== undefined) return BigInt(asked);
   const wanted = BigInt(GAS_DEFAULT[chain.kind]);
   const affordable = held / 2n;
@@ -717,7 +717,7 @@ export async function runSmoke(options: SmokeOptions): Promise<SmokeReport> {
     const template = await run.run('template', async (step) => {
       const published = await publishTemplate({
         options,
-        home: api.home,
+        paths: daemonPaths(api.home),
         relay: templateRelay(options, target.provider),
         mnemonic,
         nsec,
@@ -1291,6 +1291,19 @@ export interface Daemon {
 }
 
 /**
+ * The directories a daemon started by `startDaemon` on `home` keeps its state
+ * in — the same three `XDG_*` variables it was given, read the same way.
+ */
+function daemonPaths(home: string): ConsolePaths {
+  return consolePaths({
+    ...process.env,
+    XDG_DATA_HOME: join(home, 'data'),
+    XDG_CONFIG_HOME: join(home, 'config'),
+    XDG_RUNTIME_DIR: join(home, 'run'),
+  });
+}
+
+/**
  * One daemon, on a data directory nobody else has.
  *
  * `TOON_CONSOLE_PORT=0` asks the kernel for a free port, and the launch record
@@ -1386,7 +1399,7 @@ export async function startDaemon(home: string, profileId: string): Promise<Daem
 /* Money                                                                      */
 /* -------------------------------------------------------------------------- */
 
-interface ChainView {
+export interface ChainView {
   readonly chain: string;
   readonly kind: 'evm' | 'solana';
   readonly counterparty: string;
@@ -1497,7 +1510,7 @@ async function firstFundable(
   return undefined;
 }
 
-async function funderBalances(
+export async function funderBalances(
   chain: ChainView,
   funder: string
 ): Promise<{ native: bigint; token: bigint } | undefined> {
@@ -1542,7 +1555,7 @@ async function funderBalances(
  * nothing on a payer that is already funded. That is the whole reason
  * `--chain-seed` exists.
  */
-async function topUp(
+export async function topUp(
   chain: ChainView,
   funder: string,
   deposit: bigint,
@@ -1771,7 +1784,7 @@ function chooseProvider(providers: readonly ProviderView[], options: SmokeOption
 }
 
 /** What the conditional stages need, read from the network and nowhere else. */
-async function readNetworkFacts(
+export async function readNetworkFacts(
   profile: NetworkProfile,
   providers: readonly ProviderView[]
 ): Promise<NetworkFacts> {
@@ -1826,10 +1839,10 @@ const TEMPLATE_NAME = 'toon-console-smoke';
  * Both events are addressable, so a second run REPLACES them rather than
  * littering the relay.
  */
-async function publishTemplate(input: {
-  options: SmokeOptions;
-  /** The daemon's data directory: whose channel pays for these two writes. */
-  home: string;
+export async function publishTemplate(input: {
+  options: Pick<SmokeOptions, 'profile' | 'image'>;
+  /** The daemon's own directories: whose channel pays for these two writes. */
+  paths: ConsolePaths;
   /** The `relay` hint the Template carries — the provider's own (§4.1, §6.2). */
   relay: string;
   mnemonic: string;
@@ -1916,12 +1929,7 @@ async function publishTemplate(input: {
     },
     // The DAEMON's data directory, so this pays from the channel the daemon
     // opened rather than looking for one of its own that does not exist.
-    paths: consolePaths({
-      ...process.env,
-      XDG_DATA_HOME: join(input.home, 'data'),
-      XDG_CONFIG_HOME: join(input.home, 'config'),
-      XDG_RUNTIME_DIR: join(input.home, 'run'),
-    }),
+    paths: input.paths,
     port: new LiveRelayWritePort(),
   });
 
@@ -2029,20 +2037,20 @@ function text(body: unknown): string {
   return JSON.stringify(body).slice(0, 400);
 }
 
-function secretFromNsec(nsec: string): Uint8Array {
+export function secretFromNsec(nsec: string): Uint8Array {
   const decoded = nip19decode(nsec);
   if (decoded.type !== 'nsec') throw new Error('that is not an nsec');
   return Uint8Array.from(decoded.data as Uint8Array);
 }
 
-function randomPassphrase(): string {
+export function randomPassphrase(): string {
   return [...crypto.getRandomValues(new Uint8Array(24))]
     .map((byte) => byte.toString(16).padStart(2, '0'))
     .join('');
 }
 
 /** An SSH key for the workload's sshd. Public half only ever leaves here. */
-function generateSshKey(): string {
+export function generateSshKey(): string {
   const { publicKey } = generateKeyPairSync('ed25519', {
     publicKeyEncoding: { type: 'spki', format: 'der' },
     privateKeyEncoding: { type: 'pkcs8', format: 'der' },
@@ -2059,7 +2067,7 @@ function generateSshKey(): string {
   return `ssh-ed25519 ${blob.toString('base64')} smoke-console`;
 }
 
-function wipeIdentity(identity: {
+export function wipeIdentity(identity: {
   evm: { privateKey: Uint8Array };
   solana: { secretKey: Uint8Array };
 }): void {

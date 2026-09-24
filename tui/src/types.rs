@@ -1117,6 +1117,11 @@ pub struct LeaseView {
     pub access: Option<LeaseAccess>,
     #[serde(default)]
     pub relays: Vec<String>,
+    /// The Template this lease was spawned from (`30436:<pubkey>:<d>`), when
+    /// it was — the vault record carries it, so a recovered lease still says
+    /// where it came from.
+    #[serde(default)]
+    pub template: Option<String>,
 }
 
 /// `LeaseLife` in `daemon.ts`: a tagged union on `phase`, with the three
@@ -1152,11 +1157,29 @@ pub enum WorkloadStatus {
         life: LeaseLife,
         #[serde(default)]
         access: Option<LeaseAccess>,
+        /// Unix seconds: the end of the interval the provider says is paid
+        /// (§6.4). What an extension moves, and what the smoke re-reads to
+        /// prove it did (TOON_Network#149).
+        #[serde(rename = "expiresAt", default)]
+        expires_at: Option<i64>,
+        /// What this read cost, base units — `status` is free at a provider's
+        /// own connector and billed by a hop that carries it (spec §5).
+        #[serde(default)]
+        cost: Option<String>,
     },
     #[serde(rename = "silent")]
-    Silent { reason: String },
+    Silent {
+        reason: String,
+        #[serde(default)]
+        cost: Option<String>,
+    },
     #[serde(rename = "refused")]
-    Refused { code: String, message: String },
+    Refused {
+        code: String,
+        message: String,
+        #[serde(default)]
+        cost: Option<String>,
+    },
     #[serde(rename = "unread")]
     Unread { reason: String },
 }
@@ -1331,6 +1354,10 @@ pub struct ExtendResult {
     pub route: Option<OpRouteView>,
     #[serde(default)]
     pub cost: Option<String>,
+    /// Unix seconds: the new end of the paid interval, as the provider
+    /// answered it.
+    #[serde(rename = "expiresAt", default)]
+    pub expires_at: Option<i64>,
     #[serde(rename = "providerError")]
     #[serde(default)]
     pub provider_error: Option<String>,
@@ -1863,14 +1890,43 @@ pub struct SpawnRequestBody {
     pub entrypoint: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub args: Option<Vec<String>>,
-    /// The Template this spawn came from (`address`), so the daemon's own
-    /// records say so too.
+    /// The Template this spawn came from (`address`). `POST /api/leases/*`
+    /// does not read it — a lease spawned from a Template is bought through
+    /// `POST /api/templates/spawn` ([`TemplateSpawnRequestBody`]), which is
+    /// what makes the vault record name its Template (TOON_Network#149).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub template: Option<String>,
     #[serde(rename = "localOnly", skip_serializing_if = "Option::is_none")]
     pub local_only: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chain: Option<String>,
+}
+
+/// `POST /api/templates/spawn`'s body: `{ template, ...TemplateSettings }` —
+/// the same settings `POST /api/templates/expand` took ([`ExpandTemplateRequest`])
+/// — plus the Listing to buy on. The daemon expands the Template again from
+/// these settings and buys the lease with the Template's address on its
+/// record, so the Lease Vault (and a machine that recovers it) can say where a
+/// workload came from. `POST /api/leases/spawn` has no such field and drops
+/// it, which is why New workload spawns through this route (TOON_Network#149).
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Default)]
+pub struct TemplateSpawnRequestBody {
+    pub template: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub env: Option<std::collections::BTreeMap<String, String>>,
+    #[serde(rename = "sshPublicKey")]
+    pub ssh_public_key: String,
+    #[serde(rename = "volumeGb", skip_serializing_if = "Option::is_none")]
+    pub volume_gb: Option<i64>,
+    /// The Listing's author: the provider to buy from.
+    pub provider: String,
+    /// The Listing's `d` name.
+    pub listing: String,
+    /// The Listing version the spawn is bought at (§4.2, ADR 0009).
+    #[serde(rename = "listingVersion")]
+    pub listing_version: i64,
+    #[serde(rename = "localOnly", skip_serializing_if = "Option::is_none")]
+    pub local_only: Option<bool>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Default)]

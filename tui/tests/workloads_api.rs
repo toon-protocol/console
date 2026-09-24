@@ -18,10 +18,11 @@ use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::task::JoinHandle;
 
+use toon_console_tui::api;
 use toon_console_tui::client::DaemonClient;
 use toon_console_tui::types::{
     Dashboard, ExtendResult, GatewayView, HandoverResult, RotationResult, RotationView,
-    TerminateResult, WithdrawalResult, WorkloadCard,
+    TemplateSpawnRequestBody, TerminateResult, WithdrawalResult, WorkloadCard,
 };
 
 const TOKEN: &str = "test-token";
@@ -373,4 +374,46 @@ async fn post_gateway_withdraw_decodes_the_real_result_and_says_serving_not_read
     assert!(result.message.as_deref().unwrap().contains("not reading"));
     let sent = recorded.lock().unwrap().take().unwrap();
     assert_eq!(sent.method, "POST");
+}
+
+/* -------------------------------------------------------------------------- */
+/* TOON_Network#149: a Template spawn goes where the Template is recorded.     */
+/* -------------------------------------------------------------------------- */
+
+/// `POST /api/leases/spawn` has no `template` field, so a lease bought there
+/// from a Template left a vault record that did not name it — the TUI smoke
+/// found this against a live daemon. `api::spawn_from_template` must post to
+/// the Template route, with the Template's address and the Listing version the
+/// daemon buys at, and decode the same `SpawnResult` the lease route answers.
+#[tokio::test]
+async fn spawn_from_template_posts_to_the_template_route_and_names_the_template() {
+    let body: &'static str = Box::leak(fixture("leases-spawn").into_boxed_str());
+    let recorded = Arc::new(Mutex::new(None));
+    let (url, _server) = spawn_stub(body, recorded.clone());
+    let dir = tempfile::tempdir().unwrap();
+    let path: PathBuf = dir.path().join("launch.json");
+    write_record(&path, &url);
+    let client = DaemonClient::connect(path).await.unwrap();
+
+    let request = TemplateSpawnRequestBody {
+        template: format!("30436:{}:static-site", "a".repeat(64)),
+        env: None,
+        ssh_public_key: "ssh-ed25519 AAAA test".to_string(),
+        volume_gb: None,
+        provider: "b".repeat(64),
+        listing: "basic".to_string(),
+        listing_version: 3,
+        local_only: None,
+    };
+    let result = api::spawn_from_template(&client, &request).await.unwrap();
+
+    assert!(result.lease.is_some());
+    let sent = recorded.lock().unwrap().take().unwrap();
+    assert_eq!(sent.method, "POST");
+    assert_eq!(sent.path, "/api/templates/spawn");
+    let sent: serde_json::Value = serde_json::from_str(&sent.body).unwrap();
+    assert_eq!(sent["template"], request.template.as_str());
+    assert_eq!(sent["listingVersion"], 3);
+    assert_eq!(sent["listing"], "basic");
+    assert_eq!(sent["sshPublicKey"], "ssh-ed25519 AAAA test");
 }

@@ -107,6 +107,23 @@ export function hostnameFor(workloadId: string, gatewayDomain: string): string |
 }
 
 /**
+ * Whether the hostname a gateway answered is the one this console derived.
+ *
+ * Compared as NAMES: case-insensitively, and without a port. A profile's
+ * `gatewayDomain` may carry one — the sandbox's is `gw.localhost:3280`, because
+ * that is where its plain-HTTP listener is published on this machine — and the
+ * derived hostname keeps it so a link to it works. The gateway knows its domain
+ * and not the port a host mapped it to, so it answers `<label>.gw.localhost`,
+ * and the port is not part of the name either one is making a claim about
+ * (TOON_Network#149 found this on the sandbox).
+ */
+export function sameHostname(answered: string, derived: string): boolean {
+  const name = (hostname: string) =>
+    (hostname.trim().toLowerCase().split(':')[0] ?? '').replace(/\.$/u, '');
+  return name(answered) === name(derived);
+}
+
+/**
  * Where to knock to see what the gateway is actually serving.
  *
  * `https` everywhere, because §12.2 puts TLS at the gateway and that is the
