@@ -35,6 +35,7 @@ import { LEASE_VAULT_KIND, type VaultedLease } from './lease-vault.js';
 import {
   buildSpawnContent,
   canonicalSpawnContent,
+  NO_SSH_PLACEHOLDER_KEY,
   type SpawnContent,
 } from './spawn-content.js';
 import { InMemoryLeaseVaultCache } from './lease-vault-cache.js';
@@ -239,6 +240,9 @@ describe('spawning a workload', () => {
       expect(result.lease?.expiresAt).toBe(1_790_003_600);
       expect(result.cost).toBe('1000');
       expect((await vaulted())?.state).toBe('live');
+      // A manual spawn always carries the tenant's real key (§6.2's form
+      // requires one), so it always reads as SSH offered (TOON_Network#138).
+      expect(result.lease?.sshOffered).toBe(true);
     });
 
     it('never puts the Root Secret in what it answers', async () => {
@@ -330,6 +334,35 @@ describe('spawning a workload', () => {
         })
       ).rejects.toThrow(/republished at v1/u);
       expect(port.sent).toHaveLength(0);
+    });
+
+    it('records `ssh_offered: true` when the expansion carries a real key', async () => {
+      const content = expanded();
+      await fixture.leases.spawnFromTemplate({
+        template: content.template!,
+        provider: PROVIDER,
+        listing: 'basic',
+        listingVersion: 1,
+        content,
+      });
+      expect((await vaulted())?.ssh_offered).toBe(true);
+    });
+
+    it('records `ssh_offered: false` for the placeholder a Template with no SSH sends', async () => {
+      const content = buildSpawnContent({
+        image: { digest: GOOD_SPAWN.image.digest },
+        ports: [{ container_port: 80, protocol: 'tcp' as const }],
+        sshPublicKey: NO_SSH_PLACEHOLDER_KEY,
+        template: `30436:${'9'.repeat(64)}:smoke-http`,
+      });
+      await fixture.leases.spawnFromTemplate({
+        template: content.template!,
+        provider: PROVIDER,
+        listing: 'basic',
+        listingVersion: 1,
+        content,
+      });
+      expect((await vaulted())?.ssh_offered).toBe(false);
     });
 
     it('refuses a Standby Set on the path that buys ONE lease (§7)', async () => {

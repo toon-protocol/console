@@ -21,6 +21,7 @@ import { ProfileStore } from './profile-store.js';
 import { DEVNET } from './profiles.js';
 import { queryRelays } from './relay-pool.js';
 import { SignerIndex, signerIndexPath } from './signer-index.js';
+import { NO_SSH_PLACEHOLDER_KEY } from './spawn-content.js';
 import type { TemplateSpawnRequest } from './template-spawn.js';
 import { readTemplates } from './templates.js';
 import { fakePublisher, imageEntryEvent, templateEvent } from './templates.testkit.js';
@@ -161,10 +162,15 @@ describe('the Template routes', () => {
     expect(response.body).toMatchObject({ error: 'unknown_template' });
   });
 
-  it('asks for the SSH key rather than spawning without one', async () => {
+  it('asks for the SSH key rather than spawning without one, for a Template that offers SSH', async () => {
+    // `static-site` names no `ssh_offered` at all, which reads as "offers
+    // SSH" (`templates.ts`): the field is required, and `expandTemplate` is
+    // what says so now — this route no longer refuses a blank key itself, so
+    // a Template that says nothing still ends up refused, for the same
+    // reason but a more specific code (TOON_Network#138).
     const response = await call('POST', '/api/templates/expand', { template: address });
     expect(response.status).toBe(400);
-    expect(response.body).toMatchObject({ error: 'invalid_request' });
+    expect(response.body).toMatchObject({ error: 'invalid_ssh_key' });
   });
 
   it('answers 501 and the expansion while the paid spawn is unwired', async () => {
@@ -209,6 +215,37 @@ describe('the Template routes', () => {
       MODE: 'production',
       SITE_TITLE: 'a small site',
     });
+  });
+
+  it('expands with no key at all for a Template that offers no SSH (TOON_Network#138)', async () => {
+    const noSshAddress = `30436:${publisher.pubkey}:smoke-http`;
+    const { dial } = fakeRelays([
+      {
+        url: RELAY,
+        events: [
+          ...relayEvents,
+          templateEvent(publisher, {
+            name: 'smoke-http',
+            ports: [{ containerPort: 80 }],
+            sshOffered: false,
+          }),
+        ],
+      },
+    ]);
+    deps = {
+      ...deps,
+      readTemplates: () =>
+        readTemplates({
+          profile: { ...DEVNET, relayUrl: RELAY },
+          timeoutMs: 200,
+          query: (query) => queryRelays({ ...query, dial }),
+        }),
+    };
+
+    const response = await call('POST', '/api/templates/expand', { template: noSshAddress });
+    expect(response.status).toBe(200);
+    const body = response.body as { spawn: { ssh_public_key: string } };
+    expect(body.spawn.ssh_public_key).toBe(NO_SSH_PLACEHOLDER_KEY);
   });
 
   it('will not sell a lease for an image it could not resolve', async () => {

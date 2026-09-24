@@ -2,6 +2,7 @@ import {
   buildSpawnContent,
   ENV_NAME,
   HEX_32,
+  NO_SSH_PLACEHOLDER_KEY,
   SSH_PUBLIC_KEY,
   type SpawnContent,
   type SpawnImage,
@@ -63,6 +64,12 @@ export class TemplateExpansionError extends Error {
 export interface TemplateSettings {
   /** Values for names the Template lists in `env_tenant`, and only those. */
   readonly env?: Readonly<Record<string, string>> | undefined;
+  /**
+   * The tenant's real key. Required when `template.sshOffered` is true, and
+   * IGNORED — never sent — when it is false: `expandTemplate` substitutes
+   * `NO_SSH_PLACEHOLDER_KEY` instead, so leaving this blank there is correct,
+   * not merely tolerated.
+   */
   readonly sshPublicKey: string;
   readonly volumeGb?: number | undefined;
   /** 32 bytes of hex. Omitted means the daemon chooses one at random (§6.2). */
@@ -76,6 +83,12 @@ export interface ExpandedTemplate {
   readonly template: string;
   /** Exactly what a manual spawn of the same thing would carry (§6.2). */
   readonly spawn: SpawnContent;
+  /**
+   * Whether `spawn.ssh_public_key` is the tenant's own key — `template.sshOffered`,
+   * echoed back so a caller does not have to re-fetch the Template to know why
+   * the field it typed did or did not end up on the wire.
+   */
+  readonly sshOffered: boolean;
   /** Worth saying, and not worth refusing over. */
   readonly warnings: readonly string[];
 }
@@ -100,13 +113,23 @@ export function expandTemplate(
     );
   }
 
-  const sshPublicKey = settings.sshPublicKey.trim();
-  if (!SSH_PUBLIC_KEY.test(sshPublicKey)) {
-    throw new TemplateExpansionError(
-      'invalid_ssh_key',
-      'A spawn needs the tenant’s SSH public key — one line, as `~/.ssh/id_ed25519.pub` ' +
-        'holds it. No password is ever issued for a workload (§6.2, §9).'
-    );
+  const typedKey = settings.sshPublicKey.trim();
+  let sshPublicKey: string;
+  if (template.sshOffered) {
+    if (!SSH_PUBLIC_KEY.test(typedKey)) {
+      throw new TemplateExpansionError(
+        'invalid_ssh_key',
+        'A spawn needs the tenant’s SSH public key — one line, as `~/.ssh/id_ed25519.pub` ' +
+          'holds it. No password is ever issued for a workload (§6.2, §9).'
+      );
+    }
+    sshPublicKey = typedKey;
+  } else {
+    // §6.2 still requires the field on the wire (the provider always forwards
+    // `access.ssh_port` to the container's port 22, sshd or not — TOON_Network#138),
+    // but this Template says plainly it has none, so the tenant's real key
+    // never leaves this machine for a lock nothing here can open.
+    sshPublicKey = NO_SSH_PLACEHOLDER_KEY;
   }
 
   const workloadId = settings.workloadId?.trim();
@@ -137,6 +160,7 @@ export function expandTemplate(
       // arrive as an unknown field, and never acts on it (§6.2, §8.3).
       template: template.address,
     }),
+    sshOffered: template.sshOffered,
     warnings,
   };
 }

@@ -314,6 +314,18 @@ describe('readTemplateContent', () => {
       reason: expect.stringMatching(/container_port/u),
     });
   });
+
+  it('offers SSH by default, and by anything other than a literal `false`', () => {
+    const content = read({ name: 'ordinary' });
+    if ('reason' in content) throw new Error('unreachable');
+    expect(content.sshOffered).toBe(true);
+  });
+
+  it('stops offering SSH only when a Template says `ssh_offered: false`', () => {
+    const content = read({ name: 'no-ssh', sshOffered: false });
+    if ('reason' in content) throw new Error('unreachable');
+    expect(content.sshOffered).toBe(false);
+  });
 });
 
 describe('parseCoordinate', () => {
@@ -387,6 +399,9 @@ describe('the spec’s own golden fixtures', () => {
     expect(read.envFixed).toEqual({ MODE: 'production' });
     expect(read.envTenant).toEqual(['SITE_TITLE']);
     expect(read.minResources).toEqual({ cpuMillicores: 500, memoryMb: 256, storageGb: 4 });
+    // §8.3 names no SSH field at all: the spec's own golden Template carries
+    // none, and this console reads that as "cannot say either way, so ask".
+    expect(read.sshOffered).toBe(true);
     expect(read.image.registryEntry?.address).toBe(
       '30434:2c0b7cf95324a07d05398b240174dc0c2be444d96b159aa6c7f7b1e668680991:web:1.0'
     );

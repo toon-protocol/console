@@ -115,6 +115,23 @@ export interface TemplateContent {
   /** The names — and only these — a tenant may set (§8.3). */
   readonly envTenant: readonly string[];
   readonly minResources?: TemplateResources;
+  /**
+   * Whether this Template's image is claimed to serve SSH, informational and
+   * NOT part of §8.3's content shape.
+   *
+   * §6.2 requires `ssh_public_key` on every spawn regardless — the provider
+   * always forwards `access.ssh_port` to the container's port 22, whether or
+   * not anything is listening there (TOON_Network#138). A Template names no
+   * SSH capability at all in the spec (ADR 0004: it grants none), so there is
+   * nothing here to check a signature or a provider against. This is a plain
+   * extra key a publisher MAY put in its content — `ssh_offered: false` — to
+   * say plainly that the image it names has no sshd, so the gallery and the
+   * New workload form stop asking for a key nobody could use and stop
+   * promising an `ssh` command that will be refused. Absent, or anything
+   * other than the literal `false`, means what every Template has always
+   * meant: this console cannot say either way, so it keeps asking.
+   */
+  readonly sshOffered: boolean;
 }
 
 export interface BlobSourceStore {
@@ -415,6 +432,8 @@ export function readTemplateContent(
     envFixed: envFixed.value,
     envTenant: envTenant.value,
     ...(minResources === undefined ? {} : { minResources }),
+    // Only an explicit `false` opts out; anything else keeps today's answer.
+    sshOffered: content.ssh_offered !== false,
   };
 }
 

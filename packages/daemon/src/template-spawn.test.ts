@@ -8,6 +8,7 @@ import {
   buildSpawnContent,
   canonicalSpawnContent,
   HEX_32,
+  NO_SSH_PLACEHOLDER_KEY,
   type SpawnContent,
 } from './spawn-content.js';
 import {
@@ -63,6 +64,17 @@ function siteTemplate(): Promise<TemplateView> {
       ports: [{ containerPort: 8080 }],
       envFixed: { MODE: 'production' },
       envTenant: ['SITE_TITLE'],
+    }),
+    imageEntryEvent(publisher),
+  ]);
+}
+
+function noSshTemplate(): Promise<TemplateView> {
+  return readOne([
+    templateEvent(publisher, {
+      name: 'smoke-http',
+      ports: [{ containerPort: 80 }],
+      sshOffered: false,
     }),
     imageEntryEvent(publisher),
   ]);
@@ -200,6 +212,39 @@ describe('expandTemplate', () => {
     expect(expandTemplate(template, { sshPublicKey: SSH_KEY }).warnings.join(' ')).toMatch(
       /ends with the lease/u
     );
+  });
+});
+
+/**
+ * A Template that does not offer SSH (TOON_Network#138).
+ *
+ * §6.2 still requires `ssh_public_key` on the wire — the provider forwards
+ * `access.ssh_port` to the container's port 22 whether or not anything is
+ * there — so the placeholder has to be sent regardless. What must NOT happen
+ * is the tenant's real key leaving for a lock this Template says does not
+ * exist.
+ */
+describe('expandTemplate, for a Template that does not offer SSH', () => {
+  it('sends the placeholder key, never a real one, however the caller filled the field in', async () => {
+    const template = await noSshTemplate();
+    const withoutKey = expandTemplate(template, { sshPublicKey: '' });
+    expect(withoutKey.spawn.ssh_public_key).toBe(NO_SSH_PLACEHOLDER_KEY);
+
+    const withKey = expandTemplate(template, { sshPublicKey: SSH_KEY });
+    expect(withKey.spawn.ssh_public_key).toBe(NO_SSH_PLACEHOLDER_KEY);
+  });
+
+  it('echoes `sshOffered: false` on the expansion', async () => {
+    const template = await noSshTemplate();
+    expect(expandTemplate(template, { sshPublicKey: '' }).sshOffered).toBe(false);
+  });
+
+  it('does not refuse an empty `sshPublicKey`, unlike a Template that offers SSH', async () => {
+    const offers = await siteTemplate();
+    expect(() => expandTemplate(offers, { sshPublicKey: '' })).toThrow(/SSH public key/u);
+
+    const offersNot = await noSshTemplate();
+    expect(() => expandTemplate(offersNot, { sshPublicKey: '' })).not.toThrow();
   });
 });
 

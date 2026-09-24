@@ -205,6 +205,7 @@ const vaultWithLease: LeaseVaultStatus = {
       image: { reference: 'traefik/whoami', digest: DIGEST },
       ports: [{ container_port: 80, protocol: 'tcp' }],
       envKeys: [],
+      sshOffered: true,
       createdAt: '2026-09-23T10:00:00.000Z',
       localOnly: false,
       role: 'standalone',

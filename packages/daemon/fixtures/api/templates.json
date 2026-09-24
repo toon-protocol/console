@@ -33,6 +33,7 @@
       "envTenant": [
         "SITE_TITLE"
       ],
+      "sshOffered": true,
       "name": "static-site",
       "address": "30436:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000:static-site",
       "publisher": {

@@ -1412,10 +1412,11 @@ function strings(fields: Record<string, unknown>, key: string): string[] | undef
 function readTemplateSettings(
   fields: Record<string, unknown>
 ): { value: TemplateSettings } | { error: string } {
-  const sshPublicKey = string(fields, 'sshPublicKey');
-  if (sshPublicKey === undefined) {
-    return { error: 'Body must carry the tenant’s `sshPublicKey`.' };
-  }
+  // Left blank here is not automatically wrong: a Template that does not
+  // offer SSH (`templates.ts`'s `sshOffered`) is expanded with none at all,
+  // and `expandTemplate` is what decides that — one place, so a check here
+  // cannot disagree with the one that actually matters (TOON_Network#138).
+  const sshPublicKey = string(fields, 'sshPublicKey') ?? '';
 
   let env: Record<string, string> | undefined;
   if (fields.env !== undefined) {

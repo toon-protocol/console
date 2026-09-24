@@ -277,14 +277,43 @@ fn running_access(card: &WorkloadCard) -> Option<&LeaseAccess> {
     card.lease.access.as_ref()
 }
 
-/// What `y` copies: an SSH command when there is a port for one, else the
-/// bare host — the same choice `workload-card.tsx`'s `Access` renders.
+/// What `y` copies: an SSH command when there is a port for one AND this
+/// workload was actually spawned with a key, else the bare host — the same
+/// choice `workload-card.tsx`'s `Access` renders (TOON_Network#138).
+///
+/// `access.ssh_port` is not that signal by itself: the provider always hands
+/// one back, forwarding to the container's port 22 whether or not anything is
+/// listening there. `card.lease.ssh_offered` is set once at spawn time from
+/// whether a real key was sent (`lease.ts`), which is the one thing this
+/// console actually knows.
 fn access_text(card: &WorkloadCard) -> Option<String> {
     let access = running_access(card)?;
     Some(match access.ssh_port {
-        Some(port) => format!("ssh -p {port} tenant@{}", access.host),
-        None => access.host.clone(),
+        Some(port) if card.lease.ssh_offered => format!("ssh -p {port} tenant@{}", access.host),
+        _ => access.host.clone(),
     })
+}
+
+/// The forwarded HTTP ports as URLs — "web: http://host:port" — offered in
+/// place of an SSH command when one was not offered (TOON_Network#138),
+/// mirroring `workload-card.tsx`'s `HttpPort`.
+fn http_port_copyables(card: &WorkloadCard) -> Vec<(String, String)> {
+    if card.lease.ssh_offered {
+        return Vec::new();
+    }
+    let Some(access) = running_access(card) else {
+        return Vec::new();
+    };
+    access
+        .ports
+        .iter()
+        .map(|port| {
+            (
+                "web".to_string(),
+                format!("http://{}:{}", access.host, port.host_port),
+            )
+        })
+        .collect()
 }
 
 /// What `y` offers on the Workloads view (TOON_Network#138): the selected
@@ -308,6 +337,7 @@ pub fn copyables(state: &WorkloadsViewState) -> Vec<(String, String)> {
     if let Some(access) = running_access(card) {
         out.push(("Hostname".to_string(), access.host.clone()));
     }
+    out.extend(http_port_copyables(card));
     out.push(("Workload ID".to_string(), card.workload_id.clone()));
     if let Some(hostname) = state
         .gateway
@@ -1192,11 +1222,28 @@ fn draw_detail(
                 label("  Host "),
                 Span::raw(access.host.clone()),
             ]));
-            if let Some(port) = access.ssh_port {
-                lines.push(Line::from(vec![
-                    label("  SSH  "),
-                    Span::raw(format!("ssh -p {port} tenant@{}", access.host)),
-                ]));
+            // `access.ssh_port` is not by itself a reason to believe SSH
+            // works — the provider always hands one back, sshd or not
+            // (TOON_Network#138). `card.lease.ssh_offered` is the one thing
+            // this console actually knows: whether a real key was sent.
+            if card.lease.ssh_offered {
+                if let Some(port) = access.ssh_port {
+                    lines.push(Line::from(vec![
+                        label("  SSH  "),
+                        Span::raw(format!("ssh -p {port} tenant@{}", access.host)),
+                    ]));
+                }
+            } else {
+                lines.push(Line::from(Span::styled(
+                    "  SSH not offered — this workload was spawned with no key.",
+                    Style::default().fg(Color::DarkGray),
+                )));
+                for port in &access.ports {
+                    lines.push(Line::from(vec![
+                        label("  web  "),
+                        Span::raw(format!("http://{}:{}", access.host, port.host_port)),
+                    ]));
+                }
             }
         }
         None => lines.push(Line::from(Span::styled(
@@ -1372,8 +1419,8 @@ fn label(text: &str) -> Span<'static> {
 mod tests {
     use super::*;
     use crate::types::{
-        CardExtend, LeaseImage, LeaseView, ListingRef, OpRouteView, StandbySetView, TakeoverReport,
-        WorkloadCardProvider, WorkloadMemberProvider, WorkloadMemberView,
+        CardExtend, ForwardedPort, LeaseImage, LeaseView, ListingRef, OpRouteView, StandbySetView,
+        TakeoverReport, WorkloadCardProvider, WorkloadMemberProvider, WorkloadMemberView,
     };
     use crossterm::event::KeyModifiers;
     use ratatui::backend::TestBackend;
@@ -1413,6 +1460,7 @@ mod tests {
                 }),
                 relays: vec!["wss://own.relay.test".to_string()],
                 template: None,
+                ssh_offered: true,
             },
             provider: WorkloadCardProvider {
                 ilp_address: "g.toon.provider".to_string(),
@@ -1635,6 +1683,33 @@ mod tests {
             "b2e292ee009eb3fc064aaa7a1bc70a28adc1039f495751d4caa0cb9c08fd8abd",
             LeaseLife::Running,
         )]));
+        insta::assert_snapshot!(render(&state));
+    }
+
+    #[test]
+    fn snapshot_no_ssh() {
+        let mut state = WorkloadsViewState::new();
+        let mut no_ssh = card(
+            "a1e292ee009eb3fc064aaa7a1bc70a28adc1039f495751d4caa0cb9c08fd8ab0",
+            LeaseLife::Running,
+        );
+        no_ssh.lease.ssh_offered = false;
+        let access = LeaseAccess {
+            host: "203.0.113.7".to_string(),
+            ssh_port: Some(40000),
+            ports: vec![ForwardedPort {
+                container_port: 80,
+                host_port: 30080,
+            }],
+        };
+        no_ssh.lease.access = Some(access.clone());
+        no_ssh.status = WorkloadStatus::Read {
+            life: LeaseLife::Running,
+            access: Some(access),
+            expires_at: None,
+            cost: None,
+        };
+        state.dashboard = Some(dashboard(vec![no_ssh]));
         insta::assert_snapshot!(render(&state));
     }
 
@@ -2304,6 +2379,37 @@ mod tests {
         );
         assert!(items.contains(&("Hostname".to_string(), "203.0.113.7".to_string())));
         assert!(items.contains(&("Workload ID".to_string(), workload_id)));
+    }
+
+    #[test]
+    fn copyables_offers_the_http_port_instead_of_ssh_when_it_was_not_offered() {
+        let mut state = WorkloadsViewState::new();
+        let mut no_ssh = card(&"a".repeat(64), LeaseLife::Running);
+        no_ssh.lease.ssh_offered = false;
+        let access = LeaseAccess {
+            host: "203.0.113.7".to_string(),
+            ssh_port: Some(40000),
+            ports: vec![ForwardedPort {
+                container_port: 80,
+                host_port: 30080,
+            }],
+        };
+        no_ssh.lease.access = Some(access.clone());
+        no_ssh.status = WorkloadStatus::Read {
+            life: LeaseLife::Running,
+            access: Some(access),
+            expires_at: None,
+            cost: None,
+        };
+        let workload_id = no_ssh.workload_id.clone();
+        state.dashboard = Some(dashboard(vec![no_ssh]));
+        let items = copyables(&state);
+        // The bare host, never an `ssh` command — the provider's own
+        // `ssh_port` proves nothing about whether anything answers on it.
+        assert_eq!(items[0], ("Access".to_string(), "203.0.113.7".to_string()));
+        assert!(items.contains(&("web".to_string(), "http://203.0.113.7:30080".to_string())));
+        assert!(items.contains(&("Workload ID".to_string(), workload_id)));
+        assert!(!items.iter().any(|(_, value)| value.contains("ssh -p")));
     }
 
     #[test]

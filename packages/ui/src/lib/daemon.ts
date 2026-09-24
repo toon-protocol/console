@@ -301,6 +301,8 @@ export interface TemplateView {
   envFixed: Record<string, string>;
   envTenant: string[];
   minResources?: TemplateResources;
+  /** Informational, not part of §8.3's shape: see `templates.ts`'s own field. */
+  sshOffered: boolean;
   availability: TemplateAvailability;
   warnings: string[];
   publishedAt: string;
@@ -339,6 +341,8 @@ export interface SpawnContent {
 export interface ExpandedTemplate {
   template: string;
   spawn: SpawnContent;
+  /** `template.sshOffered`, echoed: whether `spawn.ssh_public_key` is real. */
+  sshOffered: boolean;
   warnings: string[];
 }
 
@@ -872,6 +876,8 @@ export interface LeaseView {
   image: LeaseImage;
   ports: LeasePort[];
   envKeys: string[];
+  /** Whether `access.ssh_port` is worth showing: see `lease-vault.ts`'s own field. */
+  sshOffered: boolean;
   createdAt: string;
   /** Marked local only: this lease's record is on this machine and nowhere else. */
   localOnly: boolean;

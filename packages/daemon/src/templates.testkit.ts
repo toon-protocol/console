@@ -46,6 +46,8 @@ export interface TemplateDraft {
     storage_gb: number;
     gpu?: string;
   };
+  /** Omitted (or `true`) offers SSH, matching every Template before this field. */
+  readonly sshOffered?: boolean;
   readonly createdAt?: number;
   /** Replaces the whole content, for the "this is not a Template" cases. */
   readonly rawContent?: string;
@@ -90,6 +92,7 @@ export function templateEvent(publisher: FakePublisher, draft: TemplateDraft): N
         env_fixed: draft.envFixed ?? {},
         env_tenant: draft.envTenant ?? [],
         ...(draft.minResources === undefined ? {} : { min_resources: draft.minResources }),
+        ...(draft.sshOffered === false ? { ssh_offered: false } : {}),
       }),
   });
 }

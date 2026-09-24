@@ -741,22 +741,31 @@ export async function runSmoke(options: SmokeOptions): Promise<SmokeReport> {
         found.availability.state === 'available',
         `the gallery calls the Template unavailable: ${found.availability.reason ?? ''}`
       );
-      const expanded = await api.post('/api/templates/expand', {
-        template: address,
-        sshPublicKey,
-      });
+      must(
+        found.sshOffered === false,
+        'this smoke’s own Template must say plainly that it offers no SSH (TOON_Network#138)'
+      );
+      // No key of this run's is sent: the Template offers none, and the New
+      // workload form would not have asked for one either (TOON_Network#138).
+      const expanded = await api.post('/api/templates/expand', { template: address });
       must(
         expanded.status === 200,
         `expanding it answered ${expanded.status}: ${text(expanded.body)}`
       );
-      const spawnContent = (expanded.body as { spawn?: { image?: { digest?: string } } })
-        .spawn;
+      const spawnContent = (
+        expanded.body as { spawn?: { image?: { digest?: string }; ssh_public_key?: string } }
+      ).spawn;
       must(
         spawnContent?.image?.digest === found.image.digest,
         'the expansion names a different image from the Template'
       );
+      must(
+        spawnContent?.ssh_public_key !== sshPublicKey,
+        'the expansion sent this run’s real SSH key to a Template that offers no SSH'
+      );
       step.fact(
-        `the gallery reads it back as available and expands it to ${found.image.digest.slice(0, 20)}…`
+        `the gallery reads it back as available and expands it to ${found.image.digest.slice(0, 20)}… ` +
+          'with no SSH key, honestly'
       );
       return address;
     });
@@ -768,7 +777,6 @@ export async function runSmoke(options: SmokeOptions): Promise<SmokeReport> {
         provider: target.provider.pubkey,
         listing: target.listing.name,
         listingVersion: target.listing.version,
-        sshPublicKey,
       });
       must(
         spawned.status === 200,
@@ -779,7 +787,13 @@ export async function runSmoke(options: SmokeOptions): Promise<SmokeReport> {
       );
       const result = spawned.body as {
         cost?: string;
-        lease?: { workloadId?: string; state?: string; relays?: string[]; template?: string };
+        lease?: {
+          workloadId?: string;
+          state?: string;
+          relays?: string[];
+          template?: string;
+          sshOffered?: boolean;
+        };
       };
       step.spent(result.cost);
       const lease = present(result.lease, 'the spawn returned no lease');
@@ -795,6 +809,11 @@ export async function runSmoke(options: SmokeOptions): Promise<SmokeReport> {
       must(
         lease.template === template,
         'the vault record does not name the Template it came from'
+      );
+      must(
+        lease.sshOffered === false,
+        'the Lease Vault record reads `sshOffered: true` for a workload spawned with no key ' +
+          '(TOON_Network#138)'
       );
       must(
         !JSON.stringify(spawned.body).includes(mnemonic),
@@ -1710,6 +1729,7 @@ interface TemplateView {
   readonly address: string;
   readonly image: { readonly digest: string };
   readonly availability: { readonly state: string; readonly reason?: string };
+  readonly sshOffered: boolean;
 }
 
 interface WorkloadCardView {
@@ -1823,8 +1843,80 @@ export async function readNetworkFacts(
 const REGISTRY_KIND = 30434;
 const TEMPLATE_KIND = 30436;
 const TOON_LABEL = 'toon.network';
-/** The `d` this run replaces on every run, so re-running leaves one of each. */
+/**
+ * The `d` this run replaces on every run, so re-running leaves one of each.
+ *
+ * Kept as-is on purpose (TOON_Network#138): nothing else in this repository
+ * keys on the literal string, but the point of an addressable event is that
+ * republishing the SAME `d` replaces what is already on the relay rather than
+ * leaving an old, SSH-claiming copy sitting there forever next to a new,
+ * honest one under a different name.
+ */
 const TEMPLATE_NAME = 'toon-console-smoke';
+
+/** Shown as the Template's name today — see `smokeTemplateTags`' `title`/`summary`. */
+const TEMPLATE_TITLE = 'Smoke test — HTTP echo (no SSH)';
+const TEMPLATE_SUMMARY =
+  'Published by `npm run smoke:console` and the TUI smoke (TOON_Network#101, #149) to prove a ' +
+  'spawn end to end. Runs traefik/whoami, a plain HTTP echo server with no sshd — this Template ' +
+  'offers no SSH, and a lease bought from it is a throwaway test fixture, not a workload to keep.';
+
+/**
+ * The Template content this run publishes — pure, so `smoke-console-run.test.ts`
+ * checks it with no network and no payment (TOON_Network#138).
+ *
+ * `ssh_offered: false` is spelled out rather than merely left off: §8.3 names
+ * no SSH field at all, so every Template that says nothing reads as "cannot
+ * say either way" (`templates.ts`), which is exactly the wrong answer for an
+ * image that is known, here, to run nothing on port 22.
+ */
+export function buildSmokeTemplateContent(input: {
+  readonly digest: string;
+  readonly entryAddress: string;
+  readonly relay: string;
+}): {
+  readonly version: number;
+  readonly image: {
+    readonly digest: string;
+    readonly registry_entry: { readonly address: string; readonly relay: string };
+  };
+  readonly ports: readonly { readonly container_port: number; readonly protocol: 'tcp' }[];
+  readonly env_fixed: Record<string, never>;
+  readonly env_tenant: readonly string[];
+  readonly ssh_offered: false;
+} {
+  return {
+    version: 1,
+    image: {
+      digest: input.digest,
+      // The hint is the PROVIDER's own relay, not this console's.
+      //
+      // §6.2 makes `relay` a place to LOOK and never an authority, and a
+      // provider refuses a hint that is not publicly routable — it will not
+      // read an Image Registry entry from inside its operator's own network
+      // (§8.4, TOON_Network#107). On a sandbox the same relay is `localhost`
+      // to this console and a compose name to the provider, so a hint copied
+      // from the network profile is the one spelling that cannot work. The
+      // provider publishes its own Relay Set in its Profile (§4.1), which is
+      // the spelling that CAN, and `--template-relay` overrides both.
+      registry_entry: { address: input.entryAddress, relay: input.relay },
+    },
+    ports: [{ container_port: 80, protocol: 'tcp' }],
+    env_fixed: {},
+    env_tenant: [],
+    ssh_offered: false,
+  };
+}
+
+/** The Template event's tags: addressed, labelled, and titled as a test fixture. */
+export function smokeTemplateTags(): string[][] {
+  return [
+    ['d', TEMPLATE_NAME],
+    ['L', TOON_LABEL],
+    ['title', TEMPLATE_TITLE],
+    ['summary', TEMPLATE_SUMMARY],
+  ];
+}
 
 /**
  * Publish an Image Registry entry and a Template naming it, as the account.
@@ -1873,34 +1965,16 @@ export async function publishTemplate(input: {
     secret
   ) as NostrEvent;
 
-  const template = {
-    version: 1,
-    image: {
-      digest: entry.digest,
-      // The hint is the PROVIDER's own relay, not this console's.
-      //
-      // §6.2 makes `relay` a place to LOOK and never an authority, and a
-      // provider refuses a hint that is not publicly routable — it will not
-      // read an Image Registry entry from inside its operator's own network
-      // (§8.4, TOON_Network#107). On a sandbox the same relay is `localhost`
-      // to this console and a compose name to the provider, so a hint copied
-      // from the network profile is the one spelling that cannot work. The
-      // provider publishes its own Relay Set in its Profile (§4.1), which is
-      // the spelling that CAN, and `--template-relay` overrides both.
-      registry_entry: { address: entryAddress, relay: input.relay },
-    },
-    ports: [{ container_port: 80, protocol: 'tcp' }],
-    env_fixed: {},
-    env_tenant: [],
-  };
+  const template = buildSmokeTemplateContent({
+    digest: entry.digest,
+    entryAddress,
+    relay: input.relay,
+  });
   const templateEvent = finalizeEvent(
     {
       kind: TEMPLATE_KIND,
       created_at: now,
-      tags: [
-        ['d', TEMPLATE_NAME],
-        ['L', TOON_LABEL],
-      ],
+      tags: smokeTemplateTags(),
       content: JSON.stringify(template),
     },
     secret

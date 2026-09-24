@@ -99,6 +99,7 @@ function card(
       image: { digest: `sha256:${'0'.repeat(64)}` },
       ports: [],
       envKeys: [],
+      sshOffered: true,
       createdAt: '2026-09-23T00:00:00.000Z',
       localOnly: false,
       source: 'relays',
