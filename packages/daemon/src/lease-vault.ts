@@ -879,7 +879,7 @@ export class LeaseVault {
           ['a', `${LEASE_VAULT_KIND}:${signer.pubkey}:${d}`],
           ['k', String(LEASE_VAULT_KIND)],
         ],
-        content: 'the spawn this record was written for was refused',
+        content: because,
       })) as unknown as NostrEvent;
       // Best effort, and paid for separately: a relay that honours NIP-09
       // drops the record altogether, and one that does not still serves the

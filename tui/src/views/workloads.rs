@@ -1042,6 +1042,9 @@ pub fn handle_key(state: &mut WorkloadsViewState, key: KeyEvent) -> Option<Comma
                     "It has already ended, so nothing changes about the workload itself \u{2014} \
                      only this account's own record of it goes."
                         .to_string(),
+                    "If its record was published, retracting it is two paid relay writes \
+                     (a tombstone, then a deletion) at the relay's price, about 1 base unit each."
+                        .to_string(),
                 ],
                 WorkloadAction::Forget {
                     workload_id: card.workload_id.clone(),
