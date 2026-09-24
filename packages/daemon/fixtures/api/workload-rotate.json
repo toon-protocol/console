@@ -1,0 +1,81 @@
+{
+  "workloadId": "e369392dcbcccd0970cd104ca7a82389d87f0d340bb12a5b268911d4959a359d",
+  "started": true,
+  "rotated": true,
+  "problems": [],
+  "members": [
+    {
+      "pubkey": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "index": 0,
+      "role": "standalone",
+      "sent": true,
+      "rotated": true,
+      "route": {
+        "route": "g.toon.provider.rotate",
+        "payAt": "https://provider.example/ilp",
+        "via": "provider-connector",
+        "reason": "https://provider.example/ilp prices g.toon.provider.rotate at nothing, so this packet is bought where it is free (spec §5). A connector that merely forwards charges its own fee to carry it.",
+        "price": "0",
+        "chain": "evm:31337",
+        "channelId": "0xchannel"
+      },
+      "message": "Rotated. From this moment the old token is `not_tenant` at this provider, and every Gateway Grant derived from it is `bad_grant` — there is no grace period and nothing is kept per gateway (spec §6.8, ADR 0018)."
+    }
+  ],
+  "confirmed": 1,
+  "of": 1,
+  "vaultCost": "2",
+  "view": {
+    "workloadId": "e369392dcbcccd0970cd104ca7a82389d87f0d340bb12a5b268911d4959a359d",
+    "underWay": false,
+    "ok": true,
+    "problems": [],
+    "members": [
+      {
+        "pubkey": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "index": 0,
+        "role": "standalone",
+        "confirmed": false,
+        "ok": true,
+        "problems": [],
+        "route": {
+          "route": "g.toon.provider.rotate",
+          "payAt": "https://provider.example/ilp",
+          "via": "provider-connector",
+          "reason": "https://provider.example/ilp prices g.toon.provider.rotate at nothing, so this packet is bought where it is free (spec §5). A connector that merely forwards charges its own fee to carry it.",
+          "price": "0",
+          "chain": "evm:31337",
+          "channelId": "0xchannel"
+        }
+      }
+    ],
+    "confirmed": 0,
+    "of": 1,
+    "rotatedAt": "2026-09-24T12:43:30.851Z",
+    "vault": {
+      "relays": [
+        "wss://own.relay.test"
+      ],
+      "plan": [
+        {
+          "url": "wss://own.relay.test",
+          "ready": true,
+          "destination": "g.toon.relay",
+          "payAt": "https://connector.test/ilp",
+          "price": "1",
+          "chain": "evm:31337",
+          "channelId": "0xchannel",
+          "via": "document"
+        }
+      ],
+      "destination": "g.toon.relay",
+      "payAt": "https://connector.test/ilp",
+      "price": "1",
+      "totalPrice": "1",
+      "chain": "evm:31337",
+      "channelId": "0xchannel",
+      "ready": true
+    },
+    "localOnly": false
+  }
+}

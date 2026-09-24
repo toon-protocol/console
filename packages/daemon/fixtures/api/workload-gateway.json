@@ -1,0 +1,19 @@
+{
+  "workloadId": "4e178bfca54bfbbb8b621dcb2b47ba1b215a4bd321c01b78540d0ecaab55ad02",
+  "hostname": "jylyx7ffjp53xc3cdxfswr52dmqvus6tehabw6cubuhmvk2vvuba.gw.example",
+  "gateway": {
+    "connectorUrl": "https://gateway.example/ilp",
+    "ilpAddress": "g.toon.workload-gateway",
+    "route": "g.toon.workload-gateway.handover",
+    "price": "0",
+    "domain": "gw.example"
+  },
+  "held": false,
+  "problems": [],
+  "ok": true,
+  "ports": [
+    80
+  ],
+  "httpPort": 80,
+  "checkedAt": "2026-09-24T12:43:30.014Z"
+}

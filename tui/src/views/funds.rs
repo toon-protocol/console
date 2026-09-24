@@ -10,10 +10,13 @@
 //! chain stacked at once, which a terminal's height does not have room for.
 //!
 //! Two spending actions live here — opening a channel and buying gas — and
-//! both go through [`crate::confirm`] before a byte reaches the daemon: `o`
-//! and `b` only PROPOSE the action, and the amount is on screen before `y`
-//! then `Enter` sends it. See `crate::confirm` for why that module exists on
-//! its own rather than folded into this one.
+//! both go through [`crate::widgets::confirm`] before a byte reaches the
+//! daemon: `o` and `b` only PROPOSE the action, and the amount is on screen
+//! before typing `yes` then `Enter` sends it — the same shared confirm
+//! widget TOON_Network#143's Workloads view built (this view originally had
+//! its own minimal `y`-then-`Enter` modal; ported onto the shared one so
+//! every spending/destructive/publish action in this console behaves the
+//! same way).
 
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -23,15 +26,14 @@ use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::app::Command;
-use crate::clipboard::ClipboardResult;
-use crate::confirm::{self, Confirm};
 use crate::types::{
     ChainFundingView, FaucetView, FundingStatus, GasPurchase, GasQuote, GasStationStatus,
 };
+use crate::widgets::confirm::{Confirm, ConfirmOutcome};
 
 /// What is being confirmed, captured at the moment `o` or `b` proposed it so
-/// that what `y`+`Enter` sends is provably what was shown — nothing is
-/// recomputed between the two.
+/// that what typing `yes`+`Enter` sends is provably what was shown — nothing
+/// is recomputed between the two.
 #[derive(Debug, Clone, PartialEq)]
 enum Action {
     OpenChannel {
@@ -42,12 +44,6 @@ enum Action {
         chain: String,
         quote_id: String,
     },
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct PendingConfirm {
-    confirm: Confirm,
-    action: Action,
 }
 
 pub struct FundsState {
@@ -65,7 +61,7 @@ pub struct FundsState {
     pub gas_quote: Option<GasQuote>,
     pub gas_purchase: Option<GasPurchase>,
     pub selected: usize,
-    confirm: Option<PendingConfirm>,
+    confirm: Option<Confirm<Action>>,
     pub clipboard_message: Option<String>,
 }
 
@@ -143,14 +139,6 @@ impl FundsState {
             }
             Err(message) => self.gas_error = Some(message),
         }
-    }
-
-    pub fn set_clipboard_result(&mut self, result: ClipboardResult) {
-        self.clipboard_message = Some(match result {
-            ClipboardResult::Copied => "Copied.".to_string(),
-            ClipboardResult::Unavailable(message) => message,
-            ClipboardResult::Failed(message) => format!("Copy failed: {message}"),
-        });
     }
 
     fn selected_chain(&self) -> Option<&ChainFundingView> {
@@ -259,13 +247,14 @@ fn open_channel_confirm(state: &mut FundsState) {
         "This locks collateral on chain and pays the chain's own gas for the transaction."
             .to_string(),
     ];
-    state.confirm = Some(PendingConfirm {
-        confirm: Confirm::new("Open channel", lines),
-        action: Action::OpenChannel {
+    state.confirm = Some(Confirm::new(
+        "Open channel",
+        lines,
+        Action::OpenChannel {
             chain: chain_id,
             deposit,
         },
-    });
+    ));
 }
 
 fn buy_gas_confirm(state: &mut FundsState) {
@@ -285,13 +274,14 @@ fn buy_gas_confirm(state: &mut FundsState) {
         format!("Pay {} base units to the gas station", quote.price),
         format!("Moves {} lamports to {}", quote.lamports, quote.recipient),
     ];
-    state.confirm = Some(PendingConfirm {
-        confirm: Confirm::new("Buy gas", lines),
-        action: Action::BuyGas {
+    state.confirm = Some(Confirm::new(
+        "Buy gas",
+        lines,
+        Action::BuyGas {
             chain: chain_id,
             quote_id: quote.quote_id.clone(),
         },
-    });
+    ));
 }
 
 /// Feeds a keypress to an OPEN confirmation. Returns `None` when none is
@@ -300,22 +290,21 @@ fn buy_gas_confirm(state: &mut FundsState) {
 /// confirmation or to the view underneath it.
 pub fn handle_confirm_key(state: &mut FundsState, key: KeyEvent) -> Option<Command> {
     let pending = state.confirm.as_mut()?;
-    match confirm::handle_key(&mut pending.confirm, key) {
-        confirm::Outcome::Pending => Some(Command::None),
-        confirm::Outcome::Cancelled => {
+    match pending.handle_key(key) {
+        ConfirmOutcome::Pending => Some(Command::None),
+        ConfirmOutcome::Cancelled => {
             state.confirm = None;
             Some(Command::None)
         }
-        confirm::Outcome::Confirmed => {
-            let action = state.confirm.take().map(|pending| pending.action);
+        ConfirmOutcome::Confirmed(action) => {
+            state.confirm = None;
             Some(match action {
-                Some(Action::OpenChannel { chain, deposit }) => Command::OpenChannel {
+                Action::OpenChannel { chain, deposit } => Command::OpenChannel {
                     chain,
                     deposit,
                     connector: None,
                 },
-                Some(Action::BuyGas { chain, quote_id }) => Command::BuyGas { chain, quote_id },
-                None => Command::None,
+                Action::BuyGas { chain, quote_id } => Command::BuyGas { chain, quote_id },
             })
         }
     }
@@ -340,7 +329,7 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &FundsState) {
     draw_ready(frame, area, state, funding);
 
     if let Some(pending) = &state.confirm {
-        confirm::draw(frame, area, &pending.confirm);
+        crate::widgets::confirm::draw(frame, area, pending);
     }
 }
 
@@ -1212,7 +1201,7 @@ mod tests {
             "one keypress must not open anything"
         );
         assert!(state.confirm.is_some());
-        let confirm = &state.confirm.as_ref().unwrap().confirm;
+        let confirm = state.confirm.as_ref().unwrap();
         assert!(confirm.lines.iter().any(|line| line.contains("1000000")));
     }
 
@@ -1228,7 +1217,8 @@ mod tests {
     }
 
     #[test]
-    fn confirming_an_open_channel_with_y_then_enter_issues_the_command_and_closes_the_modal() {
+    fn confirming_an_open_channel_by_typing_yes_then_enter_issues_the_command_and_closes_the_modal(
+    ) {
         let mut state = FundsState::default();
         state.funding = Some(sample_funding(
             "ready",
@@ -1237,17 +1227,20 @@ mod tests {
         handle_key(&mut state, key(KeyCode::Char('o')));
         assert!(state.confirm.is_some());
 
-        // Enter alone (before `y`) must not confirm.
+        // Enter alone (before typing `yes`) must not confirm — one keypress
+        // can never publish/spend (`widgets::confirm`'s own invariant).
         assert_eq!(
             handle_confirm_key(&mut state, key(KeyCode::Enter)),
             Some(Command::None)
         );
         assert!(state.confirm.is_some(), "one keypress did not confirm");
 
-        assert_eq!(
-            handle_confirm_key(&mut state, key(KeyCode::Char('y'))),
-            Some(Command::None)
-        );
+        for c in "yes".chars() {
+            assert_eq!(
+                handle_confirm_key(&mut state, key(KeyCode::Char(c))),
+                Some(Command::None)
+            );
+        }
         assert_eq!(
             handle_confirm_key(&mut state, key(KeyCode::Enter)),
             Some(Command::OpenChannel {
@@ -1374,10 +1367,12 @@ mod tests {
         });
         handle_key(&mut state, key(KeyCode::Char('b')));
         assert!(state.confirm.is_some());
-        assert_eq!(
-            handle_confirm_key(&mut state, key(KeyCode::Char('y'))),
-            Some(Command::None)
-        );
+        for c in "yes".chars() {
+            assert_eq!(
+                handle_confirm_key(&mut state, key(KeyCode::Char(c))),
+                Some(Command::None)
+            );
+        }
         assert_eq!(
             handle_confirm_key(&mut state, key(KeyCode::Enter)),
             Some(Command::BuyGas {

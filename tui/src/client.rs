@@ -92,7 +92,9 @@ impl DaemonClient {
         self.send(Method::POST, path, None).await
     }
 
-    /// `DELETE <path>`, decoded as `T`.
+    /// `DELETE <path>`, decoded as `T`. TOON_Network#144's `DELETE
+    /// …/auto-extend` is the first route this crate calls with this verb;
+    /// same 401-then-reread retry as every other verb, via `send`.
     pub async fn delete<T: DeserializeOwned>(&self, path: &str) -> Result<T, ClientError> {
         self.send(Method::DELETE, path, None).await
     }

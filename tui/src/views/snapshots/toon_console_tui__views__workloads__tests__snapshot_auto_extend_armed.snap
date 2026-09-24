@@ -1,0 +1,34 @@
+---
+source: src/views/workloads.rs
+expression: render(&state)
+---
+┌ Workloads────────────────────────────────────────────────────────┐┌ Detail ────────────────────────────────────────────────────────────────────────┐
+│  ID            LISTING    STATUS      RUNWAY      SB   GW        ││aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa                │
+│> aaaaaaaaaaaa… basic v1   running     3 d 0 h          ✓         ││Listing basic v1  Provider g.toon.provider                                      │
+│                                                                  ││Runway 3 d 0 h                                                                  │
+│                                                                  ││                                                                                │
+│                                                                  ││Leases (primary first)                                                          │
+│                                                                  ││  standalone running          basic v1  running now                             │
+│                                                                  ││                                                                                │
+│                                                                  ││Access                                                                          │
+│                                                                  ││  Host 203.0.113.7                                                              │
+│                                                                  ││  SSH  ssh -p 40000 tenant@203.0.113.7                                          │
+│                                                                  ││                                                                                │
+│                                                                  ││Most recent takeover                                                            │
+│                                                                  ││  No Takeover has happened for this workload.                                   │
+│                                                                  ││                                                                                │
+│                                                                  ││Auto-extend                                                                     │
+│                                                                  ││  Extending automatically. 1000 of 3000 spent over 1 extension(s), 2000 left, at│
+│                                                                  ││no more than 1000 a round.                                                      │
+│                                                                  ││                                                                                │
+│                                                                  ││Gateway                                                                         │
+│                                                                  ││  vkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkva.gw.devnet.toonprotocol.de│
+│                                                                  ││v — reading…                                                                    │
+│                                                                  ││                                                                                │
+│                                                                  ││Continuation Token                                                              │
+│                                                                  ││  Reading…                                                                      │
+│                                                                  ││                                                                                │
+│                                                                  ││                                                                                │
+│                                                                  ││                                                                                │
+│                                                                  ││                                                                                │
+└──────────────────────────────────────────────────────────────────┘└────────────────────────────────────────────────────────────────────────────────┘

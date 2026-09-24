@@ -9,16 +9,19 @@
 //! - `desktop`   — the `/api/desktop` long poll.
 //! - `ui`        — the shell (header, sidebar, footer, help overlay).
 //! - `views::*`  — one module per sidebar view.
-//! - `widgets::*`— small reusable UI pieces shared by more than one view.
+//! - `widgets::*` — reusable pieces a view's own module draws with: a masked
+//!   text field (`widgets::input`), a filterable list's key handling
+//!   (`widgets::list`) and a confirmation modal that one keypress cannot
+//!   pass (`widgets::confirm`) — Workloads (extend/terminate/auto-extend/
+//!   rotate/gateway), Funds (open channel/buy gas) and Chain Seed (publish)
+//!   all reuse the last one rather than growing their own.
 //! - `format`    — small display formatters shared by views.
 //! - `markdown`  — Markdown -> ratatui `Text`, for the Docs view.
 //! - `clipboard` — `wl-copy`, or a message saying it is not there.
-//! - `confirm`   — a minimal confirm-before-spending modal (TOON_Network#147).
 
 pub mod app;
 pub mod client;
 pub mod clipboard;
-pub mod confirm;
 pub mod desktop;
 pub mod format;
 pub mod launch;

@@ -12,6 +12,7 @@ use crate::types::{DocsIndex, DocsPage, Health, LocalSignerRequest, Profiles, Se
 use crate::views::account::{self, AccountViewState};
 use crate::views::directory::{self, DirectoryCommand, DirectoryViewState};
 use crate::views::funds::FundsState;
+use crate::views::workloads::{self, WorkloadsViewState};
 
 /// How many lines `PageUp`/`PageDown` scroll the Docs article — arbitrary,
 /// but big enough that a page key visibly moves a full screen's worth on a
@@ -168,6 +169,12 @@ pub struct App {
     /// balances, the gas station and its confirmations. Kept as one field
     /// rather than spread across `App` so `views::funds` owns its shape.
     pub funds: FundsState,
+    /// The Workloads view's own state (TOON_Network#143): its list, its
+    /// selected card's detail, and any open confirmation. Kept as one field
+    /// rather than flattened into `App`, the way `ui.rs` keeps a view's
+    /// drawing to itself — `handle_key` only ever reaches into it through
+    /// `views::workloads::handle_key`.
+    pub workloads: WorkloadsViewState,
 }
 
 impl App {
@@ -198,6 +205,7 @@ impl App {
             docs_link_hrefs: Vec::new(),
             docs_link_index: 0,
             funds: FundsState::default(),
+            workloads: WorkloadsViewState::new(),
         }
     }
 }
@@ -222,11 +230,12 @@ impl Default for App {
 /// applied the parts of it that are pure state (switching views, opening
 /// help). The runtime owns quitting, redrawing and network calls.
 ///
-/// Not `Copy`: `OpenDoc`/`OpenDocsLink`/`AddLocalSigner`/the Funds variants/...
-/// carry owned data (a `d`, an `href`, a `LocalSignerRequest`, a chain id, a
-/// quote id, ...), which a `Copy` type cannot hold. Not `Eq` either:
-/// `LocalSignerRequest` (from `types.rs`, mirroring the daemon's request
-/// body) derives only `PartialEq`.
+/// Not `Copy`: `OpenDoc`/`OpenDocsLink`/`AddLocalSigner`/the Funds and
+/// Workloads variants/... carry owned data (a `d`, an `href`, a
+/// `LocalSignerRequest`, a chain id, a workload id, ...), which a `Copy`
+/// type cannot hold. Not `Eq` either: `LocalSignerRequest` (from
+/// `types.rs`, mirroring the daemon's request body) derives only
+/// `PartialEq`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     None,
@@ -284,6 +293,36 @@ pub enum Command {
         chain: String,
         quote_id: String,
     },
+    RefreshWorkloads,
+    ExtendWorkload {
+        workload_id: String,
+        max_price: Option<String>,
+    },
+    TerminateWorkload {
+        workload_id: String,
+    },
+    /// `POST …/auto-extend` with `confirm: true` (TOON_Network#144).
+    ArmAutoExtend {
+        workload_id: String,
+        budget: String,
+        agreed_price: String,
+    },
+    /// `DELETE …/auto-extend`.
+    DisarmAutoExtend {
+        workload_id: String,
+    },
+    /// `POST …/rotate` (spec §6.8, ADR 0018).
+    RotateWorkload {
+        workload_id: String,
+    },
+    /// `POST …/gateway/handover`.
+    HandOverWorkload {
+        workload_id: String,
+    },
+    /// `POST …/gateway/withdraw`.
+    WithdrawWorkload {
+        workload_id: String,
+    },
     CopyToClipboard(String),
 }
 
@@ -336,6 +375,19 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> Command {
             app.profiles.as_ref(),
             key,
         ) {
+            return command;
+        }
+    }
+
+    // Workloads gets first refusal too (TOON_Network#143), the same shape as
+    // Account just above: its own filter box and confirmation modal need to
+    // swallow keys (a digit, `Esc`, `q`) that would otherwise switch a view
+    // or quit, and only it knows when it is in one of those states. A key it
+    // has no opinion about (`None`) falls through to the ordinary keymap
+    // below, which is how `Tab`, `1`-`7` and `?` keep working while the
+    // Workloads view is merely showing its list.
+    if app.view == View::Workloads {
+        if let Some(command) = workloads::handle_key(&mut app.workloads, key) {
             return command;
         }
     }
@@ -467,6 +519,12 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> Command {
         // the guarded arms so a global key (quit, help, view switching, a
         // digit) still wins even while Funds is the current view.
         _ if app.view == View::Funds => crate::views::funds::handle_key(&mut app.funds, key),
+        // TOON_Network#144 frees lowercase `r` for the Workloads view's own
+        // rotate action (`views::workloads::handle_key`, which gets first
+        // refusal on every key and already claims it there) — matching
+        // ADR 0028's Main area line, "j/k move, Enter opens, / filters and
+        // R refreshes". Only capital `R` refreshes here now.
+        KeyCode::Char('R') if app.view == View::Workloads => Command::RefreshWorkloads,
         _ => Command::None,
     }
 }
@@ -595,10 +653,16 @@ mod tests {
             Command::RefreshDocs
         );
 
-        // Neither fires on a view with no refresh of its own (TOON_Network#148
-        // added Docs' case; every other still-unbuilt view has none yet).
+        // Lowercase `r` does not refresh Workloads (TOON_Network#144 frees it
+        // for rotate) — capital `R` does, and `views::workloads::handle_key`
+        // gets first refusal on `r` regardless, here returning `Command::None`
+        // because no card is selected in a fresh `App`.
         app.view = View::Workloads;
         assert_eq!(handle_key(&mut app, key(KeyCode::Char('r'))), Command::None);
+        assert_eq!(
+            handle_key(&mut app, key(KeyCode::Char('R'))),
+            Command::RefreshWorkloads
+        );
     }
 
     #[test]

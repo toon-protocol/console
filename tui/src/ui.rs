@@ -141,6 +141,13 @@ fn draw_content(frame: &mut Frame, area: Rect, app: &App) {
             Some(health) => views::health::draw(frame, area, health),
             None => draw_loading(frame, area, "Health"),
         },
+        (View::Workloads, _) => {
+            let gateway_domain = app
+                .health
+                .as_ref()
+                .map(|h| h.profile.gateway_domain.as_str());
+            views::workloads::draw(frame, area, &app.workloads, gateway_domain);
+        }
         (View::Directory, _) => views::directory::draw(
             frame,
             area,
@@ -201,6 +208,11 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     if app.view == View::Health {
         spans.push(Span::raw(" r refresh "));
     }
+    if app.view == View::Workloads {
+        spans.push(Span::raw(
+            " j/k select  / filter  e extend  x terminate  y copy  a auto-extend  r rotate  g gateway  R refresh ",
+        ));
+    }
     if app.view == View::Directory {
         spans.push(Span::raw(
             " j/k move  Enter detail  i/a/g/d/n/H filter  r refresh ",
@@ -234,6 +246,7 @@ const HELP_LINES: &[&str] = &[
     "Shift+Tab  previous view",
     "h / l      previous / next view",
     "r          refresh Health, the open Docs page/list, Account, or Funds",
+    "R          refresh Workloads",
     "j / k      Docs: select a page, or scroll an open one",
     "Enter      Docs: open the selected page",
     "n / N      Docs: focus the next / previous link",
@@ -252,6 +265,15 @@ const HELP_LINES: &[&str] = &[
     "f          ask the faucet",
     "g          get a gas quote",
     "b          buy the shown gas quote (asks for confirmation)",
+    "-- Workloads --",
+    "j / k      select a workload",
+    "/          filter the list",
+    "e          extend (asks for confirmation)",
+    "x          terminate (asks for confirmation)",
+    "y          copy access details (wl-copy)",
+    "a          set/clear the auto-extend budget (asks for confirmation)",
+    "r          rotate the Continuation Token (asks for confirmation)",
+    "g          hand over to / withdraw from a gateway (asks for confirmation)",
 ];
 
 fn draw_help(frame: &mut Frame, area: Rect) {

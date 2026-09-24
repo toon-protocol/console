@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { handleApi, type ApiDeps, type ApiResponse } from './api.js';
+import { writeApiFixture } from './api-fixtures.testkit.js';
 import { ChainSeedStore } from './chain-seed.js';
 import { InMemoryChainSeedCache } from './chain-seed-cache.js';
 import {
@@ -175,6 +176,10 @@ describe('the gateway routes', () => {
     expect(view.held).toBe(false);
     expect(port.sent).toHaveLength(0);
     expect(probe.knocked).toHaveLength(0);
+
+    // The TUI's fixture contract (TOON_Network#144, ADR 0028): the detail
+    // pane's empty state, before anything has been handed over.
+    writeApiFixture('workload-gateway', answer.body);
   });
 
   it('knocks on the hostname for `?probe=1`, and sends no TOON packet to do it', async () => {
@@ -203,6 +208,11 @@ describe('the gateway routes', () => {
     expect(result.hostname).toBe(hostname);
     expect(result.matches).toBe(true);
     expect(port.sent).toHaveLength(1);
+
+    // The TUI's fixture contract (TOON_Network#144, ADR 0028): the hostname,
+    // shown once served.
+    writeApiFixture('workload-gateway-handover', answer.body);
+    writeApiFixture('workload-gateway-served', result.view);
   });
 
   it('carries NO Gateway Grant and no Root Secret in any answer', async () => {
@@ -234,6 +244,10 @@ describe('the gateway routes', () => {
     expect(result.withdrawn).toBe(true);
     expect(result.message).toContain('ends serving, not reading');
     expect(result.view.held).toBe(false);
+
+    // The TUI's fixture contract (TOON_Network#144, ADR 0028): withdraw ends
+    // serving, and the detail pane must not call that "revoked".
+    writeApiFixture('workload-gateway-withdraw', answer.body);
   });
 
   it('passes a gateway’s own refusal through with its code', async () => {

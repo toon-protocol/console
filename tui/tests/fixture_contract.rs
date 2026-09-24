@@ -20,8 +20,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use toon_console_tui::types::{
-    Directory, DocsIndex, DocsPage, FundingStatus, GasPurchase, GasQuote, GasStationStatus,
-    Health, Profiles, SessionStatus,
+    Dashboard, Directory, DocsIndex, DocsPage, ExtendResult, FundingStatus, GasPurchase,
+    GasQuote, GasStationStatus, GatewayView, HandoverResult, Health, Profiles, RotationResult,
+    RotationView, SessionStatus, TerminateResult, WithdrawalResult, WorkloadCard,
 };
 
 type Check = fn(&str) -> Result<(), String>;
@@ -54,6 +55,28 @@ fn registry() -> BTreeMap<&'static str, Check> {
     map.insert("gas-station", check::<GasStationStatus> as Check);
     map.insert("gas-quote", check::<GasQuote> as Check);
     map.insert("gas-purchase", check::<GasPurchase> as Check);
+    // TOON_Network#143 (Workloads view).
+    map.insert("workloads", check::<Dashboard> as Check);
+    map.insert("workload-extend", check::<ExtendResult> as Check);
+    map.insert("workload-terminate", check::<TerminateResult> as Check);
+    // TOON_Network#144 (auto-extend, rotate, gateway).
+    map.insert("workload-auto-extend-armed", check::<WorkloadCard> as Check);
+    map.insert("workload-auto-extend-off", check::<WorkloadCard> as Check);
+    map.insert("workload-rotation", check::<RotationView> as Check);
+    map.insert("workload-rotation-partial", check::<RotationView> as Check);
+    map.insert("workload-rotate", check::<RotationResult> as Check);
+    map.insert("workload-rotate-partial", check::<RotationResult> as Check);
+    map.insert("workload-rotate-finished", check::<RotationResult> as Check);
+    map.insert("workload-gateway", check::<GatewayView> as Check);
+    map.insert("workload-gateway-served", check::<GatewayView> as Check);
+    map.insert(
+        "workload-gateway-handover",
+        check::<HandoverResult> as Check,
+    );
+    map.insert(
+        "workload-gateway-withdraw",
+        check::<WithdrawalResult> as Check,
+    );
     map
 }
 
