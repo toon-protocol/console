@@ -97,7 +97,27 @@ impl FundsState {
         })
     }
 
-    pub fn apply_funding(&mut self, result: Result<FundingStatus, String>) {
+    /// How many chains hold an OPEN channel in the last funding read.
+    pub fn open_channels(&self) -> usize {
+        self.funding.as_ref().map_or(0, |funding| {
+            funding
+                .chains
+                .iter()
+                .filter(|chain| chain.channel.phase == "open")
+                .count()
+        })
+    }
+
+    /// Applies a funding read, and says whether it shows a channel that was
+    /// not open before — what a Chain Seed publish is waiting on, so the
+    /// runtime re-reads the Chain Seed when this is true.
+    pub fn apply_funding(&mut self, result: Result<FundingStatus, String>) -> bool {
+        let before = self.open_channels();
+        self.apply_funding_read(result);
+        self.open_channels() > before
+    }
+
+    fn apply_funding_read(&mut self, result: Result<FundingStatus, String>) {
         self.funding_loading = false;
         self.funding_busy = false;
         match result {
@@ -1508,6 +1528,28 @@ mod tests {
                 quote_id: "q-7".to_string(),
             })
         );
+    }
+
+    #[test]
+    fn apply_funding_says_when_a_channel_has_just_opened() {
+        let mut state = FundsState::default();
+        let opening = || {
+            sample_funding(
+                "ready",
+                vec![sample_chain("solana", true, "present", "opening")],
+            )
+        };
+        let open = || {
+            sample_funding(
+                "ready",
+                vec![sample_chain("solana", true, "present", "open")],
+            )
+        };
+        assert!(!state.apply_funding(Ok(opening())));
+        assert!(state.apply_funding(Ok(open())));
+        // Still open on the next poll: nothing new.
+        assert!(!state.apply_funding(Ok(open())));
+        assert!(!state.apply_funding(Err("daemon down".to_string())));
     }
 
     #[test]

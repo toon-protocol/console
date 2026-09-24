@@ -7,10 +7,28 @@
     "write": []
   },
   "writes": {
-    "relays": [],
-    "plan": [],
-    "ready": false,
-    "blockedBy": "Nothing has asked this network’s connector what a relay write costs yet."
+    "relays": [
+      "wss://relay.toon.test"
+    ],
+    "plan": [
+      {
+        "url": "wss://relay.toon.test",
+        "ready": true,
+        "destination": "g.toon.relay",
+        "payAt": "https://connector.test/ilp",
+        "price": "1",
+        "chain": "evm:31337",
+        "channelId": "0xchannel",
+        "via": "document"
+      }
+    ],
+    "destination": "g.toon.relay",
+    "payAt": "https://connector.test/ilp",
+    "price": "1",
+    "totalPrice": "1",
+    "chain": "evm:31337",
+    "channelId": "0xchannel",
+    "ready": true
   },
   "warning": {
     "text": "Whoever holds this account’s Nostr key holds its funds. The Chain Seed is sealed to that key, so anyone who can sign as this account can unseal it, derive these addresses and spend what they hold. Losing the Nostr key loses the funds with it: nothing in TOON Network, and no one running it, can recover them for you."

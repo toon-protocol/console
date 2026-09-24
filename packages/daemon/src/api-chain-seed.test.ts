@@ -208,6 +208,22 @@ describe('the chain seed routes', () => {
     expect(JSON.stringify(bad.body)).not.toMatch(/horse/u);
   });
 
+  it('reads what a write costs afresh, so a channel opened since shows on the next read', async () => {
+    writer = brokeWriter(toon);
+    await signIn();
+    await call('POST', '/api/chain-seed/acknowledge');
+    const imported = await call('POST', '/api/chain-seed/import', { mnemonic: VECTOR });
+    expect((imported.body as ChainSeedStatus).writes.ready).toBe(false);
+
+    // The account opens a channel on the Funds tab. Nothing on the Chain Seed
+    // routes is told; a plain read must still stop saying "no channel".
+    writer = fakePaidWriter(toon);
+    const after = await status();
+    expect(after.state).toBe('not_yet_recoverable');
+    expect(after.writes.ready).toBe(true);
+    expect(after.writes.blockedBy).toBeUndefined();
+  });
+
   it('answers 402 when the write cannot be paid for, and keeps the seed held', async () => {
     writer = brokeWriter(toon);
     await signIn();

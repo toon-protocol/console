@@ -276,6 +276,13 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()
                                 if let Some(client) = &client {
                                     spawn_account_fetch(client.clone(), tx.clone());
                                     app.loading_account = true;
+                                    // `r` on Account re-reads the Chain Seed
+                                    // section below it too: it is part of the
+                                    // same view.
+                                    if app.chain_seed_for_pubkey.is_some() {
+                                        spawn_chain_seed_fetch(client.clone(), tx.clone());
+                                        app.loading_chain_seed = true;
+                                    }
                                 }
                             }
                             Command::AddLocalSigner(request) => {
@@ -738,7 +745,18 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()
                         app.docs.open_error = Some(message);
                     }
                     // -- Funds (TOON_Network#147) --
-                    RuntimeEvent::FundingLoaded(result) => app.funds.apply_funding(*result),
+                    RuntimeEvent::FundingLoaded(result) => {
+                        // A channel that has just opened is what a Chain
+                        // Seed publish waits on ("no payment channel"), so
+                        // the Account view re-reads it rather than keep
+                        // saying so until the next sign-in.
+                        if app.funds.apply_funding(*result) && app.chain_seed_for_pubkey.is_some() {
+                            if let Some(client) = &client {
+                                spawn_chain_seed_fetch(client.clone(), tx.clone());
+                                app.loading_chain_seed = true;
+                            }
+                        }
+                    }
                     RuntimeEvent::GasStationLoaded(result) => app.funds.apply_gas_station(*result),
                     RuntimeEvent::GasQuoteLoaded(result) => app.funds.apply_gas_quote(*result),
                     RuntimeEvent::GasPurchaseLoaded(result) => app.funds.apply_gas_purchase(*result),

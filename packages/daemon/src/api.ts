@@ -566,7 +566,7 @@ async function handleChainSeed(
 ): Promise<ApiResponse> {
   const at = (route: string, verb: string) => path === route && method === verb;
 
-  if (at('/api/chain-seed', 'GET')) return ok(seed.status());
+  if (at('/api/chain-seed', 'GET')) return ok(await seed.read());
 
   if (at('/api/chain-seed/refresh', 'POST')) {
     // Optional `relays`: extra places to LOOK, for a fresh machine whose
