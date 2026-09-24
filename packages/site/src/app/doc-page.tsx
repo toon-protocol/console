@@ -58,7 +58,7 @@ export function DocPage({
         )}
       </nav>
 
-      <main className="doc-main">
+      <main className="doc-main" id="start">
         <p className="doc-meta">
           {doc.source === 'relays' ? (
             <>

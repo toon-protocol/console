@@ -1,6 +1,6 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { SiteApp } from '@/app/site-app';
 import { DEFAULT_CONFIG, type SiteConfig } from '@/lib/config';
@@ -27,8 +27,11 @@ const mount = (overrides: Partial<Parameters<typeof SiteApp>[0]> = {}) =>
 describe('the landing page', () => {
   it('leads with what the network is and what it costs', async () => {
     mount();
+    // The old headline — "rent a machine from somebody you have never met" —
+    // is equally true of any cloud with a credit card form, so it said nothing.
+    // What is only true here is that there is no account and no company at all.
     expect(await screen.findByRole('heading', { level: 1 })).toHaveTextContent(
-      /Rent a machine/u
+      /the whole relationship/u
     );
     expect(screen.getByText('1000 µUSDC')).toBeInTheDocument();
     expect(screen.getByText('5000 µUSDC')).toBeInTheDocument();
@@ -78,7 +81,7 @@ describe('the documentation', () => {
         list.getByRole('button', { name: new RegExp(`^${title}`, 'u') })
       ).toBeInTheDocument();
     }
-    expect(screen.getByRole('link', { name: 'Specification' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'Specification and ADRs' })).toHaveAttribute(
       'href',
       DEFAULT_CONFIG.specUrl
     );
@@ -169,5 +172,117 @@ describe('published versus bundled', () => {
     expect(
       within(main).getByRole('heading', { level: 1, name: 'Funding' })
     ).toBeInTheDocument();
+  });
+});
+
+describe('the lease meter', () => {
+  /**
+   * The hero's one job is to teach that a lease is prepaid time that stops.
+   * These are the two facts it must still say after somebody restyles it.
+   */
+  it('buys another hour when a visitor pays for one', async () => {
+    const user = userEvent.setup();
+    mount();
+    expect(await screen.findByText('2 × 1000 µUSDC')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /pay 1000 µUSDC/u }));
+    expect(screen.getByText('3 × 1000 µUSDC')).toBeInTheDocument();
+    expect(screen.getByText('3 hours')).toBeInTheDocument();
+  });
+
+  it('says what happens when nobody pays for the next hour', async () => {
+    const user = userEvent.setup();
+    mount();
+    await user.click(await screen.findByRole('button', { name: /stop paying/u }));
+    expect(screen.getByText('expired')).toBeInTheDocument();
+    expect(screen.getByText(/nobody cancelled it/iu)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /take a new lease/u })).toBeInTheDocument();
+  });
+});
+
+describe('the nav bar', () => {
+  it('carries which network this is, as a live status', async () => {
+    mount();
+    const chip = await screen.findByRole('status');
+    expect(chip).toHaveTextContent(/devnet/u);
+    expect(chip).toHaveTextContent(/test network/u);
+  });
+
+  it('keeps install one click away from any page', async () => {
+    mount({ initialPath: '/docs/funding' });
+    const nav = within(await screen.findByRole('navigation', { name: 'This site' }));
+    expect(nav.getByRole('link', { name: 'Install' })).toHaveAttribute('href', '/#install');
+  });
+
+  it('carries the project itself: its source, and where it posts', async () => {
+    mount();
+    const nav = within(await screen.findByRole('navigation', { name: 'This site' }));
+    expect(nav.getByRole('link', { name: /on GitHub/iu })).toHaveAttribute(
+      'href',
+      DEFAULT_CONFIG.repoUrl
+    );
+    expect(nav.getByRole('link', { name: /on X/iu })).toHaveAttribute(
+      'href',
+      DEFAULT_CONFIG.xUrl
+    );
+  });
+});
+
+describe('the theme', () => {
+  /**
+   * Omarchy is a desktop you re-dress, and the console follows whichever theme
+   * the desktop is in (ADR 0019). A page that explains that and cannot be
+   * re-dressed itself is making a claim it does not keep.
+   */
+  /**
+   * jsdom under Node 22 has no `localStorage` — Node's own experimental global
+   * shadows it — so one lives here for the length of these tests. The site
+   * itself guards every access and works without it; what is under test is
+   * that it uses one when there is one.
+   */
+  let store: Record<string, string> = {};
+  const fake = {
+    getItem: (key: string) => store[key] ?? null,
+    setItem: (key: string, value: string) => void (store[key] = value),
+    removeItem: (key: string) => {
+      store = Object.fromEntries(Object.entries(store).filter(([at]) => at !== key));
+    },
+  };
+
+  beforeEach(() => {
+    store = {};
+    Object.defineProperty(window, 'localStorage', { value: fake, configurable: true });
+  });
+
+  afterEach(() => {
+    document.documentElement.removeAttribute('data-theme');
+  });
+
+  it('wears an Omarchy theme when one is chosen, and remembers it', async () => {
+    const user = userEvent.setup();
+    mount();
+    await user.click(await screen.findByRole('button', { name: /change the theme/iu }));
+    await user.click(screen.getByRole('menuitemradio', { name: /gruvbox/iu }));
+    expect(document.documentElement.getAttribute('data-theme')).toBe('gruvbox');
+    expect(store['toon-site-theme']).toBe('gruvbox');
+  });
+
+  it('steps to the next theme on T, the key Omarchy itself uses', async () => {
+    const user = userEvent.setup();
+    mount();
+    await screen.findByRole('button', { name: /change the theme/iu });
+    await user.keyboard('t');
+    expect(document.documentElement.getAttribute('data-theme')).toBe('tokyo-night');
+    await user.keyboard('t');
+    expect(document.documentElement.getAttribute('data-theme')).toBe('catppuccin');
+  });
+
+  it('hands the choice back to the browser', async () => {
+    const user = userEvent.setup();
+    store['toon-site-theme'] = 'nord';
+    mount();
+    await user.click(await screen.findByRole('button', { name: /change the theme/iu }));
+    await user.click(screen.getByRole('menuitemradio', { name: /match the browser/iu }));
+    expect(document.documentElement.hasAttribute('data-theme')).toBe(false);
+    expect(store['toon-site-theme']).toBeUndefined();
   });
 });

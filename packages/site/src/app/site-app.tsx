@@ -6,6 +6,7 @@ import { BUNDLED_DOCS, docBySlug } from '@/lib/docs';
 
 import { DocPage } from './doc-page';
 import { Landing } from './landing';
+import { ThemePicker } from './theme-picker';
 
 /**
  * The site's shell (TOON_Network#102).
@@ -19,6 +20,11 @@ import { Landing } from './landing';
  * when the relays answer. That ordering is the point: the first paint needs no
  * network beyond the page itself, and a visitor on a bad connection reads the
  * docs instead of a spinner.
+ *
+ * Which network this is belongs in the nav bar and not in a strip beneath it.
+ * A banner under a header is the first thing a reader learns to skip, and this
+ * is the one fact the site cannot afford to have skipped; as a live chip beside
+ * the name it is read as part of the name, which is what it is.
  */
 
 interface Route {
@@ -53,6 +59,30 @@ function routeOf(pathname: string): Route {
   if (match?.[1] !== undefined) return { kind: 'doc', d: decodeURIComponent(match[1]) };
   if (path === '/docs' || path === '/docs/') return { kind: 'doc', d: 'concepts' };
   return { kind: 'landing' };
+}
+
+/** GitHub's own mark, at the size the bar wants it. */
+function GitHubMark() {
+  return (
+    <svg width="17" height="17" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <path
+        fill="currentColor"
+        d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"
+      />
+    </svg>
+  );
+}
+
+/** X's own mark. */
+function XMark() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path
+        fill="currentColor"
+        d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231 5.45-6.231Zm-1.161 17.52h1.833L7.084 4.126H5.117l11.966 15.644Z"
+      />
+    </svg>
+  );
 }
 
 export function SiteApp({
@@ -108,47 +138,74 @@ export function SiteApp({
 
   return (
     <div className="site">
-      <header className="site-header">
-        <button type="button" className="brand" onClick={openHome}>
-          TOON Network
-        </button>
-        <nav>
-          <button type="button" onClick={() => openDoc('concepts')}>
-            Docs
-          </button>
-          <a href={config.specUrl} target="_blank" rel="noopener noreferrer">
-            Specification
-          </a>
-          <a href={config.repoUrl} target="_blank" rel="noopener noreferrer">
-            Source
-          </a>
-        </nav>
-      </header>
+      <a className="skip" href="#start">
+        Skip to the page
+      </a>
 
-      <div className="network-banner" role="status">
-        <strong>{config.network}</strong> — a test network. There is no public mainnet provider
-        yet, and the money is mock money.
-      </div>
+      <header className="site-header">
+        <div className="wrap">
+          <button type="button" className="brand" onClick={openHome}>
+            TOON Network
+          </button>
+
+          <p className="chip" role="status">
+            <span className="net">{config.network}</span> — a test network
+          </p>
+
+          <nav className="site-nav" aria-label="This site">
+            <button type="button" onClick={() => openDoc('concepts')}>
+              Docs
+            </button>
+            <a
+              className="icon"
+              href={config.xUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="TOON Network on X"
+            >
+              <XMark />
+              <span className="visually-hidden">TOON Network on X</span>
+            </a>
+            <a
+              className="icon"
+              href={config.repoUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Source on GitHub"
+            >
+              <GitHubMark />
+              <span className="visually-hidden">Source on GitHub</span>
+            </a>
+            <a className="install" href={`${href('/')}#install`}>
+              Install
+            </a>
+            <ThemePicker />
+          </nav>
+        </div>
+      </header>
 
       {articles.fallback !== undefined && route.kind === 'doc' && (
         <p className="fallback-banner" role="status">
-          {articles.fallback}
+          <span>{articles.fallback}</span>
         </p>
       )}
 
       {route.kind === 'landing' ? (
         <Landing config={config} docs={articles.docs} onOpenDoc={openDoc} />
       ) : doc === undefined ? (
-        <main className="landing">
+        <main className="landing" id="start">
           <section className="hero">
-            <h1>No such page</h1>
-            <p className="lede">
-              There is no documentation page called “{route.d}”.{' '}
-              <button type="button" className="link" onClick={() => openDoc('concepts')}>
-                Start at Concepts
-              </button>
-              .
-            </p>
+            <div className="wrap">
+              <h1>No such page</h1>
+              <p className="lede">
+                There is no documentation page called “{route.d}”. The seven pages that do
+                exist start at{' '}
+                <button type="button" className="link" onClick={() => openDoc('concepts')}>
+                  Concepts
+                </button>
+                , which defines every word the rest of them use.
+              </p>
+            </div>
           </section>
         </main>
       ) : (
@@ -156,26 +213,31 @@ export function SiteApp({
       )}
 
       <footer className="site-footer">
-        <p>
-          The docs are Markdown in the console repository, published as NIP-23 long-form
-          articles (kind 30023) and rendered here from relays, with the repository copy bundled
-          as an offline fallback.
-        </p>
-        <p>
-          <a href={config.specUrl} target="_blank" rel="noopener noreferrer">
-            Specification and ADRs
-          </a>
-          {' · '}
-          <a href={config.repoUrl} target="_blank" rel="noopener noreferrer">
-            Console source
-          </a>
-          {articles.pubkey !== undefined && (
-            <>
-              {' · '}
-              <span className="mono">{articles.pubkey.slice(0, 16)}…</span>
-            </>
-          )}
-        </p>
+        <div className="wrap">
+          <p>
+            The docs are Markdown in the console repository, published as NIP-23 long-form
+            articles (kind 30023) and rendered here from relays, with the repository copy
+            bundled as an offline fallback. This page is static, stores nothing about you, and
+            asks no other server for anything.
+          </p>
+          <ul>
+            <li>
+              <a href={config.specUrl} target="_blank" rel="noopener noreferrer">
+                Specification and ADRs
+              </a>
+            </li>
+            <li>
+              <a href={config.repoUrl} target="_blank" rel="noopener noreferrer">
+                Console source
+              </a>
+            </li>
+            {articles.pubkey !== undefined && (
+              <li className="key">
+                Docs key <span className="mono">{articles.pubkey.slice(0, 16)}…</span>
+              </li>
+            )}
+          </ul>
+        </div>
       </footer>
     </div>
   );
