@@ -121,6 +121,13 @@ impl TextField {
     /// means, this type has no opinion on those.
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
         match key.code {
+            // Ctrl+U empties the field, as in a shell's line editor: a paste
+            // goes in at the cursor, so replacing a prefilled URL would
+            // otherwise mean deleting it a character at a time first.
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.clear();
+                true
+            }
             KeyCode::Char(c)
                 if !key.modifiers.contains(KeyModifiers::CONTROL)
                     && !key.modifiers.contains(KeyModifiers::ALT) =>
@@ -218,6 +225,16 @@ impl TextField {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn ctrl_u_empties_the_field() {
+        let mut field = TextField::new("URL", false);
+        field.set_value("https://old.example/ilp");
+        assert!(field.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL)));
+        assert_eq!(field.value(), "");
+        field.insert_str("https://new.example/ilp");
+        assert_eq!(field.value(), "https://new.example/ilp");
+    }
+
     use super::*;
 
     fn key(code: KeyCode) -> KeyEvent {

@@ -91,7 +91,7 @@ impl CopyPicker {
 }
 
 pub fn draw(frame: &mut Frame, area: Rect, picker: &CopyPicker) {
-    let width = 60u16.min(area.width.saturating_sub(4)).max(20);
+    let width = 90u16.min(area.width.saturating_sub(4)).max(20);
     let height = (picker.items.len() as u16 + 2).min(area.height.saturating_sub(2));
     let popup = centered(area, width, height);
     frame.render_widget(Clear, popup);
@@ -107,7 +107,7 @@ pub fn draw(frame: &mut Frame, area: Rect, picker: &CopyPicker) {
         .items
         .iter()
         .enumerate()
-        .map(|(index, (label, _))| {
+        .map(|(index, (label, value))| {
             let style = if index == picker.selected {
                 Style::default()
                     .fg(Color::Black)
@@ -116,11 +116,32 @@ pub fn draw(frame: &mut Frame, area: Rect, picker: &CopyPicker) {
             } else {
                 Style::default()
             };
-            ListItem::new(Line::from(Span::styled(label.clone(), style)))
+            // A dim preview of the value, so two items with the same label
+            // (two ILP addresses, two chains' tokens) can be told apart.
+            // Nothing offered here is a secret: `tests/copy_no_secrets.rs`.
+            let room = usize::from(inner.width).saturating_sub(label.chars().count() + 2);
+            ListItem::new(Line::from(vec![
+                Span::styled(label.clone(), style),
+                Span::raw("  "),
+                Span::styled(preview(value, room), Style::default().fg(Color::DarkGray)),
+            ]))
         })
         .collect();
 
     frame.render_widget(List::new(rows), inner);
+}
+
+/// `value` cut to `room` characters, with an ellipsis when it was cut.
+fn preview(value: &str, room: usize) -> String {
+    if value.chars().count() <= room {
+        return value.to_string();
+    }
+    if room == 0 {
+        return String::new();
+    }
+    let mut out: String = value.chars().take(room - 1).collect();
+    out.push('…');
+    out
 }
 
 fn centered(area: Rect, width: u16, height: u16) -> Rect {

@@ -5,8 +5,8 @@ expression: buffer_to_string(terminal.backend().buffer())
                                                                       
                                                                       
                                                                       
-     ┌ Copy ────────────────────────────────────────────────────┐     
-     │npub                                                      │     
-     │Pubkey (hex)                                              │     
-     │Relay URL                                                 │     
-     └──────────────────────────────────────────────────────────┘
+  ┌ Copy ──────────────────────────────────────────────────────────┐  
+  │npub  npub1abc                                                  │  
+  │Pubkey (hex)  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa…│  
+  │Relay URL  wss://relay.example                                  │  
+  └────────────────────────────────────────────────────────────────┘
