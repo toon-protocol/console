@@ -1,0 +1,37 @@
+# sshd_config for ssh-box (TOON_Network#138).
+#
+# Key-only, root-only, nothing else listening. See README.md for why this
+# image logs a tenant in as root rather than a sudo user: the container
+# carries no --user, --cap-drop or --read-only from the provider (it refuses
+# a tenant's own request for those flags — docker.rs's PRIVILEGE_FLAGS), so
+# the box's root is only ever root of this container's own namespace, never
+# of the provider's host, and a rented, throwaway compute box is one a
+# tenant expects to administer in full.
+
+Port 22
+AddressFamily inet
+ListenAddress 0.0.0.0
+
+# No password ever reaches this box: the provider issues none (README.md
+# "SSH."), and a tenant's key is the only credential there is.
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+ChallengeResponseAuthentication no
+PermitEmptyPasswords no
+
+# Root, by key only. "prohibit-password" accepts a signed key and refuses
+# every form of password or keyboard-interactive auth, which the two lines
+# above have already turned off network-wide; this is the belt to their
+# braces specifically for the root account.
+PermitRootLogin prohibit-password
+PubkeyAuthentication yes
+AuthorizedKeysFile .ssh/authorized_keys
+
+# Nothing this box does not need: no agent or TCP forwarding, no X11, no
+# banner leaking the image's contents, no motd noise on every login.
+AllowAgentForwarding no
+AllowTcpForwarding no
+X11Forwarding no
+PrintMotd no
+
+Subsystem sftp /usr/lib/ssh/sftp-server
