@@ -23,8 +23,6 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
-use serde::Serialize;
-
 use toon_console_tui::api;
 use toon_console_tui::app::{handle_key, handle_mouse, now_ms, App, Command, DaemonStatus, View};
 use toon_console_tui::client::{ClientError, DaemonClient};
@@ -1003,8 +1001,7 @@ fn spawn_preflight_standby_set(
     request: StandbySetRequestBody,
 ) {
     tokio::spawn(async move {
-        let result = client
-            .post::<_, StandbySetPreflightView>("/api/leases/standby-set/preflight", &request)
+        let result = api::preflight_standby_set(&client, &request)
             .await
             .map_err(|err| err.to_string());
         let _ = tx.send(RuntimeEvent::StandbySetPreflighted(Box::new(result)));
@@ -1036,8 +1033,7 @@ fn spawn_standby_set_spawn(
     request: StandbySetRequestBody,
 ) {
     tokio::spawn(async move {
-        let result = client
-            .post::<_, StandbySetResult>("/api/leases/standby-set", &request)
+        let result = api::spawn_standby_set(&client, &request)
             .await
             .map_err(|err| err.to_string());
         let _ = tx.send(RuntimeEvent::StandbySetSpawned(Box::new(result)));
@@ -1211,8 +1207,7 @@ fn spawn_funding_fetch(
 
 fn spawn_gas_station_fetch(client: Arc<DaemonClient>, tx: UnboundedSender<RuntimeEvent>) {
     tokio::spawn(async move {
-        let result = client
-            .get::<GasStationStatus>("/api/funding/gas")
+        let result = api::gas_station(&client)
             .await
             .map_err(|err| err.to_string());
         let _ = tx.send(RuntimeEvent::GasStationLoaded(Box::new(result)));
@@ -1237,16 +1232,9 @@ fn spawn_open_channel(
     });
 }
 
-#[derive(Serialize)]
-struct ChainBody {
-    chain: String,
-}
-
 fn spawn_drip(client: Arc<DaemonClient>, tx: UnboundedSender<RuntimeEvent>, chain: String) {
     tokio::spawn(async move {
-        let body = ChainBody { chain };
-        let result = client
-            .post::<_, FundingStatus>("/api/funding/faucet", &body)
+        let result = api::drip(&client, chain)
             .await
             .map_err(|err| err.to_string());
         let _ = tx.send(RuntimeEvent::FundingLoaded(Box::new(result)));
@@ -1255,20 +1243,11 @@ fn spawn_drip(client: Arc<DaemonClient>, tx: UnboundedSender<RuntimeEvent>, chai
 
 fn spawn_quote_gas(client: Arc<DaemonClient>, tx: UnboundedSender<RuntimeEvent>, chain: String) {
     tokio::spawn(async move {
-        let body = ChainBody { chain };
-        let result = client
-            .post::<_, GasQuote>("/api/funding/gas/quote", &body)
+        let result = api::quote_gas(&client, chain)
             .await
             .map_err(|err| err.to_string());
         let _ = tx.send(RuntimeEvent::GasQuoteLoaded(Box::new(result)));
     });
-}
-
-#[derive(Serialize)]
-struct BuyGasBody {
-    chain: String,
-    #[serde(rename = "quoteId")]
-    quote_id: String,
 }
 
 /// Issued only from `Command::BuyGas`, same rule as `spawn_open_channel`:
@@ -1280,9 +1259,7 @@ fn spawn_buy_gas(
     quote_id: String,
 ) {
     tokio::spawn(async move {
-        let body = BuyGasBody { chain, quote_id };
-        let result = client
-            .post::<_, GasPurchase>("/api/funding/gas/buy", &body)
+        let result = api::buy_gas(&client, chain, quote_id)
             .await
             .map_err(|err| err.to_string());
         let _ = tx.send(RuntimeEvent::GasPurchaseLoaded(Box::new(result)));

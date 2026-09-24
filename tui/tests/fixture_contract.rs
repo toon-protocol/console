@@ -23,8 +23,8 @@ use toon_console_tui::types::{
     ChainSeedStatus, Dashboard, Directory, DocsIndex, DocsPage, ExpandedTemplate, ExtendResult,
     FundingStatus, GasPurchase, GasQuote, GasStationStatus, GatewayView, HandoverResult, Health,
     PreflightView, Profiles, RotationResult, RotationView, SessionStatus, SpawnResult,
-    StandbySetPreflightView, StandbySetResult, TemplateGallery, TerminateResult,
-    WithdrawalResult, WorkloadCard,
+    StandbySetPreflightView, StandbySetResult, TemplateGallery, TerminateResult, WithdrawalResult,
+    WorkloadCard,
 };
 
 type Check = fn(&str) -> Result<(), String>;

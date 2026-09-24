@@ -4,6 +4,12 @@
 //! client-and-parsing half of that criterion; the live end-to-end proof
 //! against a real sandbox daemon is TOON_Network#149.
 //!
+//! Also covers every `src/api.rs` function that used to be a `client.get`/
+//! `post` call made straight from a `main.rs` `spawn_*`, in the same style:
+//! Funds' gas station, faucet drip and gas quote/buy, and a Standby Set's own
+//! preflight/spawn pair (TOON_Network#138's code review — "routes must go
+//! through `api.rs`").
+//!
 //! The stub is the same hand-rolled HTTP/1.1 server `client_reread.rs` uses,
 //! extended to read a request body and answer `GET`/`POST`/`DELETE`
 //! differently, and to serve any fixture under
@@ -21,8 +27,10 @@ use tokio::task::JoinHandle;
 use toon_console_tui::api;
 use toon_console_tui::client::DaemonClient;
 use toon_console_tui::types::{
-    Dashboard, ExtendResult, GatewayView, HandoverResult, RotationResult, RotationView,
-    TemplateSpawnRequestBody, TerminateResult, WithdrawalResult, WorkloadCard,
+    Dashboard, ExtendResult, GasPurchase, GasQuote, GasStationStatus, GatewayView, HandoverResult,
+    RotationResult, RotationView, StandbyMemberRequest, StandbySetPreflightView,
+    StandbySetRequestBody, StandbySetResult, TemplateSpawnRequestBody, TerminateResult,
+    WithdrawalResult, WorkloadCard,
 };
 
 const TOKEN: &str = "test-token";
@@ -416,4 +424,165 @@ async fn spawn_from_template_posts_to_the_template_route_and_names_the_template(
     assert_eq!(sent["listingVersion"], 3);
     assert_eq!(sent["listing"], "basic");
     assert_eq!(sent["sshPublicKey"], "ssh-ed25519 AAAA test");
+}
+
+/* -------------------------------------------------------------------------- */
+/* Funds (TOON_Network#147): gas station, faucet drip, gas quote and buy —    */
+/* moved into `src/api.rs` off `main.rs`'s own `client.get`/`post` calls.     */
+/* -------------------------------------------------------------------------- */
+
+#[tokio::test]
+async fn gas_station_gets_and_decodes_the_real_fixture() {
+    let body: &'static str = Box::leak(fixture("gas-station").into_boxed_str());
+    let recorded = Arc::new(Mutex::new(None));
+    let (url, _server) = spawn_stub(body, recorded.clone());
+    let dir = tempfile::tempdir().unwrap();
+    let path: PathBuf = dir.path().join("launch.json");
+    write_record(&path, &url);
+    let client = DaemonClient::connect(path).await.unwrap();
+
+    let status: GasStationStatus = api::gas_station(&client).await.unwrap();
+
+    assert_eq!(status.state, "ready");
+    let sent = recorded.lock().unwrap().take().unwrap();
+    assert_eq!(sent.method, "GET");
+    assert_eq!(sent.path, "/api/funding/gas");
+}
+
+#[tokio::test]
+async fn drip_posts_the_chain_and_decodes_the_real_funding_fixture() {
+    let body: &'static str = Box::leak(fixture("funding").into_boxed_str());
+    let recorded = Arc::new(Mutex::new(None));
+    let (url, _server) = spawn_stub(body, recorded.clone());
+    let dir = tempfile::tempdir().unwrap();
+    let path: PathBuf = dir.path().join("launch.json");
+    write_record(&path, &url);
+    let client = DaemonClient::connect(path).await.unwrap();
+
+    let status = api::drip(&client, "solana".to_string()).await.unwrap();
+
+    assert_eq!(status.state, "ready");
+    let sent = recorded.lock().unwrap().take().unwrap();
+    assert_eq!(sent.method, "POST");
+    assert_eq!(sent.path, "/api/funding/faucet");
+    assert!(sent.body.contains("\"chain\":\"solana\""));
+}
+
+#[tokio::test]
+async fn quote_gas_posts_the_chain_and_decodes_the_real_quote_fixture() {
+    let body: &'static str = Box::leak(fixture("gas-quote").into_boxed_str());
+    let recorded = Arc::new(Mutex::new(None));
+    let (url, _server) = spawn_stub(body, recorded.clone());
+    let dir = tempfile::tempdir().unwrap();
+    let path: PathBuf = dir.path().join("launch.json");
+    write_record(&path, &url);
+    let client = DaemonClient::connect(path).await.unwrap();
+
+    let quote: GasQuote = api::quote_gas(&client, "solana".to_string()).await.unwrap();
+
+    assert_eq!(quote.quote_id, "q-7");
+    let sent = recorded.lock().unwrap().take().unwrap();
+    assert_eq!(sent.method, "POST");
+    assert_eq!(sent.path, "/api/funding/gas/quote");
+    assert!(sent.body.contains("\"chain\":\"solana\""));
+}
+
+#[tokio::test]
+async fn buy_gas_posts_the_chain_and_quote_id_and_decodes_the_real_purchase_fixture() {
+    let body: &'static str = Box::leak(fixture("gas-purchase").into_boxed_str());
+    let recorded = Arc::new(Mutex::new(None));
+    let (url, _server) = spawn_stub(body, recorded.clone());
+    let dir = tempfile::tempdir().unwrap();
+    let path: PathBuf = dir.path().join("launch.json");
+    write_record(&path, &url);
+    let client = DaemonClient::connect(path).await.unwrap();
+
+    let purchase: GasPurchase = api::buy_gas(&client, "solana".to_string(), "q-7".to_string())
+        .await
+        .unwrap();
+
+    assert_eq!(purchase.state, "delivered");
+    let sent = recorded.lock().unwrap().take().unwrap();
+    assert_eq!(sent.method, "POST");
+    assert_eq!(sent.path, "/api/funding/gas/buy");
+    assert!(sent.body.contains("\"chain\":\"solana\""));
+    assert!(sent.body.contains("\"quoteId\":\"q-7\""));
+}
+
+/* -------------------------------------------------------------------------- */
+/* A Standby Set's own routes (spec §7) — also moved off `main.rs`.          */
+/* -------------------------------------------------------------------------- */
+
+fn standby_set_request() -> StandbySetRequestBody {
+    use toon_console_tui::types::{SpawnImageRequest, SpawnRequestBody};
+
+    StandbySetRequestBody {
+        base: SpawnRequestBody {
+            provider: "d".repeat(64),
+            listing: "basic".to_string(),
+            image: SpawnImageRequest {
+                reference: Some("traefik/whoami".to_string()),
+                digest: "sha256:aa".to_string(),
+                registry_entry: None,
+            },
+            env: None,
+            ports: None,
+            ssh_public_key: "ssh-ed25519 AAAA".to_string(),
+            volume_gb: None,
+            entrypoint: None,
+            args: None,
+            template: None,
+            local_only: None,
+            chain: None,
+        },
+        standbys: vec![StandbyMemberRequest {
+            provider: "e".repeat(64),
+            listing: "basic".to_string(),
+            listing_version: None,
+            chain: None,
+        }],
+    }
+}
+
+#[tokio::test]
+async fn preflight_standby_set_posts_to_the_preflight_route_and_decodes_the_real_fixture() {
+    let body: &'static str = Box::leak(fixture("leases-standby-set-preflight").into_boxed_str());
+    let recorded = Arc::new(Mutex::new(None));
+    let (url, _server) = spawn_stub(body, recorded.clone());
+    let dir = tempfile::tempdir().unwrap();
+    let path: PathBuf = dir.path().join("launch.json");
+    write_record(&path, &url);
+    let client = DaemonClient::connect(path).await.unwrap();
+
+    let view: StandbySetPreflightView = api::preflight_standby_set(&client, &standby_set_request())
+        .await
+        .unwrap();
+
+    assert!(view.ok);
+    assert_eq!(view.members.len(), 2);
+    let sent = recorded.lock().unwrap().take().unwrap();
+    assert_eq!(sent.method, "POST");
+    assert_eq!(sent.path, "/api/leases/standby-set/preflight");
+    assert!(sent.body.contains("\"standbys\""));
+}
+
+#[tokio::test]
+async fn spawn_standby_set_posts_to_the_spawn_route_and_decodes_the_real_fixture() {
+    let body: &'static str = Box::leak(fixture("leases-standby-set-spawn").into_boxed_str());
+    let recorded = Arc::new(Mutex::new(None));
+    let (url, _server) = spawn_stub(body, recorded.clone());
+    let dir = tempfile::tempdir().unwrap();
+    let path: PathBuf = dir.path().join("launch.json");
+    write_record(&path, &url);
+    let client = DaemonClient::connect(path).await.unwrap();
+
+    let result: StandbySetResult = api::spawn_standby_set(&client, &standby_set_request())
+        .await
+        .unwrap();
+
+    assert_eq!(result.members.len(), 2);
+    assert!(result.lease.is_some());
+    let sent = recorded.lock().unwrap().take().unwrap();
+    assert_eq!(sent.method, "POST");
+    assert_eq!(sent.path, "/api/leases/standby-set");
 }

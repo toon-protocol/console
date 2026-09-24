@@ -2534,12 +2534,11 @@ mod tests {
     }
 
     /// TOON_Network#146: what the New workload view actually posts. Checked
-    /// here at the wire level, not just built and inspected in Rust, since
-    /// there is no committed daemon fixture for a Standby Set's own routes
-    /// (see `tui/tests/fixture_contract.rs`'s note on `templates`/
-    /// `leases-*`) — this is what proves the flattened `extends
-    /// SpawnRequestBody` shape `daemon.ts`'s `StandbySetRequestBody`
-    /// describes.
+    /// here at the wire level too, alongside the committed
+    /// `leases-standby-set-preflight`/`leases-standby-set-spawn` fixtures
+    /// (`tui/tests/fixture_contract.rs`, `tests/workloads_api.rs`) — this is
+    /// what proves the flattened `extends SpawnRequestBody` shape
+    /// `daemon.ts`'s `StandbySetRequestBody` describes.
     #[test]
     fn spawn_request_body_serializes_to_the_shape_the_daemon_reads() {
         let request = SpawnRequestBody {

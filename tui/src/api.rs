@@ -16,11 +16,12 @@ use serde::Serialize;
 use crate::client::{ClientError, DaemonClient};
 use crate::types::{
     BunkerSignerRequest, ChainSeedStatus, Dashboard, Directory, DirectoryFilters,
-    ExpandTemplateRequest, ExpandedTemplate, ExtendResult, FundingStatus, GatewayView,
-    HandoverResult, Health, ImportChainSeedRequest, LocalSignerRequest, PreflightView,
-    ProfileSwitchRequest, Profiles, RotationResult, RotationView, SessionStatus, SignInRequest,
-    SpawnRequestBody, SpawnResult, TemplateGallery, TemplateSpawnRequestBody, TerminateResult,
-    WithdrawalResult, WorkloadCard,
+    ExpandTemplateRequest, ExpandedTemplate, ExtendResult, FundingStatus, GasPurchase, GasQuote,
+    GasStationStatus, GatewayView, HandoverResult, Health, ImportChainSeedRequest,
+    LocalSignerRequest, PreflightView, ProfileSwitchRequest, Profiles, RotationResult,
+    RotationView, SessionStatus, SignInRequest, SpawnRequestBody, SpawnResult,
+    StandbySetPreflightView, StandbySetRequestBody, StandbySetResult, TemplateGallery,
+    TemplateSpawnRequestBody, TerminateResult, WithdrawalResult, WorkloadCard,
 };
 use crate::views::directory::directory_query;
 
@@ -184,6 +185,50 @@ pub async fn open_channel(
         .await
 }
 
+/// `GET /api/funding/gas` — `Command::FetchGasStation`.
+pub async fn gas_station(client: &DaemonClient) -> Answer<GasStationStatus> {
+    client.get("/api/funding/gas").await
+}
+
+#[derive(Serialize)]
+struct ChainBody {
+    chain: String,
+}
+
+/// `POST /api/funding/faucet` — `Command::Drip`. Devnet-only, and free.
+pub async fn drip(client: &DaemonClient, chain: String) -> Answer<FundingStatus> {
+    client
+        .post("/api/funding/faucet", &ChainBody { chain })
+        .await
+}
+
+/// `POST /api/funding/gas/quote` — `Command::QuoteGas`. Free: a quote spends
+/// nothing on its own.
+pub async fn quote_gas(client: &DaemonClient, chain: String) -> Answer<GasQuote> {
+    client
+        .post("/api/funding/gas/quote", &ChainBody { chain })
+        .await
+}
+
+#[derive(Serialize)]
+struct BuyGasBody {
+    chain: String,
+    #[serde(rename = "quoteId")]
+    quote_id: String,
+}
+
+/// `POST /api/funding/gas/buy` — `Command::BuyGas`. **Spends**, naming the
+/// exact quote a confirmation was already shown for.
+pub async fn buy_gas(
+    client: &DaemonClient,
+    chain: String,
+    quote_id: String,
+) -> Answer<GasPurchase> {
+    client
+        .post("/api/funding/gas/buy", &BuyGasBody { chain, quote_id })
+        .await
+}
+
 // -- Directory and Templates (TOON_Network#145, #146) ----------------------------
 
 /// `GET /api/directory` with the Directory view's filters —
@@ -223,6 +268,26 @@ pub async fn spawn_from_template(
     request: &TemplateSpawnRequestBody,
 ) -> Answer<SpawnResult> {
     client.post("/api/templates/spawn", request).await
+}
+
+/// `POST /api/leases/standby-set/preflight` — `Command::PreflightStandbySet`.
+/// Free; prices every member of the set (spec §7).
+pub async fn preflight_standby_set(
+    client: &DaemonClient,
+    request: &StandbySetRequestBody,
+) -> Answer<StandbySetPreflightView> {
+    client
+        .post("/api/leases/standby-set/preflight", request)
+        .await
+}
+
+/// `POST /api/leases/standby-set` — `Command::SpawnStandbySet`. **Spends** at
+/// every member (ADR 0003).
+pub async fn spawn_standby_set(
+    client: &DaemonClient,
+    request: &StandbySetRequestBody,
+) -> Answer<StandbySetResult> {
+    client.post("/api/leases/standby-set", request).await
 }
 
 // -- Workloads (TOON_Network#143, #144) -----------------------------------------
