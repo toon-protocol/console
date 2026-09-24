@@ -9,6 +9,12 @@
         "url": "wss://relay.test",
         "state": "read",
         "events": 1
+      },
+      {
+        "url": "wss://relay.toon.test",
+        "state": "failed",
+        "events": 0,
+        "reason": "no relay at wss://relay.toon.test"
       }
     ]
   },
@@ -18,7 +24,8 @@
       "image": {
         "digest": "sha256:c0a665205c6d8d1f4ee8e2e217efd7a467527df34100ca78f11cca5c17486126",
         "registryEntry": {
-          "address": "30434:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000:web:1.0"
+          "address": "30434:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000:web:1.0",
+          "relay": "wss://relay.toon.test"
         }
       },
       "ports": [

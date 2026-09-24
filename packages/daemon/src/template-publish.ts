@@ -542,6 +542,14 @@ export interface ConsoleTemplatePublisherDeps {
    *  reason `chain-seed.ts`'s is: whichever of the two is built second is
    *  the one that exists by the time either is used. */
   readonly writer: () => RelayWriter;
+  /**
+   * The relay the entry is published to, written into the Template as its
+   * `registry_entry.relay` hint. §6.2 shapes a spawn's `registry_entry` as
+   * `{ address, relay }` and the provider refuses one without the hint
+   * ("missing field `relay`"), so a Template published without it can be
+   * read but never spawned. Empty when the network names no relay.
+   */
+  readonly relay: () => string;
   /** Injected in tests; the default reads a real public registry. */
   readonly fetchImpl?: typeof fetch | undefined;
   readonly arch?: string | undefined;
@@ -615,12 +623,22 @@ export class ConsoleTemplatePublisher {
       throw new ConsoleTemplatePublishError('image_unresolved', messageOf(error), 400);
     }
 
+    const relay = this.#deps.relay();
+    if (relay.length === 0) {
+      throw new ConsoleTemplatePublishError(
+        'no_relay',
+        'This network names no relay, so there is nowhere to publish the image entry and ' +
+          'nothing for the Template to point a spawn at.',
+        409
+      );
+    }
     const plan = planTemplatePublish({
       pubkey: signer.pubkey,
       file,
       entry: resolved.entry,
       ref: resolved.ref,
       image: request.image,
+      relay,
     });
     return { plan, file };
   }

@@ -129,6 +129,7 @@ describe('the Template publish routes', () => {
       readTemplates: () =>
         Promise.resolve({ state: 'unconfigured', reason: 'not asked in this test' }),
       templatePublish: new ConsoleTemplatePublisher({
+        relay: () => 'wss://relay.toon.test',
         signer: () => session.signingPort(),
         writer: () => writer,
         fetchImpl: fetchOk(),
@@ -202,6 +203,7 @@ describe('the Template publish routes', () => {
     deps = {
       ...deps,
       templatePublish: new ConsoleTemplatePublisher({
+        relay: () => 'wss://relay.toon.test',
         signer: () => session.signingPort(),
         writer: () => writer,
         fetchImpl: fetchOk(),
@@ -225,6 +227,7 @@ describe('the Template publish routes', () => {
     deps = {
       ...deps,
       templatePublish: new ConsoleTemplatePublisher({
+        relay: () => 'wss://relay.toon.test',
         signer: () => session.signingPort(),
         writer: () => writer,
         fetchImpl: fetchMissing(),
@@ -295,6 +298,7 @@ describe('the Template publish routes', () => {
     deps = {
       ...deps,
       templatePublish: new ConsoleTemplatePublisher({
+        relay: () => 'wss://relay.toon.test',
         signer: () => session.signingPort(),
         writer: () => broke,
         fetchImpl: fetchOk(),
@@ -314,6 +318,7 @@ describe('the Template publish routes', () => {
     deps = {
       ...deps,
       templatePublish: new ConsoleTemplatePublisher({
+        relay: () => 'wss://relay.toon.test',
         signer: () => session.signingPort(),
         writer: () => writer,
         fetchImpl: fetchMissing(),

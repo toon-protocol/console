@@ -35,7 +35,7 @@ export interface TemplateDraft {
   readonly digest?: string;
   /** Omitted gives the digest-alone form (§8.4 step 3). */
   readonly entryAddress?: string | null;
-  readonly entryRelay?: string;
+  readonly entryRelay?: string | null;
   readonly ports?: { containerPort: number; protocol?: 'tcp' | 'udp' }[];
   readonly dataPath?: string;
   readonly envFixed?: Record<string, string>;
@@ -80,7 +80,10 @@ export function templateEvent(publisher: FakePublisher, draft: TemplateDraft): N
             : {
                 registry_entry: {
                   address: entryAddress,
-                  ...(draft.entryRelay === undefined ? {} : { relay: draft.entryRelay }),
+                  // §6.2 needs the hint; `null` leaves it out, to test a Template without it.
+                  ...(draft.entryRelay === null
+                    ? {}
+                    : { relay: draft.entryRelay ?? 'wss://relay.toon.test' }),
                 },
               }),
         },

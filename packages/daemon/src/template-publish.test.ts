@@ -296,6 +296,7 @@ describe('planTemplatePublish', () => {
       ssh_key: { required: true },
     });
     return planTemplatePublish({
+      relay: 'wss://relay.toon.test',
       pubkey: publisher.pubkey,
       file,
       entry: {
@@ -342,14 +343,14 @@ describe('planTemplatePublish', () => {
     expect(content.image).not.toHaveProperty('reference');
   });
 
-  it('carries a relay hint only when one was given', () => {
+  it('carries the relay hint it is given (the console always gives one)', () => {
     const withRelay = samplePlan({ relay: 'wss://relay.example' });
     const content = JSON.parse(withRelay.templateEvent.content) as {
       image: { registry_entry?: { relay?: string } };
     };
     expect(content.image.registry_entry?.relay).toBe('wss://relay.example');
 
-    const without = samplePlan();
+    const without = samplePlan({ relay: undefined });
     const contentWithout = JSON.parse(without.templateEvent.content) as {
       image: { registry_entry?: { relay?: string } };
     };
@@ -405,6 +406,7 @@ describe('publishTemplatePlan', () => {
       ssh_key: { required: true },
     });
     return planTemplatePublish({
+      relay: 'wss://relay.toon.test',
       pubkey: publisher.pubkey,
       file,
       entry: {
@@ -524,6 +526,7 @@ describe('ConsoleTemplatePublisher', () => {
 
   it('refuses a preview when nobody is signed in', async () => {
     const publisher = new ConsoleTemplatePublisher({
+      relay: () => 'wss://relay.toon.test',
       signer: () => undefined,
       writer: () => fakePaidWriter(undefined),
       fetchImpl: fetchOk(),
@@ -538,6 +541,7 @@ describe('ConsoleTemplatePublisher', () => {
     const writer = fakePaidWriter(relay);
     const account = fakeAccount();
     const publisher = new ConsoleTemplatePublisher({
+      relay: () => 'wss://relay.toon.test',
       signer: () => account,
       writer: () => writer,
       fetchImpl: fetchOk(),
@@ -564,6 +568,7 @@ describe('ConsoleTemplatePublisher', () => {
     const writer = brokeWriter(relay);
     const account = fakeAccount();
     const publisher = new ConsoleTemplatePublisher({
+      relay: () => 'wss://relay.toon.test',
       signer: () => account,
       writer: () => writer,
       fetchImpl: fetchOk(),
@@ -579,6 +584,7 @@ describe('ConsoleTemplatePublisher', () => {
     const account = fakeAccount();
     const calls: string[] = [];
     const publisher = new ConsoleTemplatePublisher({
+      relay: () => 'wss://relay.toon.test',
       signer: () => account,
       writer: () => fakePaidWriter(undefined),
       fetchImpl: (async (url: string | URL) => {
@@ -596,6 +602,7 @@ describe('ConsoleTemplatePublisher', () => {
   it('refuses an image it cannot resolve', async () => {
     const account = fakeAccount();
     const publisher = new ConsoleTemplatePublisher({
+      relay: () => 'wss://relay.toon.test',
       signer: () => account,
       writer: () => fakePaidWriter(undefined),
       fetchImpl: (async () => new Response('nope', { status: 404 })) as typeof fetch,
@@ -611,6 +618,7 @@ describe('ConsoleTemplatePublisher', () => {
     const writer = fakePaidWriter(relay);
     const account = fakeAccount();
     const publisher = new ConsoleTemplatePublisher({
+      relay: () => 'wss://relay.toon.test',
       signer: () => account,
       writer: () => writer,
       fetchImpl: fetchOk(),
@@ -625,6 +633,12 @@ describe('ConsoleTemplatePublisher', () => {
     expect(writer.written.map((event) => event.kind)).toEqual([30434, 30436]);
     expect(writer.written.every((event) => event.pubkey === account.pubkey)).toBe(true);
     expect(relay.events.map((event) => event.kind).sort()).toEqual([30434, 30436]);
+    // The Template points a spawn at the relay the entry was written to (§6.2).
+    const template = writer.written.find((event) => event.kind === 30436)!;
+    const content = JSON.parse(template.content) as {
+      image: { registry_entry: { relay: string } };
+    };
+    expect(content.image.registry_entry.relay).toBe('wss://relay.toon.test');
   });
 
   it('refuses a publish nothing can pay for, and writes nothing', async () => {
@@ -632,6 +646,7 @@ describe('ConsoleTemplatePublisher', () => {
     const writer = brokeWriter(relay);
     const account = fakeAccount();
     const publisher = new ConsoleTemplatePublisher({
+      relay: () => 'wss://relay.toon.test',
       signer: () => account,
       writer: () => writer,
       fetchImpl: fetchOk(),
@@ -647,6 +662,7 @@ describe('ConsoleTemplatePublisher', () => {
   it('refuses a publish when nobody is signed in, without touching the writer', async () => {
     const writer = fakePaidWriter(fakeRelayServer('wss://relay.test'));
     const publisher = new ConsoleTemplatePublisher({
+      relay: () => 'wss://relay.toon.test',
       signer: () => undefined,
       writer: () => writer,
       fetchImpl: fetchOk(),

@@ -185,6 +185,7 @@ export async function main(): Promise<void> {
   const templatePublisher = new ConsoleTemplatePublisher({
     signer: () => session.signingPort(),
     writer: () => writer,
+    relay: () => profiles.active().relayUrl,
   });
 
   /**

@@ -470,12 +470,23 @@ function readTemplateImage(value: unknown): TemplateImage | { readonly reason: s
     };
   }
   const relay = entry === undefined ? undefined : asString(entry.relay);
-  if (relay !== undefined && !isWebsocketUrl(relay)) {
+  if (relay === undefined) {
+    // §6.2 shapes a spawn's `registry_entry` as `{ address, relay }`, and a
+    // spawn carries the Template's object unchanged (`template-spawn.ts`), so
+    // one without the hint is refused by the provider at spawn time. Saying
+    // so here keeps it out of the gallery's "available" instead.
+    return {
+      reason:
+        'its `image.registry_entry` names no `relay`, and a spawn must carry one (§6.2), ' +
+        'so the provider would refuse it — republish it with the relay hint',
+    };
+  }
+  if (!isWebsocketUrl(relay)) {
     return { reason: 'its `image.registry_entry.relay` is not a `ws://` or `wss://` URL' };
   }
   return {
     digest,
-    registryEntry: { address, ...(relay === undefined ? {} : { relay }) },
+    registryEntry: { address, relay },
   };
 }
 

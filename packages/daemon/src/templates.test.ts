@@ -153,6 +153,16 @@ describe('readTemplates', () => {
     expect(result.templates[0]?.availability.state).toBe('available');
   });
 
+  it('rejects a Template whose registry_entry names no relay, since no spawn could carry it', async () => {
+    const view = await gallery([
+      templateEvent(publisher, { name: 'no-hint', entryRelay: null }),
+      imageEntryEvent(publisher),
+    ]);
+    expect(view.templates).toEqual([]);
+    expect(view.rejected.map((entry) => entry.name)).toEqual(['no-hint']);
+    expect(JSON.stringify(view.rejected)).toMatch(/names no `relay`/u);
+  });
+
   it('shows a Template whose entry is on no relay as unavailable, with the reason', async () => {
     const view = await gallery([templateEvent(publisher, { name: 'static-site' })]);
     const availability = view.templates[0]!.availability;

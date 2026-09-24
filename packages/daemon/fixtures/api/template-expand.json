@@ -5,7 +5,8 @@
     "image": {
       "digest": "sha256:c0a665205c6d8d1f4ee8e2e217efd7a467527df34100ca78f11cca5c17486126",
       "registry_entry": {
-        "address": "30434:141418103fdd4f1badfe103a378c07b152d24046f9b2ce024a2612b34dd3d70b:web:1.0"
+        "address": "30434:141418103fdd4f1badfe103a378c07b152d24046f9b2ce024a2612b34dd3d70b:web:1.0",
+        "relay": "wss://relay.toon.test"
       }
     },
     "env": {

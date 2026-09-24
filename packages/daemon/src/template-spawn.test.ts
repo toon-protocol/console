@@ -98,7 +98,7 @@ describe('expandTemplate', () => {
       workloadId: WORKLOAD_ID,
       image: {
         digest: FIXTURE_DIGEST,
-        registry_entry: { address: `30434:${publisher.pubkey}:web:1.0` },
+        registry_entry: { address: `30434:${publisher.pubkey}:web:1.0`, relay: 'wss://relay.toon.test' },
       },
       env: { MODE: 'production', SITE_TITLE: 'a small site' },
       ports: [{ container_port: 8080, protocol: 'tcp' }],

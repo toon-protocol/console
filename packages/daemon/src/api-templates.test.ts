@@ -185,7 +185,7 @@ describe('the Template routes', () => {
     const body = response.body as { error: string; expansion: { spawn: { image: unknown } } };
     expect(body.error).toBe('spawn_unwired');
     expect(body.expansion.spawn.image).toMatchObject({
-      registry_entry: { address: `30434:${publisher.pubkey}:web:1.0` },
+      registry_entry: { address: `30434:${publisher.pubkey}:web:1.0`, relay: 'wss://relay.toon.test' },
     });
   });
 
