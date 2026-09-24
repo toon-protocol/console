@@ -660,6 +660,9 @@ pub struct ProfileSwitchRequest {
 // `AnonTransportView::state` above — an unknown value must still render as
 // itself rather than fail the whole view to deserialize.
 
+/// Shared between Funds (a deposit address) and Chain Seed (an EVM/Solana
+/// address derived from it, TOON_Network#142) — same shape either way: an
+/// address plus the BIP-44 path it was derived at.
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct ChainAddress {
     pub address: String,
@@ -834,7 +837,9 @@ pub struct FaucetView {
     pub last_drip: Option<LastDrip>,
 }
 
-/// A Chain Seed that exists on one disk and nowhere else (#120).
+/// A Chain Seed that exists on one disk and nowhere else (#120) — the same
+/// shape `FundingStatus.held_seed` and `ChainSeedStatus.held` (TOON_Network
+/// #142) both carry, per `daemon.ts`'s one `HeldSeedView` interface.
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct HeldSeedView {
     pub since: String,
@@ -1573,6 +1578,196 @@ pub struct WithdrawalResult {
     #[serde(default)]
     pub message: Option<String>,
     pub view: GatewayView,
+}
+
+/// The Chain Seed (TOON_Network#142, ADR 0020), a mirror of `daemon.ts`'s
+/// `ChainSeedStatus` and its neighbours.
+///
+/// There is no field anywhere in this group a mnemonic could be reached
+/// through — the daemon never returns one, and this hand-kept mirror does
+/// not invent a place for it.
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ChainSeedState {
+    SignedOut,
+    /// Not looked for yet — distinct from `Absent`, which has looked and
+    /// found nothing (ADR 0020).
+    Unknown,
+    Absent,
+    NotYetRecoverable,
+    Ready,
+    Unreadable,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SeedOrigin {
+    Minted,
+    Imported,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct ChainAddresses {
+    pub evm: ChainAddress,
+    pub solana: ChainAddress,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum RecordSource {
+    Cache,
+    Relays,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct SeedRecordView {
+    #[serde(rename = "eventId")]
+    pub event_id: String,
+    #[serde(rename = "publishedAt")]
+    pub published_at: String,
+    pub source: RecordSource,
+    pub relays: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ChainSeedRelayListState {
+    Unknown,
+    None,
+    Present,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct ChainSeedRelayList {
+    pub state: ChainSeedRelayListState,
+    pub read: Vec<String>,
+    pub write: Vec<String>,
+    #[serde(rename = "publishedAt")]
+    #[serde(default)]
+    pub published_at: Option<String>,
+}
+
+/// One relay a write would go to, or the reason it would not
+/// (TOON_Network#120, #121).
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct RelayWriteTarget {
+    pub url: String,
+    pub ready: bool,
+    #[serde(default)]
+    pub destination: Option<String>,
+    #[serde(rename = "payAt")]
+    #[serde(default)]
+    pub pay_at: Option<String>,
+    #[serde(default)]
+    pub price: Option<String>,
+    #[serde(default)]
+    pub chain: Option<String>,
+    #[serde(rename = "channelId")]
+    #[serde(default)]
+    pub channel_id: Option<String>,
+    #[serde(default)]
+    pub code: Option<String>,
+    /// Set exactly when `ready` is false.
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// Where a paid write goes, what it costs, and what stops it. Every figure
+/// here is one the daemon's connector quoted, never one computed in this
+/// crate.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct RelayWriteTargets {
+    pub relays: Vec<String>,
+    /// Every relay considered, payable or not, with the reason either way.
+    pub plan: Vec<RelayWriteTarget>,
+    #[serde(default)]
+    pub destination: Option<String>,
+    #[serde(rename = "payAt")]
+    #[serde(default)]
+    pub pay_at: Option<String>,
+    /// Base units per write at the first payable relay, verbatim.
+    #[serde(default)]
+    pub price: Option<String>,
+    /// Every payable relay's price summed: what one record costs to
+    /// publish, in total — the figure shown next to the confirmation.
+    #[serde(rename = "totalPrice")]
+    #[serde(default)]
+    pub total_price: Option<String>,
+    pub ready: bool,
+    #[serde(rename = "blockedBy")]
+    #[serde(default)]
+    pub blocked_by: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct RelayWriteOutcome {
+    pub url: String,
+    #[serde(default)]
+    pub destination: Option<String>,
+    #[serde(default)]
+    pub cost: Option<String>,
+    /// `"written" | "refused" | "unknown" | "unpayable"` — kept as a
+    /// `String` the same way `AnonTransportView::state` is: an unknown fifth
+    /// state must render as itself rather than fail to deserialize.
+    pub state: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct PublishReport {
+    pub at: String,
+    /// `"chain-seed" | "relay-list"`.
+    pub what: String,
+    pub relays: Vec<RelayWriteOutcome>,
+    pub accepted: Vec<String>,
+    /// What this write cost, in base units of the settlement token.
+    #[serde(default)]
+    pub cost: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct ChainSeedWarning {
+    pub text: String,
+    #[serde(rename = "acknowledgedAt")]
+    #[serde(default)]
+    pub acknowledged_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct ChainSeedStatus {
+    pub state: ChainSeedState,
+    #[serde(default)]
+    pub pubkey: Option<String>,
+    #[serde(default)]
+    pub addresses: Option<ChainAddresses>,
+    #[serde(default)]
+    pub origin: Option<SeedOrigin>,
+    /// The PUBLISHED record. Absent while a seed is only held (#120).
+    #[serde(default)]
+    pub record: Option<SeedRecordView>,
+    /// Set exactly when `state` is `NotYetRecoverable`.
+    #[serde(default)]
+    pub held: Option<HeldSeedView>,
+    #[serde(rename = "relayList")]
+    pub relay_list: ChainSeedRelayList,
+    pub writes: RelayWriteTargets,
+    pub warning: ChainSeedWarning,
+    #[serde(rename = "supersededSeeds")]
+    pub superseded_seeds: i64,
+    #[serde(rename = "lastPublish")]
+    #[serde(default)]
+    pub last_publish: Option<PublishReport>,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(rename = "checkedAt")]
+    pub checked_at: String,
+}
+
+/// `POST /api/chain-seed/import`'s body.
+#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+pub struct ImportChainSeedRequest {
+    pub mnemonic: String,
 }
 
 #[cfg(test)]

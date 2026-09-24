@@ -1,0 +1,20 @@
+{
+  "state": "unknown",
+  "pubkey": "d6b18830f963a2e67542e1d0d4c8628840b410e68022b7d8ec4036b6d3d7aa1c",
+  "relayList": {
+    "state": "unknown",
+    "read": [],
+    "write": []
+  },
+  "writes": {
+    "relays": [],
+    "plan": [],
+    "ready": false,
+    "blockedBy": "Nothing has asked this network’s connector what a relay write costs yet."
+  },
+  "warning": {
+    "text": "Whoever holds this account’s Nostr key holds its funds. The Chain Seed is sealed to that key, so anyone who can sign as this account can unseal it, derive these addresses and spend what they hold. Losing the Nostr key loses the funds with it: nothing in TOON Network, and no one running it, can recover them for you."
+  },
+  "supersededSeeds": 0,
+  "checkedAt": "2026-09-24T12:17:54.987Z"
+}

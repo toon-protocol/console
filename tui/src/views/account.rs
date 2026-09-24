@@ -6,25 +6,36 @@
 //! URI or the local keystore (generate, import an nsec, import a NIP-06
 //! mnemonic), see who is signed in and their relays, sign out, sign back in
 //! with a signer already on this machine, forget one, and switch the network
-//! profile. The Chain Seed section the web view also shows is #142's — this
-//! view leaves it one placeholder line, on purpose (see `draw_signed_in`).
+//! profile. Signed in, it also draws the Chain Seed section (TOON_Network#142,
+//! see `views::chain_seed`) below the account's own details — the same
+//! stacking `console-app.tsx` uses for `AccountCard` and `ChainSeedCard`.
 //!
 //! **How the keymap works here, since this is the first view with forms:**
 //! this view keeps one flat, ordered list of [`Target`]s — every field and
-//! button currently on screen, built fresh from `SessionStatus` and
-//! `Profiles` by [`targets`] — and a `cursor` index into it. `j`/`k` (or the
-//! arrow keys) move the cursor when nothing is being typed into; `Enter` on a
-//! field starts typing into it (`editing = true`) and `Enter` on a button
-//! fires its [`crate::app::Command`] straight away. While `editing` is true,
-//! every key goes to the focused [`crate::widgets::input::TextField`]
-//! instead — including digits, `q` and `Tab`, which on every other view are
-//! global shortcuts. That is the one rule #142 and #146 need to keep in mind
-//! reusing this pattern: a key a form is allowed to type must not also be a
-//! global binding while that form has focus.
+//! button currently on screen, built fresh from `SessionStatus`,
+//! `Profiles` and (signed in) `ChainSeedStatus` by [`targets`] — and a
+//! `cursor` index into it. `j`/`k` (or the arrow keys) move the cursor when
+//! nothing is being typed into; `Enter` on a field starts typing into it
+//! (`editing = true`) and `Enter` on a button fires its
+//! [`crate::app::Command`] straight away. While `editing` is true, every key
+//! goes to the focused [`crate::widgets::input::TextField`] instead —
+//! including digits, `q` and `Tab`, which on every other view are global
+//! shortcuts. That is the one rule #146 needs to keep in mind reusing this
+//! pattern: a key a form is allowed to type must not also be a global
+//! binding while that form has focus.
 //!
 //! [`targets`] is used by both [`handle_key`] (to know what the cursor is on)
 //! and [`draw`] (to know what to highlight) — one list, so the two can never
-//! disagree about what is focused.
+//! disagree about what is focused. The Chain Seed section's own targets are
+//! `views::chain_seed::Target`, wrapped in `Target::ChainSeed` so they share
+//! this one cursor and this one `editing` flag rather than keeping a second,
+//! independent focus of their own — the mnemonic field it can put into
+//! `editing` is a [`TextField`] like any of this view's, just held in
+//! [`crate::views::chain_seed::ChainSeedViewState`] instead of here.
+//! Before every other key, this view also checks whether the Chain Seed
+//! section's confirm modal is open (a publish is a paid relay write) and,
+//! if so, hands the key to it and nothing else — see the top of
+//! [`handle_key`].
 
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -35,7 +46,11 @@ use ratatui::Frame;
 
 use crate::app::Command;
 use crate::format::account_display_name;
-use crate::types::{LocalSignerMode, LocalSignerRequest, Profiles, SessionStatus, SignerKind};
+use crate::types::{
+    ChainSeedStatus, LocalSignerMode, LocalSignerRequest, Profiles, SessionStatus, SignerKind,
+};
+use crate::views::chain_seed::{self, ChainSeedViewState};
+use crate::widgets::confirm::ConfirmOutcome;
 use crate::widgets::input::TextField;
 
 /// One focusable thing on screen, in the order `j`/`k` walk them and `draw`
@@ -58,19 +73,27 @@ enum Target {
     SavedSignIn(usize),
     SavedForget(usize),
     SignOut,
+    /// TOON_Network#142's own targets, wrapped rather than duplicated here —
+    /// see the module doc comment.
+    ChainSeed(chain_seed::Target),
     SwitchProfile(usize),
 }
 
 fn targets(
     status: Option<&SessionStatus>,
     profiles: Option<&Profiles>,
+    chain_seed_status: Option<&ChainSeedStatus>,
     local_mode: LocalSignerMode,
+    show_import: bool,
 ) -> Vec<Target> {
     let mut out = Vec::new();
 
     if let Some(status) = status {
         if status.signed_in {
             out.push(Target::SignOut);
+            for sub in chain_seed::targets(chain_seed_status, show_import) {
+                out.push(Target::ChainSeed(sub));
+            }
         } else {
             let needs_passphrase = status.keystore.needs_passphrase;
 
@@ -134,6 +157,11 @@ pub struct AccountViewState {
     /// simplification that keeps `Target` (and this struct) from growing a
     /// vector of fields sized to a list.
     saved_passphrase: TextField,
+    /// TOON_Network#142's own state (the import-mnemonic field, whether its
+    /// form is open, and its publish confirm modal) — kept in its own type
+    /// rather than flattened here, so `views::chain_seed` stays the one
+    /// place that state is read or written.
+    pub chain_seed: ChainSeedViewState,
 }
 
 impl AccountViewState {
@@ -148,6 +176,7 @@ impl AccountViewState {
             mnemonic: TextField::new("NIP-06 words", true),
             local_passphrase: TextField::new("Keystore passphrase", true),
             saved_passphrase: TextField::new("Passphrase", true),
+            chain_seed: ChainSeedViewState::new(),
         }
     }
 }
@@ -166,6 +195,7 @@ fn field_mut(state: &mut AccountViewState, target: Target) -> Option<&mut TextFi
         Target::Mnemonic => Some(&mut state.mnemonic),
         Target::LocalPassphrase => Some(&mut state.local_passphrase),
         Target::SavedPassphrase(_) => Some(&mut state.saved_passphrase),
+        Target::ChainSeed(chain_seed::Target::Mnemonic) => Some(&mut state.chain_seed.mnemonic),
         _ => None,
     }
 }
@@ -179,9 +209,35 @@ pub fn handle_key(
     state: &mut AccountViewState,
     status: Option<&SessionStatus>,
     profiles: Option<&Profiles>,
+    chain_seed_status: Option<&ChainSeedStatus>,
     key: KeyEvent,
 ) -> Option<Command> {
-    let list = targets(status, profiles, state.local_mode);
+    // Publishing a Chain Seed is a paid relay write (#120): while its
+    // confirm modal is open, every key goes to it and nothing else —
+    // including `q` and the digits that would otherwise switch views — so
+    // typing `yes` then `Enter` to confirm is never mixed up with this
+    // view's own cursor movement.
+    if let Some(confirm) = &mut state.chain_seed.confirm {
+        return Some(match confirm.handle_key(key) {
+            ConfirmOutcome::Confirmed(()) => {
+                state.chain_seed.confirm = None;
+                Command::PublishChainSeed
+            }
+            ConfirmOutcome::Cancelled => {
+                state.chain_seed.confirm = None;
+                Command::None
+            }
+            ConfirmOutcome::Pending => Command::None,
+        });
+    }
+
+    let list = targets(
+        status,
+        profiles,
+        chain_seed_status,
+        state.local_mode,
+        state.chain_seed.show_import,
+    );
     if list.is_empty() {
         return None;
     }
@@ -213,7 +269,7 @@ pub fn handle_key(
         }
         KeyCode::Enter => {
             let target = list[state.cursor];
-            Some(activate(state, status, profiles, target))
+            Some(activate(state, status, profiles, chain_seed_status, target))
         }
         _ => None,
     }
@@ -230,6 +286,7 @@ fn activate(
     state: &mut AccountViewState,
     status: Option<&SessionStatus>,
     profiles: Option<&Profiles>,
+    chain_seed_status: Option<&ChainSeedStatus>,
     target: Target,
 ) -> Command {
     let needs_passphrase = status
@@ -304,6 +361,16 @@ fn activate(
             Command::ForgetSigner(signer.id.clone())
         }
         Target::SignOut => Command::SignOut,
+        // The mnemonic field is the one `ChainSeed` target this view's own
+        // `editing` flag governs (see `field_mut`); every other one is
+        // handled by `views::chain_seed::activate`.
+        Target::ChainSeed(chain_seed::Target::Mnemonic) => {
+            state.editing = true;
+            Command::None
+        }
+        Target::ChainSeed(sub) => {
+            chain_seed::activate(&mut state.chain_seed, chain_seed_status, sub)
+        }
         Target::SwitchProfile(index) => {
             let Some(profile) = profiles.and_then(|profiles| profiles.profiles.get(index)) else {
                 return Command::None;
@@ -336,27 +403,50 @@ pub fn draw(
     state: &AccountViewState,
     status: &SessionStatus,
     profiles: Option<&Profiles>,
+    chain_seed_status: Option<&ChainSeedStatus>,
     error: Option<&str>,
 ) {
-    let list = targets(Some(status), profiles, state.local_mode);
+    let list = targets(
+        Some(status),
+        profiles,
+        chain_seed_status,
+        state.local_mode,
+        state.chain_seed.show_import,
+    );
     let focused = |target: Target| list.get(state.cursor) == Some(&target);
+    let chain_seed_focused = |sub: chain_seed::Target| focused(Target::ChainSeed(sub));
 
     let error_height = if error.is_some() { 2 } else { 0 };
     let profiles_height = profiles.map(|p| p.profiles.len() as u16 + 2).unwrap_or(3);
 
     if status.signed_in {
+        let chain_seed_height = chain_seed::height(chain_seed_status);
         let rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(13),
+                Constraint::Length(9),
+                Constraint::Length(chain_seed_height),
                 Constraint::Length(profiles_height),
                 Constraint::Length(error_height),
                 Constraint::Min(0),
             ])
             .split(area);
         draw_signed_in(frame, rows[0], status, focused);
-        draw_profiles(frame, rows[1], profiles, focused);
-        draw_error(frame, rows[2], error);
+        chain_seed::draw(
+            frame,
+            rows[1],
+            &state.chain_seed,
+            chain_seed_status,
+            chain_seed_focused,
+        );
+        draw_profiles(frame, rows[2], profiles, focused);
+        draw_error(frame, rows[3], error);
+        // The confirm modal (Publish is a paid relay write) draws last, over
+        // this whole view's content, the same way `ui::draw_help` draws over
+        // the whole screen — see the module doc comment.
+        if let Some(confirm) = &state.chain_seed.confirm {
+            crate::widgets::confirm::draw(frame, area, confirm);
+        }
     } else {
         let saved_height = if status.signers.is_empty() {
             0
@@ -597,13 +687,6 @@ fn draw_signed_in(
         field_line("Signer", format!("{} ({signer_kind})", view.signer_label)),
         field_line("Relays", relays_summary(view)),
     ];
-    // The Chain Seed section (mint / seal / publish / acknowledge) is
-    // TOON_Network#142's, built on this same signed-in account. This line is
-    // deliberately just a pointer, not a stub of #142's UI.
-    lines.push(field_line(
-        "Chain Seed",
-        "not shown here yet — see #142".to_string(),
-    ));
     lines.push(Line::raw(""));
     lines.push(button_line("Sign out", focused(Target::SignOut)));
 
@@ -831,16 +914,28 @@ mod tests {
     fn j_and_k_move_the_cursor_through_the_target_list_and_clamp_at_the_ends() {
         let mut state = AccountViewState::new();
         let status = signed_out(false, vec![]);
-        let list = targets(Some(&status), None, state.local_mode);
+        let list = targets(Some(&status), None, None, state.local_mode, false);
         assert!(list.len() > 3, "fixture should have several targets");
 
         for _ in 0..list.len() + 3 {
-            handle_key(&mut state, Some(&status), None, key(KeyCode::Char('j')));
+            handle_key(
+                &mut state,
+                Some(&status),
+                None,
+                None,
+                key(KeyCode::Char('j')),
+            );
         }
         assert_eq!(state.cursor, list.len() - 1, "clamped at the last target");
 
         for _ in 0..list.len() + 3 {
-            handle_key(&mut state, Some(&status), None, key(KeyCode::Char('k')));
+            handle_key(
+                &mut state,
+                Some(&status),
+                None,
+                None,
+                key(KeyCode::Char('k')),
+            );
         }
         assert_eq!(state.cursor, 0, "clamped at the first target");
     }
@@ -850,26 +945,32 @@ mod tests {
         let mut state = AccountViewState::new();
         let status = signed_out(false, vec![]);
         assert_eq!(
-            targets(Some(&status), None, state.local_mode)[0],
+            targets(Some(&status), None, None, state.local_mode, false)[0],
             Target::BunkerUri
         );
 
-        handle_key(&mut state, Some(&status), None, key(KeyCode::Enter));
+        handle_key(&mut state, Some(&status), None, None, key(KeyCode::Enter));
         assert!(state.editing);
         for c in "bunker://npub1x?relay=wss://r".chars() {
-            handle_key(&mut state, Some(&status), None, key(KeyCode::Char(c)));
+            handle_key(&mut state, Some(&status), None, None, key(KeyCode::Char(c)));
         }
         assert_eq!(state.bunker_uri.value(), "bunker://npub1x?relay=wss://r");
 
         // A digit typed while editing must NOT be treated as a view-switch —
         // this view swallowed it. (It types the digit into the field.)
         assert_eq!(
-            handle_key(&mut state, Some(&status), None, key(KeyCode::Char('1'))),
+            handle_key(
+                &mut state,
+                Some(&status),
+                None,
+                None,
+                key(KeyCode::Char('1'))
+            ),
             Some(Command::None)
         );
 
         // Esc stops editing without discarding what was typed.
-        handle_key(&mut state, Some(&status), None, key(KeyCode::Esc));
+        handle_key(&mut state, Some(&status), None, None, key(KeyCode::Esc));
         assert!(!state.editing);
         assert!(state.bunker_uri.value().contains("bunker://"));
     }
@@ -879,11 +980,17 @@ mod tests {
         let mut state = AccountViewState::new();
         let status = signed_out(false, vec![]);
         // Cursor starts on BunkerUri; move to ConnectBunker.
-        handle_key(&mut state, Some(&status), None, key(KeyCode::Char('j')));
-        let list = targets(Some(&status), None, state.local_mode);
+        handle_key(
+            &mut state,
+            Some(&status),
+            None,
+            None,
+            key(KeyCode::Char('j')),
+        );
+        let list = targets(Some(&status), None, None, state.local_mode, false);
         assert_eq!(list[state.cursor], Target::ConnectBunker);
 
-        let command = handle_key(&mut state, Some(&status), None, key(KeyCode::Enter));
+        let command = handle_key(&mut state, Some(&status), None, None, key(KeyCode::Enter));
         assert_eq!(command, Some(Command::None));
     }
 
@@ -891,13 +998,19 @@ mod tests {
     fn connect_bunker_clears_the_typed_uri_and_sends_a_command() {
         let mut state = AccountViewState::new();
         let status = signed_out(false, vec![]);
-        handle_key(&mut state, Some(&status), None, key(KeyCode::Enter)); // edit uri
+        handle_key(&mut state, Some(&status), None, None, key(KeyCode::Enter)); // edit uri
         for c in "bunker://npub1x".chars() {
-            handle_key(&mut state, Some(&status), None, key(KeyCode::Char(c)));
+            handle_key(&mut state, Some(&status), None, None, key(KeyCode::Char(c)));
         }
-        handle_key(&mut state, Some(&status), None, key(KeyCode::Esc)); // stop editing
-        handle_key(&mut state, Some(&status), None, key(KeyCode::Char('j'))); // -> Connect
-        let command = handle_key(&mut state, Some(&status), None, key(KeyCode::Enter));
+        handle_key(&mut state, Some(&status), None, None, key(KeyCode::Esc)); // stop editing
+        handle_key(
+            &mut state,
+            Some(&status),
+            None,
+            None,
+            key(KeyCode::Char('j')),
+        ); // -> Connect
+        let command = handle_key(&mut state, Some(&status), None, None, key(KeyCode::Enter));
         assert_eq!(
             command,
             Some(Command::AddBunkerSigner {
@@ -917,10 +1030,10 @@ mod tests {
         let mut state = AccountViewState::new();
         let status = signed_out(false, vec![]);
         state.local_mode = LocalSignerMode::Nsec;
-        let list = targets(Some(&status), None, state.local_mode);
+        let list = targets(Some(&status), None, None, state.local_mode, false);
         let submit = list.iter().position(|t| *t == Target::SubmitLocal).unwrap();
         state.cursor = submit;
-        let command = handle_key(&mut state, Some(&status), None, key(KeyCode::Enter));
+        let command = handle_key(&mut state, Some(&status), None, None, key(KeyCode::Enter));
         assert_eq!(command, Some(Command::None));
     }
 
@@ -930,10 +1043,10 @@ mod tests {
         let status = signed_out(false, vec![]); // needs_passphrase: false
         state.local_passphrase.handle_key(key(KeyCode::Char('x')));
 
-        let list = targets(Some(&status), None, state.local_mode);
+        let list = targets(Some(&status), None, None, state.local_mode, false);
         let submit = list.iter().position(|t| *t == Target::SubmitLocal).unwrap();
         state.cursor = submit;
-        let command = handle_key(&mut state, Some(&status), None, key(KeyCode::Enter));
+        let command = handle_key(&mut state, Some(&status), None, None, key(KeyCode::Enter));
         assert_eq!(
             command,
             Some(Command::AddLocalSigner(LocalSignerRequest {
@@ -951,10 +1064,10 @@ mod tests {
         let mut state = AccountViewState::new();
         let status = signed_in();
         assert_eq!(
-            targets(Some(&status), None, state.local_mode),
+            targets(Some(&status), None, None, state.local_mode, false),
             vec![Target::SignOut]
         );
-        let command = handle_key(&mut state, Some(&status), None, key(KeyCode::Enter));
+        let command = handle_key(&mut state, Some(&status), None, None, key(KeyCode::Enter));
         assert_eq!(command, Some(Command::SignOut));
     }
 
@@ -963,7 +1076,13 @@ mod tests {
         let state = AccountViewState::new();
         let status = signed_in();
         let profiles = sample_profiles();
-        let list = targets(Some(&status), Some(&profiles), state.local_mode);
+        let list = targets(
+            Some(&status),
+            Some(&profiles),
+            None,
+            state.local_mode,
+            false,
+        );
         assert_eq!(
             list,
             vec![
@@ -984,6 +1103,7 @@ mod tests {
             &mut state,
             Some(&status),
             Some(&profiles),
+            None,
             key(KeyCode::Enter),
         );
         assert_eq!(command, Some(Command::SwitchProfile("devnet".to_string())));
@@ -995,7 +1115,13 @@ mod tests {
         let status = signed_out(false, vec![]);
         // Not editing, cursor on BunkerUri: '1' is not a Target key, so this
         // view must hand it back (`None`) for the global keymap to switch views.
-        let command = handle_key(&mut state, Some(&status), None, key(KeyCode::Char('1')));
+        let command = handle_key(
+            &mut state,
+            Some(&status),
+            None,
+            None,
+            key(KeyCode::Char('1')),
+        );
         assert_eq!(command, None);
     }
 
@@ -1026,7 +1152,15 @@ mod tests {
         let status = signed_out(true, vec![sample_signer()]);
         let profiles = sample_profiles();
         let output = render(|frame| {
-            draw(frame, frame.area(), &state, &status, Some(&profiles), None);
+            draw(
+                frame,
+                frame.area(),
+                &state,
+                &status,
+                Some(&profiles),
+                None,
+                None,
+            );
         });
         insta::assert_snapshot!(output);
     }
@@ -1037,7 +1171,15 @@ mod tests {
         let status = signed_in();
         let profiles = sample_profiles();
         let output = render(|frame| {
-            draw(frame, frame.area(), &state, &status, Some(&profiles), None);
+            draw(
+                frame,
+                frame.area(),
+                &state,
+                &status,
+                Some(&profiles),
+                None,
+                None,
+            );
         });
         insta::assert_snapshot!(output);
     }
@@ -1052,6 +1194,7 @@ mod tests {
                 frame.area(),
                 &state,
                 &status,
+                None,
                 None,
                 Some("the daemon rejected this window's token"),
             );
@@ -1077,7 +1220,7 @@ mod tests {
             let status: SessionStatus = serde_json::from_str(&text)
                 .unwrap_or_else(|err| panic!("fixture {name} did not deserialize: {err}"));
             render(|frame| {
-                draw(frame, frame.area(), &state, &status, None, None);
+                draw(frame, frame.area(), &state, &status, None, None, None);
             });
         }
     }
@@ -1090,7 +1233,50 @@ mod tests {
         let profiles: Profiles = serde_json::from_str(&text)
             .unwrap_or_else(|err| panic!("fixture profiles did not deserialize: {err}"));
         render(|frame| {
-            draw(frame, frame.area(), &state, &status, Some(&profiles), None);
+            draw(
+                frame,
+                frame.area(),
+                &state,
+                &status,
+                Some(&profiles),
+                None,
+                None,
+            );
         });
+    }
+
+    /// The Chain Seed section's own states each get a snapshot in
+    /// `views::chain_seed`'s own tests; this one is here instead because
+    /// the confirm modal (TOON_Network#142) is layered over the WHOLE
+    /// Account view by this module's `draw`, not by `chain_seed::draw` —
+    /// see both modules' doc comments.
+    #[test]
+    fn renders_the_confirm_modal_over_the_whole_account_view() {
+        let mut state = AccountViewState::new();
+        let status = signed_in();
+        let text = real_fixture("chain-seed-not-yet-recoverable");
+        let chain_seed: ChainSeedStatus = serde_json::from_str(&text)
+            .unwrap_or_else(|err| panic!("fixture did not deserialize: {err}"));
+        chain_seed::activate(
+            &mut state.chain_seed,
+            Some(&chain_seed),
+            chain_seed::Target::Publish,
+        );
+        assert!(state.chain_seed.confirm.is_some());
+        let output = render(|frame| {
+            draw(
+                frame,
+                frame.area(),
+                &state,
+                &status,
+                None,
+                Some(&chain_seed),
+                None,
+            );
+        });
+        assert!(
+            output.contains("Type") && output.contains("yes"),
+            "shows the typed-confirmation prompt"
+        );
     }
 }

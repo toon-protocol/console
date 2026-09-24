@@ -1,0 +1,32 @@
+---
+source: src/views/chain_seed.rs
+expression: output
+---
+┌ Chain Seed — not yet recoverable ──────────────────────────────────────────────────────┐
+│This Chain Seed is NOT YET RECOVERABLE                                                  │
+│This Chain Seed is NOT YET RECOVERABLE. It is sealed on this machine and on nothing     │
+│else.                                                                                   │
+│1. Send the chain's own coin to the payer address below.                                │
+│2. Fund that address with the settlement token.                                         │
+│3. Open a payment channel with this network's connector.                                │
+│4. Publish the Chain Seed record.                                                       │
+│                                                                                        │
+│EVM (Base): 0x9858EfFD232B4033E47d90003D41EC34EcaEda94  (m/44'/60'/0'/0/0)              │
+│Solana: HAgk14JpMQLgt6rVgv7cBQFJWFto5Dqxi472uT3DKpqk  (m/44'/501'/0'/0')                │
+│                                                                                        │
+│ Publish                                                                                │
+│One packet: 1 base units of the settlement token in total.                              │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+└────────────────────────────────────────────────────────────────────────────────────────┘

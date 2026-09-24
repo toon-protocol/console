@@ -20,9 +20,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use toon_console_tui::types::{
-    Dashboard, Directory, DocsIndex, DocsPage, ExtendResult, FundingStatus, GasPurchase,
-    GasQuote, GasStationStatus, GatewayView, HandoverResult, Health, Profiles, RotationResult,
-    RotationView, SessionStatus, TerminateResult, WithdrawalResult, WorkloadCard,
+    ChainSeedStatus, Dashboard, Directory, DocsIndex, DocsPage, ExtendResult, FundingStatus,
+    GasPurchase, GasQuote, GasStationStatus, GatewayView, HandoverResult, Health, Profiles,
+    RotationResult, RotationView, SessionStatus, TerminateResult, WithdrawalResult, WorkloadCard,
 };
 
 type Check = fn(&str) -> Result<(), String>;
@@ -48,6 +48,21 @@ fn registry() -> BTreeMap<&'static str, Check> {
     map.insert("account-signed-out", check::<SessionStatus> as Check);
     map.insert("account-signed-in", check::<SessionStatus> as Check);
     map.insert("profiles", check::<Profiles> as Check);
+    // TOON_Network#142 (Chain Seed): every fixture `api-chain-seed.test.ts`
+    // writes is the same `ChainSeedStatus` shape the state it names comes
+    // from.
+    for name in [
+        "chain-seed-signed-out",
+        "chain-seed-unknown",
+        "chain-seed-absent",
+        "chain-seed-absent-acknowledged",
+        "chain-seed-not-yet-recoverable",
+        "chain-seed-not-yet-recoverable-blocked",
+        "chain-seed-ready",
+        "chain-seed-unreadable",
+    ] {
+        map.insert(name, check::<ChainSeedStatus> as Check);
+    }
     // Funds (TOON_Network#147): GET /api/funding, GET /api/funding/gas,
     // POST /api/funding/gas/quote and POST /api/funding/gas/buy all answer
     // with one of these four shapes.
