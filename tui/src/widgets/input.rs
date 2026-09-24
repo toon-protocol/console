@@ -67,6 +67,32 @@ impl TextField {
         self.cursor = 0;
     }
 
+    /// Inserts pasted text at the cursor — the one seam both bracketed paste
+    /// (`Event::Paste`) and Ctrl+V (`wl-paste`, run off the UI thread in
+    /// `main.rs`) land through, for every field this crate lets a person
+    /// paste into. `\r` and `\n` are stripped (a pasted multi-line blob
+    /// becomes one line: a bunker URI, an nsec, a mnemonic or a passphrase is
+    /// never actually more than one line, and a stray trailing newline from
+    /// a terminal's paste buffer must not act like an `Enter` this field
+    /// never saw), and the pasted text is trimmed of leading/trailing
+    /// whitespace — the field's own EXISTING value is left exactly as
+    /// typed, only what was just pasted is trimmed. A paste that is empty or
+    /// all whitespace after that is a no-op.
+    ///
+    /// The filtered copy is held in a [`Zeroizing`] buffer for the whole of
+    /// this call, so — like every other mutation of [`Self::value`] — an
+    /// intermediate copy of a pasted secret does not outlive the insert.
+    pub fn insert_str(&mut self, text: &str) {
+        let filtered: Zeroizing<String> =
+            Zeroizing::new(text.chars().filter(|c| *c != '\r' && *c != '\n').collect());
+        let trimmed = filtered.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        self.value.insert_str(self.cursor, trimmed);
+        self.cursor += trimmed.len();
+    }
+
     /// Hands back the typed value as an owned `String` — the shape a request
     /// body needs — and clears this field's own buffer in the same call.
     ///
@@ -285,5 +311,52 @@ mod tests {
         let mut field = TextField::new("x", false);
         assert!(!field.handle_key(key(KeyCode::Enter)));
         assert!(!field.handle_key(key(KeyCode::Esc)));
+    }
+
+    #[test]
+    fn insert_str_appends_pasted_text_at_the_cursor() {
+        let mut field = TextField::new("x", false);
+        field.handle_key(key(KeyCode::Char('a')));
+        field.handle_key(key(KeyCode::Char('d')));
+        field.handle_key(key(KeyCode::Left));
+        field.insert_str("bc");
+        assert_eq!(field.value(), "abcd");
+    }
+
+    #[test]
+    fn insert_str_strips_embedded_newlines_and_carriage_returns() {
+        let mut field = TextField::new("x", false);
+        field.insert_str("npub1abc\r\ndef\n");
+        assert_eq!(field.value(), "npub1abcdef");
+    }
+
+    #[test]
+    fn insert_str_trims_leading_and_trailing_whitespace_off_the_pasted_text_only() {
+        let mut field = TextField::new("x", false);
+        field.handle_key(key(KeyCode::Char(' ')));
+        field.insert_str("  hello world  ");
+        // The field's own pre-existing leading space is untouched — only the
+        // freshly pasted text was trimmed.
+        assert_eq!(field.value(), " hello world");
+    }
+
+    #[test]
+    fn insert_str_on_an_all_whitespace_paste_is_a_no_op() {
+        let mut field = TextField::new("x", false);
+        field.insert_str("   \n\r  ");
+        assert_eq!(field.value(), "");
+    }
+
+    #[test]
+    fn insert_str_into_a_masked_field_still_never_shows_the_value() {
+        let mut field = TextField::new("nsec", true);
+        field.insert_str("nsec1verysecretvalue");
+        let line = field.line(false);
+        let rendered: String = line
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert!(!rendered.contains("nsec1verysecretvalue"));
     }
 }

@@ -35,7 +35,7 @@
 //! `widgets::` module would be more ceremony than the thing it replaces (see
 //! [`BudgetEntry`]).
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -287,6 +287,57 @@ fn access_text(card: &WorkloadCard) -> Option<String> {
     })
 }
 
+/// What `y` offers on the Workloads view (TOON_Network#138): the selected
+/// card's access text (this view's original one-shot `y` — now this list's
+/// first item), the bare hostname behind it, the workload id, and the
+/// gateway hostname once one is held. Never the Continuation Token or a
+/// Gateway Grant — neither has a field on [`WorkloadCard`]/[`GatewayView`]
+/// at all (see those types' own module docs in `types.rs`).
+pub fn copyables(state: &WorkloadsViewState) -> Vec<(String, String)> {
+    let Some(dashboard) = &state.dashboard else {
+        return Vec::new();
+    };
+    let cards = filtered(dashboard, &state.list);
+    let Some(card) = cards.get(state.list.selected) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    if let Some(text) = access_text(card) {
+        out.push(("Access".to_string(), text));
+    }
+    if let Some(access) = running_access(card) {
+        out.push(("Hostname".to_string(), access.host.clone()));
+    }
+    out.push(("Workload ID".to_string(), card.workload_id.clone()));
+    if let Some(hostname) = state
+        .gateway
+        .as_ref()
+        .filter(|view| view.workload_id == card.workload_id)
+        .and_then(|view| view.hostname.as_ref())
+    {
+        out.push(("Gateway hostname".to_string(), hostname.clone()));
+    }
+    out
+}
+
+/// Routes a paste to the auto-extend budget entry (TOON_Network#138) — its
+/// own tiny digits-only modal (see [`BudgetEntry`]), not a
+/// [`crate::widgets::input::TextField`], so pasted text is filtered down to
+/// its ASCII digits rather than inserted verbatim (mirrors the digit-only
+/// `KeyCode::Char` arm above). A no-op while nothing is open, or while a
+/// [`Confirm`] is (TOON_Network#138: "a paste while no field is editing is
+/// ignored").
+pub fn handle_paste(state: &mut WorkloadsViewState, text: &str) {
+    if state.confirm.is_some() {
+        return;
+    }
+    if let Some(entry) = &mut state.budget_entry {
+        entry
+            .typed
+            .extend(text.chars().filter(|c| c.is_ascii_digit()));
+    }
+}
+
 fn ending_word(ending: &str, word: &Option<String>) -> String {
     if ending == "unstated" {
         word.clone().unwrap_or_else(|| "not said".to_string())
@@ -469,6 +520,13 @@ pub fn handle_key(state: &mut WorkloadsViewState, key: KeyEvent) -> Option<Comma
                 entry.typed.push(digit);
                 Command::None
             }
+            // TOON_Network#138: Ctrl+V reads the system clipboard
+            // (`wl-paste`, off the UI thread) rather than typing a literal
+            // `v` — checked ahead of the catch-all below, the same as every
+            // other field-editing mode in this crate.
+            KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                return Some(Command::RequestClipboardPaste);
+            }
             KeyCode::Char(_) => Command::None,
             KeyCode::Enter => {
                 if entry.typed.is_empty() {
@@ -588,21 +646,6 @@ pub fn handle_key(state: &mut WorkloadsViewState, key: KeyEvent) -> Option<Comma
                 },
             ));
             Some(Command::None)
-        }
-        KeyCode::Char('y') => {
-            let Some(card) = cards.get(state.list.selected) else {
-                return Some(Command::None);
-            };
-            match access_text(card) {
-                Some(text) => Some(Command::CopyToClipboard(text)),
-                None => {
-                    state.status = Some(
-                        "No access details yet — a lease that is still provisioning has none."
-                            .to_string(),
-                    );
-                    Some(Command::None)
-                }
-            }
         }
         KeyCode::Char('a') => {
             state.status = None;
@@ -2239,21 +2282,57 @@ mod tests {
         assert!(state.confirm.is_none());
     }
 
+    // `y` itself is now the app-wide copy picker (TOON_Network#138,
+    // `app::global_key`), built from this view's own `copyables()` — see
+    // those tests below. `handle_key` has no arm for `y` any more.
+
+    // -- copyables (TOON_Network#138) ----------------------------------------
+
     #[test]
-    fn y_copies_an_ssh_command_when_a_port_is_known() {
+    fn copyables_leads_with_the_ssh_command_the_original_y_copied() {
         let mut state = WorkloadsViewState::new();
-        state.dashboard = Some(dashboard(vec![card(&"a".repeat(64), LeaseLife::Running)]));
-        let command = handle_key(&mut state, key(KeyCode::Char('y')));
+        let card = card(&"a".repeat(64), LeaseLife::Running);
+        let workload_id = card.workload_id.clone();
+        state.dashboard = Some(dashboard(vec![card]));
+        let items = copyables(&state);
         assert_eq!(
-            command,
-            Some(Command::CopyToClipboard(
+            items[0],
+            (
+                "Access".to_string(),
                 "ssh -p 40000 tenant@203.0.113.7".to_string()
-            ))
+            )
         );
+        assert!(items.contains(&("Hostname".to_string(), "203.0.113.7".to_string())));
+        assert!(items.contains(&("Workload ID".to_string(), workload_id)));
     }
 
     #[test]
-    fn y_with_no_access_yet_sets_a_status_message_and_copies_nothing() {
+    fn copyables_offers_the_gateway_hostname_once_one_is_held() {
+        let mut state = WorkloadsViewState::new();
+        let card = card(&"a".repeat(64), LeaseLife::Running);
+        let workload_id = card.workload_id.clone();
+        state.dashboard = Some(dashboard(vec![card]));
+        state.gateway = Some(crate::types::GatewayView {
+            workload_id: workload_id.clone(),
+            hostname: Some("w-a.gw.devnet.toonprotocol.dev".to_string()),
+            gateway: None,
+            handover: None,
+            held: true,
+            expired: None,
+            problems: vec![],
+            ok: true,
+            ports: vec![],
+            http_port: None,
+        });
+        let items = copyables(&state);
+        assert!(items.contains(&(
+            "Gateway hostname".to_string(),
+            "w-a.gw.devnet.toonprotocol.dev".to_string()
+        )));
+    }
+
+    #[test]
+    fn copyables_offers_nothing_with_no_access_yet() {
         let mut state = WorkloadsViewState::new();
         let mut none_yet = card(&"a".repeat(64), LeaseLife::Provisioning);
         none_yet.lease.access = None;
@@ -2270,10 +2349,13 @@ mod tests {
             cost: None,
         };
         none_yet.members[0].running_now = false;
+        let workload_id = none_yet.workload_id.clone();
         state.dashboard = Some(dashboard(vec![none_yet]));
-        let command = handle_key(&mut state, key(KeyCode::Char('y')));
-        assert_eq!(command, Some(Command::None));
-        assert!(state.status.is_some());
+        let items = copyables(&state);
+        assert!(items
+            .iter()
+            .all(|(label, _)| label != "Access" && label != "Hostname"));
+        assert!(items.contains(&("Workload ID".to_string(), workload_id)));
     }
 
     #[test]

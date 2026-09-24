@@ -17,7 +17,7 @@ use ratatui::Frame;
 
 use crate::app::Command;
 use crate::format::{format_time_of_day, format_uptime};
-use crate::types::{AnonTransportView, ConnectorHealth, Health, ProfileView};
+use crate::types::{AnonTransportView, ConnectorHealth, GasStationStatus, Health, ProfileView};
 
 /// Health keeps no state of its own — no form, no selection, nothing to
 /// scroll — so this is the one view whose `handle_key` needs no `state`
@@ -29,6 +29,61 @@ pub fn handle_key(key: KeyEvent) -> Option<Command> {
         KeyCode::Char('r') | KeyCode::Char('R') => Some(Command::RefreshHealth),
         _ => None,
     }
+}
+
+/// What `y` offers on the Health view (TOON_Network#138): the connector URL,
+/// self endpoint, ILP address(es) and each settlement's chain/token
+/// identifiers exactly as the connector's own `GET /ilp` answered (the house
+/// rule this crate never invents one of its own, `tui/CLAUDE.md`), plus the
+/// active network profile's own relay/gateway-connector/faucet URLs. `gas`
+/// is the gas station the Funds view reads (`app.funds.gas`) — its connector
+/// lives there, not on `Health`, but this view is the network-facts
+/// overview, so its own `y` offers it too.
+pub fn copyables(health: Option<&Health>, gas: Option<&GasStationStatus>) -> Vec<(String, String)> {
+    let Some(health) = health else {
+        return Vec::new();
+    };
+    let mut out = vec![
+        ("Relay URL".to_string(), health.profile.relay_url.clone()),
+        (
+            "Gateway connector URL".to_string(),
+            health.profile.gateway_connector_url.clone(),
+        ),
+    ];
+    if let Some(faucet_url) = &health.profile.faucet_url {
+        out.push(("Faucet URL".to_string(), faucet_url.clone()));
+    }
+    if let ConnectorHealth::Ok {
+        endpoint,
+        self_endpoint,
+        ilp_addresses,
+        settlements,
+        ..
+    } = &health.connector
+    {
+        out.push(("Connector URL".to_string(), endpoint.clone()));
+        out.push(("Self endpoint".to_string(), self_endpoint.clone()));
+        for address in ilp_addresses {
+            out.push(("ILP address".to_string(), address.clone()));
+        }
+        for settlement in settlements {
+            out.push((
+                format!("{} chain", settlement.chain),
+                settlement.chain.clone(),
+            ));
+            out.push((
+                format!("{} token", settlement.chain),
+                settlement.token_address.clone(),
+            ));
+        }
+    }
+    if let Some(station) = gas.and_then(|gas| gas.station.as_ref()) {
+        out.push((
+            "Gas connector URL".to_string(),
+            station.connector_url.clone(),
+        ));
+    }
+    out
 }
 
 pub fn draw(frame: &mut Frame, area: Rect, health: &Health) {
@@ -357,6 +412,56 @@ mod tests {
             out.push('\n');
         }
         out
+    }
+
+    #[test]
+    fn copyables_is_empty_with_no_health_yet() {
+        assert_eq!(copyables(None, None), Vec::new());
+    }
+
+    #[test]
+    fn copyables_offers_the_connectors_own_urls_and_each_settlements_identifiers() {
+        let health = sample_health();
+        let items = copyables(Some(&health), None);
+        assert!(items.contains(&(
+            "Connector URL".to_string(),
+            "https://connector.example".to_string()
+        )));
+        assert!(items.contains(&("ILP address".to_string(), "g.toon.relay".to_string())));
+        assert!(items.contains(&("evm:84532 chain".to_string(), "evm:84532".to_string())));
+        assert!(items.contains(&("evm:84532 token".to_string(), "0x49be".to_string())));
+        assert!(items.contains(&(
+            "Relay URL".to_string(),
+            "wss://relay-ws.devnet.toonprotocol.dev".to_string()
+        )));
+        assert!(items.contains(&(
+            "Faucet URL".to_string(),
+            "https://faucet.devnet.toonprotocol.dev".to_string()
+        )));
+    }
+
+    #[test]
+    fn copyables_offers_the_gas_stations_connector_when_given_one() {
+        let health = sample_health();
+        let gas = crate::types::GasStationStatus {
+            state: "ready".to_string(),
+            station: Some(crate::types::GasStationView {
+                connector_url: "https://gas.example".to_string(),
+                self_endpoint: None,
+                doors: vec![],
+                reachable: true,
+                reason: None,
+            }),
+            chains: vec![],
+            first_channel: None,
+            reason: None,
+            checked_at: "2026-09-24T00:00:00.000Z".to_string(),
+        };
+        let items = copyables(Some(&health), Some(&gas));
+        assert!(items.contains(&(
+            "Gas connector URL".to_string(),
+            "https://gas.example".to_string()
+        )));
     }
 
     #[test]

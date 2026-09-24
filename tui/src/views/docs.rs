@@ -155,6 +155,24 @@ pub fn handle_key(state: &mut DocsViewState, key: KeyEvent) -> Option<Command> {
     }
 }
 
+/// What `y` offers on the Docs view (TOON_Network#138): the focused link's
+/// URL and the open article's own `naddr`/address, once one is open —
+/// nothing while the reading list is showing (there is no "selected" URL to
+/// offer there; opening an article is what puts one on screen).
+pub fn copyables(state: &DocsViewState) -> Vec<(String, String)> {
+    let Some(page) = &state.page else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    if let Some(href) = state.link_hrefs.get(state.link_index) {
+        out.push(("Link URL".to_string(), href.clone()));
+    }
+    if let Some(address) = &page.doc.address {
+        out.push(("Article address".to_string(), address.clone()));
+    }
+    out
+}
+
 /// Returns the reading list's row hits (empty while an article is open —
 /// [`draw_article`] has no list of its own to click a row of) — what a
 /// mouse click selects (ADR 0028: "mouse clicks select tabs and rows"),
@@ -502,6 +520,35 @@ mod tests {
             .unwrap_or_else(|err| panic!("could not read fixture {path}: {err}"));
         serde_json::from_str(&text)
             .unwrap_or_else(|err| panic!("fixture {path} did not deserialize as DocsPage: {err}"))
+    }
+
+    // -- copyables (TOON_Network#138) ----------------------------------------
+
+    #[test]
+    fn copyables_is_empty_on_the_reading_list() {
+        let mut state = DocsViewState::new();
+        state.index = Some(sample_index());
+        assert_eq!(copyables(&state), Vec::new());
+    }
+
+    #[test]
+    fn copyables_offers_the_focused_links_url_and_the_articles_address_once_open() {
+        let mut state = DocsViewState::new();
+        let mut page = sample_page();
+        page.doc.address = Some("30023:pubkey:concepts".to_string());
+        state.page = Some(page);
+        state.link_hrefs = vec!["funding".to_string(), "gateways".to_string()];
+        state.link_index = 1;
+        assert_eq!(
+            copyables(&state),
+            vec![
+                ("Link URL".to_string(), "gateways".to_string()),
+                (
+                    "Article address".to_string(),
+                    "30023:pubkey:concepts".to_string()
+                ),
+            ]
+        );
     }
 
     #[test]

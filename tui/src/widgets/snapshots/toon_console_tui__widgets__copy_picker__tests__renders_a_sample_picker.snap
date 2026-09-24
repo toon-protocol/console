@@ -1,0 +1,12 @@
+---
+source: src/widgets/copy_picker.rs
+expression: buffer_to_string(terminal.backend().buffer())
+---
+                                                                      
+                                                                      
+                                                                      
+     ┌ Copy ────────────────────────────────────────────────────┐     
+     │npub                                                      │     
+     │Pubkey (hex)                                              │     
+     │Relay URL                                                 │     
+     └──────────────────────────────────────────────────────────┘

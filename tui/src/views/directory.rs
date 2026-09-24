@@ -480,6 +480,26 @@ impl DirectoryViewState {
     }
 }
 
+/// What `y` offers on the Directory view (TOON_Network#138): the selected
+/// row's provider pubkey and connector endpoint, and the Listing's own
+/// address (`30432:<pubkey>:<name>`, spec §6.1) — nothing while the
+/// selection is on a provider's header row rather than a Listing (the same
+/// "meaningless while `rows` holds none" rule `ListingPicker::selected` docs
+/// already state).
+pub fn copyables(state: &DirectoryViewState) -> Vec<(String, String)> {
+    let Some((provider, listing)) = state.picker.selected_listing() else {
+        return Vec::new();
+    };
+    vec![
+        ("Provider pubkey".to_string(), provider.pubkey.clone()),
+        (
+            "Provider endpoint".to_string(),
+            provider.profile.connector_url.clone(),
+        ),
+        ("Listing address".to_string(), listing.address.clone()),
+    ]
+}
+
 fn cycle_option(options: &[&str], current: &Option<String>) -> Option<String> {
     let index = current
         .as_deref()
@@ -1101,6 +1121,35 @@ mod tests {
         let (provider, listing) = picker.selected_listing().expect("a listing is selected");
         assert_eq!(provider.pubkey, "acme");
         assert_eq!(listing.name, "basic");
+    }
+
+    // -- copyables (TOON_Network#138) ----------------------------------------
+
+    #[test]
+    fn copyables_is_empty_with_nothing_read() {
+        let state = DirectoryViewState::new();
+        assert_eq!(copyables(&state), Vec::new());
+    }
+
+    #[test]
+    fn copyables_offers_the_selected_providers_pubkey_endpoint_and_listing_address() {
+        let mut state = DirectoryViewState::new();
+        state.picker.set_providers(vec![provider(
+            "acme",
+            false,
+            vec![listing("basic", 1000, None, &[])],
+        )]);
+        assert_eq!(
+            copyables(&state),
+            vec![
+                ("Provider pubkey".to_string(), "acme".to_string()),
+                (
+                    "Provider endpoint".to_string(),
+                    "https://connector.test/ilp".to_string()
+                ),
+                ("Listing address".to_string(), "30432:pk:basic".to_string()),
+            ]
+        );
     }
 
     #[test]

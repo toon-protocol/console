@@ -19,6 +19,7 @@ use crate::views::funds::{self, FundsState};
 use crate::views::health;
 use crate::views::new_workload::{self, NewWorkloadViewState};
 use crate::views::workloads::{self, WorkloadsViewState};
+use crate::widgets::copy_picker::{CopyPicker, CopyPickerOutcome};
 
 /// The seven views of the sidebar (ADR 0028), in the order `1`-`7` select
 /// them. `Health` is sixth, matching the spec's own numbering and the web
@@ -183,6 +184,16 @@ pub struct App {
     /// field the same way `workloads` is — `handle_key` only ever reaches
     /// into it through `views::new_workload::handle_key`.
     pub new_workload: NewWorkloadViewState,
+    /// The one copy mechanism for the whole app (TOON_Network#138): open
+    /// while `y` has more than one thing the current view could copy — see
+    /// `widgets::copy_picker`. `handle_key` gives it first refusal on every
+    /// key, the same "modal swallows everything underneath it" rule
+    /// `help_open` follows.
+    pub copy_picker: Option<CopyPicker>,
+    /// The last copy or paste outcome, shown in the footer regardless of
+    /// which view is current (`ui::draw_footer`) — set by `main.rs` once
+    /// `Command::CopyToClipboard`/`Command::RequestClipboardPaste` answers.
+    pub clipboard_status: Option<String>,
 }
 
 impl App {
@@ -212,6 +223,8 @@ impl App {
             funds: FundsState::default(),
             workloads: WorkloadsViewState::new(),
             new_workload: NewWorkloadViewState::new(),
+            copy_picker: None,
+            clipboard_status: None,
         }
     }
 }
@@ -348,7 +361,22 @@ pub enum Command {
     WithdrawWorkload {
         workload_id: String,
     },
-    CopyToClipboard(String),
+    /// `label` is what the footer says was copied (TOON_Network#138: "never
+    /// the value when it is long"); `value` is what actually reaches
+    /// `wl-copy`. Issued only by `app::handle_key`'s `y` binding, whether
+    /// that copied straight away (one copyable) or via `widgets::copy_picker`
+    /// (more than one) — every view's own `y` used to build this directly;
+    /// now `copyables()` is the one seam that decides what is offered.
+    CopyToClipboard {
+        label: String,
+        value: String,
+    },
+    /// Ctrl+V while a text field is focused (TOON_Network#138): reads the
+    /// system clipboard with `wl-paste --no-newline`, off the UI thread,
+    /// the same way a copy runs `wl-copy` off it. The daemon this crate
+    /// talks to is never involved — `main.rs` answers this itself, without a
+    /// `client`.
+    RequestClipboardPaste,
     // -- New workload (TOON_Network#146) --
     /// `GET /api/templates` — read once on connect and on a profile switch
     /// (a Template gallery is per network, like the Directory), and again
@@ -395,11 +423,59 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> Command {
         return Command::None;
     }
 
+    // The copy picker (TOON_Network#138) swallows every key while it is
+    // open, the same "modal covers everything underneath it" rule
+    // `help_open` follows above — checked before `view_key` so a `j`/`k`/
+    // `Enter`/`Esc` meant for the picker is never also read by whatever
+    // view opened it.
+    if let Some(picker) = &mut app.copy_picker {
+        return match picker.handle_key(key) {
+            CopyPickerOutcome::Pending => Command::None,
+            CopyPickerOutcome::Cancelled => {
+                app.copy_picker = None;
+                Command::None
+            }
+            CopyPickerOutcome::Copy { label, value } => {
+                app.copy_picker = None;
+                Command::CopyToClipboard { label, value }
+            }
+        };
+    }
+
     if let Some(command) = view_key(app, key) {
         return command;
     }
 
     global_key(app, key)
+}
+
+/// Routes a bracketed-paste event (`Event::Paste`, or Ctrl+V's `wl-paste`
+/// answer in `main.rs`) to whichever text field the current view has focused
+/// and is actively editing — the same "one seam" [`view_key`] is for
+/// keystrokes. Every view not currently editing a field (including one with
+/// a confirm modal or its own filter/budget-entry popup open) simply drops
+/// the paste: "A paste while no field is editing is ignored and never
+/// interpreted as keystrokes" (TOON_Network#138). Unlike [`handle_key`] this
+/// never produces a [`Command`] — inserting text into a field is a pure
+/// state change, nothing here talks to the network or the clipboard.
+pub fn handle_paste(app: &mut App, text: &str) {
+    if app.help_open || app.copy_picker.is_some() {
+        return;
+    }
+    match app.view {
+        View::Account => account::handle_paste(
+            &mut app.account_view,
+            app.account.as_ref(),
+            app.profiles.as_ref(),
+            app.chain_seed.as_ref(),
+            text,
+        ),
+        View::New => new_workload::handle_paste(&mut app.new_workload, text),
+        View::Workloads => workloads::handle_paste(&mut app.workloads, text),
+        // Directory, Funds, Health and Docs have no text field to paste
+        // into today.
+        View::Directory | View::Funds | View::Health | View::Docs => {}
+    }
 }
 
 /// Gives the current view first refusal on a key. `None` means it has no
@@ -463,7 +539,50 @@ fn global_key(app: &mut App, key: KeyEvent) -> Command {
             }
             Command::None
         }
+        // TOON_Network#138: the one `y` for the whole app. Reached only once
+        // every view's own `handle_key` has had first refusal — a view
+        // editing a field or showing its own confirm/filter/budget-entry
+        // modal already answered `Some` for `y` above (so it types, or is
+        // part of "yes"), and never falls through to here.
+        KeyCode::Char('y') => open_copy_picker(app),
         _ => Command::None,
+    }
+}
+
+/// Builds the current view's `copyables()` and turns it into the one `y`
+/// mechanism's decision: nothing to copy is a no-op, exactly one copies
+/// straight away (no modal for a view with only one thing on offer), and two
+/// or more open [`CopyPicker`].
+fn open_copy_picker(app: &mut App) -> Command {
+    let items = view_copyables(app);
+    match items.len() {
+        0 => Command::None,
+        1 => {
+            let (label, value) = items
+                .into_iter()
+                .next()
+                .expect("checked items.len() == 1 above");
+            Command::CopyToClipboard { label, value }
+        }
+        _ => {
+            app.copy_picker = Some(CopyPicker::new(items));
+            Command::None
+        }
+    }
+}
+
+/// Every view's own `copyables()` — TOON_Network#138: "Each view exposes
+/// `fn copyables(&state, …) -> Vec<(label, value)>` for what is on screen or
+/// selected." One arm per [`View`], mirroring [`view_key`]'s own dispatch.
+fn view_copyables(app: &App) -> Vec<(String, String)> {
+    match app.view {
+        View::Workloads => workloads::copyables(&app.workloads),
+        View::New => new_workload::copyables(&app.new_workload),
+        View::Directory => directory::copyables(&app.directory),
+        View::Funds => funds::copyables(&app.funds),
+        View::Account => account::copyables(app.account.as_ref(), app.chain_seed.as_ref()),
+        View::Health => health::copyables(app.health.as_ref(), app.funds.gas.as_ref()),
+        View::Docs => docs::copyables(&app.docs),
     }
 }
 
@@ -482,7 +601,7 @@ pub fn handle_mouse(
     sidebar_hits: &[(u16, View)],
     row_hits: &[(u16, usize)],
 ) -> Command {
-    if app.help_open {
+    if app.help_open || app.copy_picker.is_some() {
         return Command::None;
     }
     if let MouseEventKind::Down(MouseButton::Left) = mouse.kind {
@@ -779,5 +898,116 @@ mod tests {
             );
             assert!(app.should_quit);
         }
+    }
+
+    // -- copy picker routing (TOON_Network#138) ------------------------------
+
+    #[test]
+    fn y_on_a_view_with_nothing_to_copy_does_nothing() {
+        let mut app = App::new();
+        app.view = View::Docs; // no page open: `docs::copyables` is empty
+        let command = handle_key(&mut app, key(KeyCode::Char('y')));
+        assert_eq!(command, Command::None);
+        assert!(app.copy_picker.is_none());
+    }
+
+    #[test]
+    fn the_open_picker_swallows_j_k_until_enter_or_esc() {
+        let mut app = App::new();
+        app.copy_picker = Some(crate::widgets::copy_picker::CopyPicker::new(vec![
+            ("First".to_string(), "value-1".to_string()),
+            ("Second".to_string(), "value-2".to_string()),
+        ]));
+
+        // A digit that would otherwise switch views is swallowed.
+        handle_key(&mut app, key(KeyCode::Char('1')));
+        assert_eq!(
+            app.view,
+            View::Health,
+            "the picker, not the digit, ate this"
+        );
+        assert!(app.copy_picker.is_some());
+
+        handle_key(&mut app, key(KeyCode::Char('j')));
+        let command = handle_key(&mut app, key(KeyCode::Enter));
+        assert_eq!(
+            command,
+            Command::CopyToClipboard {
+                label: "Second".to_string(),
+                value: "value-2".to_string(),
+            }
+        );
+        assert!(app.copy_picker.is_none(), "Enter closes the picker");
+    }
+
+    #[test]
+    fn esc_closes_the_picker_without_copying_anything() {
+        let mut app = App::new();
+        app.copy_picker = Some(crate::widgets::copy_picker::CopyPicker::new(vec![(
+            "First".to_string(),
+            "value-1".to_string(),
+        )]));
+        let command = handle_key(&mut app, key(KeyCode::Esc));
+        assert_eq!(command, Command::None);
+        assert!(app.copy_picker.is_none());
+    }
+
+    #[test]
+    fn mouse_clicks_are_ignored_while_the_picker_is_open() {
+        let mut app = App::new();
+        app.view = View::Health;
+        app.copy_picker = Some(crate::widgets::copy_picker::CopyPicker::new(vec![(
+            "First".to_string(),
+            "value-1".to_string(),
+        )]));
+        let hits = [(1, View::Workloads)];
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 2,
+            row: 1,
+            modifiers: KeyModifiers::NONE,
+        };
+        handle_mouse(&mut app, click, &hits, &[]);
+        assert_eq!(
+            app.view,
+            View::Health,
+            "click ignored while the picker is open"
+        );
+    }
+
+    /// TOON_Network#138's own acceptance line: "While a text field is being
+    /// edited, `y` must type a `y`." Reached through `handle_key`, not
+    /// `views::account::handle_key` directly, so this proves the GLOBAL `y`
+    /// binding never gets a look at the key while a view's own `handle_key`
+    /// already claimed it — the same guarantee `global_keys_work_on_every_view`
+    /// above checks for `1`-`7`/`Tab`/`?`/`q`.
+    #[test]
+    fn y_types_a_y_while_a_field_is_being_edited_instead_of_opening_the_picker() {
+        use crate::types::{KeystoreBackend, KeystoreInfo, SessionStatus};
+
+        let mut app = App::new();
+        app.view = View::Account;
+        app.account = Some(SessionStatus {
+            signed_in: false,
+            account: None,
+            signers: vec![],
+            keystore: KeystoreInfo {
+                backend: KeystoreBackend::File,
+                location: "/tmp/keystore.json".to_string(),
+                needs_passphrase: false,
+            },
+            invitation: None,
+        });
+
+        // Enter on the (first, Bunker URI) field starts editing it.
+        handle_key(&mut app, key(KeyCode::Enter));
+        assert!(app.account_view.is_editing_for_test());
+
+        let command = handle_key(&mut app, key(KeyCode::Char('y')));
+        assert_eq!(command, Command::None);
+        assert!(
+            app.copy_picker.is_none(),
+            "y must not open the picker while editing"
+        );
     }
 }

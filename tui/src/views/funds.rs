@@ -62,7 +62,6 @@ pub struct FundsState {
     pub gas_purchase: Option<GasPurchase>,
     pub selected: usize,
     confirm: Option<Confirm<Action>>,
-    pub clipboard_message: Option<String>,
 }
 
 impl Default for FundsState {
@@ -80,7 +79,6 @@ impl Default for FundsState {
             gas_purchase: None,
             selected: 0,
             confirm: None,
-            clipboard_message: None,
         }
     }
 }
@@ -198,10 +196,6 @@ pub fn handle_key(state: &mut FundsState, key: KeyEvent) -> Option<Command> {
             state.selected = (state.selected + chain_count - 1) % chain_count;
             Some(Command::None)
         }
-        KeyCode::Char('y') => Some(match state.selected_chain() {
-            Some(chain) => Command::CopyToClipboard(chain.deposit.address.clone()),
-            None => Command::None,
-        }),
         KeyCode::Char('o') => {
             open_channel_confirm(state);
             Some(Command::None)
@@ -224,6 +218,29 @@ pub fn handle_key(state: &mut FundsState, key: KeyEvent) -> Option<Command> {
         }
         _ => None,
     }
+}
+
+/// What `y` offers on the Funds view (TOON_Network#138): the selected
+/// chain's deposit address (the QR panel's own value — this view's original
+/// one-shot `y`, now this list's first item, per TOON_Network#138's "their
+/// current copy becomes the first item"), its channel id once a channel
+/// exists, and the connector it settles with.
+pub fn copyables(state: &FundsState) -> Vec<(String, String)> {
+    let Some(chain) = state.selected_chain() else {
+        return Vec::new();
+    };
+    let mut out = vec![(
+        format!("{} deposit address", chain.chain),
+        chain.deposit.address.clone(),
+    )];
+    if let Some(channel_id) = &chain.channel.channel_id {
+        out.push((format!("{} channel id", chain.chain), channel_id.clone()));
+    }
+    out.push((
+        format!("{} connector", chain.chain),
+        chain.counterparty.clone(),
+    ));
+    out
 }
 
 fn faucet_ready_for(faucet: Option<&FaucetView>, chain: &ChainFundingView) -> bool {
@@ -442,7 +459,7 @@ fn draw_ready(frame: &mut Frame, area: Rect, state: &FundsState, funding: &Fundi
 
     match funding.chains.get(state.selected) {
         Some(chain) => {
-            draw_deposit(frame, body[0], chain, funding.faucet.as_ref(), state);
+            draw_deposit(frame, body[0], chain, funding.faucet.as_ref());
             draw_chain_detail(frame, body[1], chain, state);
         }
         None => {
@@ -519,7 +536,6 @@ fn draw_deposit(
     area: Rect,
     chain: &ChainFundingView,
     faucet: Option<&FaucetView>,
-    state: &FundsState,
 ) {
     let block = Block::default()
         .title(" Deposit address ")
@@ -544,15 +560,9 @@ fn draw_deposit(
         Style::default().fg(Color::DarkGray),
     )));
     lines.push(Line::from(Span::styled(
-        "y copies the address",
+        "y copies (address, channel id, connector)",
         Style::default().fg(Color::DarkGray),
     )));
-    if let Some(message) = &state.clipboard_message {
-        lines.push(Line::from(Span::styled(
-            message.clone(),
-            Style::default().fg(Color::Green),
-        )));
-    }
 
     if let Some(faucet) = faucet {
         lines.push(Line::raw(""));
@@ -1254,17 +1264,55 @@ mod tests {
         assert_eq!(state.selected, 1, "wraps backward too");
     }
 
+    // `y` itself is now the app-wide copy picker (TOON_Network#138,
+    // `app::global_key`) built from this view's own `copyables()` — see
+    // those tests below. `handle_key` no longer has an arm for `y` at all,
+    // so this view has nothing more to say about the key past the ones
+    // above (`_ => None` falls through).
+
+    // -- copyables (TOON_Network#138) ----------------------------------------
+
     #[test]
-    fn y_copies_the_selected_chains_deposit_address() {
+    fn copyables_is_empty_with_nothing_read() {
+        let state = FundsState::default();
+        assert_eq!(copyables(&state), Vec::new());
+    }
+
+    #[test]
+    fn copyables_leads_with_the_deposit_address_the_original_y_copied() {
         let mut state = FundsState::default();
         state.funding = Some(sample_funding(
             "ready",
             vec![sample_chain("evm:84532", true, "present", "none")],
         ));
+        let items = copyables(&state);
         assert_eq!(
-            handle_key(&mut state, key(KeyCode::Char('y'))),
-            Some(Command::CopyToClipboard("addr-evm:84532".to_string()))
+            items[0],
+            (
+                "evm:84532 deposit address".to_string(),
+                "addr-evm:84532".to_string()
+            )
         );
+        // No open channel in this sample, so no channel id is offered.
+        assert_eq!(
+            items[1],
+            (
+                "evm:84532 connector".to_string(),
+                "https://connector.example".to_string()
+            )
+        );
+        assert_eq!(items.len(), 2);
+    }
+
+    #[test]
+    fn copyables_offers_the_channel_id_once_a_channel_is_open() {
+        let mut state = FundsState::default();
+        state.funding = Some(sample_funding(
+            "ready",
+            vec![sample_chain("evm:84532", true, "present", "open")],
+        ));
+        let items = copyables(&state);
+        assert!(items.contains(&("evm:84532 channel id".to_string(), "0xchannel".to_string())));
     }
 
     #[test]

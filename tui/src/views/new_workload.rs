@@ -50,7 +50,7 @@
 
 use std::collections::BTreeMap;
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -435,6 +435,41 @@ fn form_field_mut(state: &mut NewWorkloadViewState, target: FormTarget) -> Optio
     }
 }
 
+/// Routes a paste to the Form stage's currently focused field
+/// (TOON_Network#138) — the same `form_targets`/`form.cursor`/
+/// `form_field_mut` seam [`form_handle_key`] uses. A no-op on every other
+/// stage, or while the Form stage's field is not being edited, or while a
+/// spawn confirm is open — "a paste while no field is editing is ignored."
+pub fn handle_paste(state: &mut NewWorkloadViewState, text: &str) {
+    if state.confirm.is_some() || state.stage != Stage::Form || !state.form.editing {
+        return;
+    }
+    let targets = form_targets(state);
+    let Some(target) = targets.get(state.form.cursor).copied() else {
+        return;
+    };
+    if let Some(field) = form_field_mut(state, target) {
+        field.insert_str(text);
+    }
+}
+
+/// What `y` offers on the New workload view (TOON_Network#138): the chosen
+/// Template's image content address (§8.1's registry entry `address`, the
+/// same one `SpawnContentImage.registry_entry` names once expanded) —
+/// nothing before a Template is chosen (the Gallery stage) or when its image
+/// could not be resolved ([`TemplateAvailability::Unavailable`]).
+pub fn copyables(state: &NewWorkloadViewState) -> Vec<(String, String)> {
+    let Some(template) = &state.template else {
+        return Vec::new();
+    };
+    match &template.availability {
+        TemplateAvailability::Available {
+            entry: Some(entry), ..
+        } => vec![("Image content address".to_string(), entry.address.clone())],
+        _ => Vec::new(),
+    }
+}
+
 fn form_handle_key(state: &mut NewWorkloadViewState, key: KeyEvent) -> Option<Command> {
     let targets = form_targets(state);
     if targets.is_empty() {
@@ -447,6 +482,13 @@ fn form_handle_key(state: &mut NewWorkloadViewState, key: KeyEvent) -> Option<Co
     if state.form.editing {
         match key.code {
             KeyCode::Enter | KeyCode::Esc => state.form.editing = false,
+            // TOON_Network#138: Ctrl+V reads the system clipboard
+            // (`wl-paste`, off the UI thread) instead of typing a `v` —
+            // same rule every other field-editing mode in this crate
+            // follows.
+            KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                return Some(Command::RequestClipboardPaste);
+            }
             _ => {
                 let target = targets[state.form.cursor];
                 if let Some(field) = form_field_mut(state, target) {
@@ -1495,6 +1537,90 @@ mod tests {
             gallery_handle_key(&mut state, key(KeyCode::Char('r'))),
             Some(Command::RefreshTemplates)
         );
+    }
+
+    // -- paste routing (TOON_Network#138) -------------------------------
+
+    #[test]
+    fn paste_lands_in_the_focused_form_field_while_editing() {
+        let mut state = NewWorkloadViewState::new();
+        state.stage = Stage::Form;
+        state.template = Some(available_template("static-site"));
+        state.form = FormFields::new(state.template.as_ref().unwrap());
+        // The SSH field, per `form_targets`: every env field, then Ssh,
+        // Volume, Preview.
+        state.form.cursor = state.form.env_names.len();
+        form_handle_key(&mut state, key(KeyCode::Enter));
+        assert!(state.form.editing);
+
+        handle_paste(&mut state, "ssh-ed25519 AAAApasted\n");
+        assert_eq!(state.form.ssh.value(), "ssh-ed25519 AAAApasted");
+    }
+
+    #[test]
+    fn paste_is_ignored_on_the_gallery_stage() {
+        let mut state = NewWorkloadViewState::new();
+        assert_eq!(state.stage, Stage::Gallery);
+        handle_paste(&mut state, "not typed anywhere");
+        // Nothing to assert against but that this does not panic and that
+        // no field exists to have received it — the Form stage's own field
+        // is the only place a paste could land, and it is not even built
+        // yet on the Gallery stage.
+    }
+
+    #[test]
+    fn ctrl_v_while_editing_the_form_asks_for_a_clipboard_paste_instead_of_typing_v() {
+        let mut state = NewWorkloadViewState::new();
+        state.template = Some(available_template("static-site"));
+        state.form = FormFields::new(state.template.as_ref().unwrap());
+        state.form.cursor = state.form.env_names.len();
+        form_handle_key(&mut state, key(KeyCode::Enter));
+        assert!(state.form.editing);
+
+        let command = form_handle_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(command, Some(Command::RequestClipboardPaste));
+        assert!(state.form.ssh.is_empty(), "Ctrl+V must not type a 'v'");
+    }
+
+    // -- copyables (TOON_Network#138) ------------------------------------
+
+    #[test]
+    fn copyables_is_empty_before_a_template_is_chosen() {
+        let state = NewWorkloadViewState::new();
+        assert_eq!(copyables(&state), Vec::new());
+    }
+
+    #[test]
+    fn copyables_offers_the_chosen_templates_image_content_address() {
+        let mut state = NewWorkloadViewState::new();
+        let mut template = available_template("static-site");
+        template.availability = TemplateAvailability::Available {
+            checked: "1 image entry".to_string(),
+            entry: Some(crate::types::TemplateImageEntry {
+                address: "30433:pk:static-site-image".to_string(),
+                canonical_name: "static-site".to_string(),
+                blobs: vec![],
+            }),
+            blob_record: None,
+        };
+        state.template = Some(template);
+        assert_eq!(
+            copyables(&state),
+            vec![(
+                "Image content address".to_string(),
+                "30433:pk:static-site-image".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn copyables_is_empty_when_the_image_could_not_be_resolved() {
+        let mut state = NewWorkloadViewState::new();
+        state.template = Some(unavailable_template("static-site"));
+        assert_eq!(copyables(&state), Vec::new());
     }
 
     #[test]

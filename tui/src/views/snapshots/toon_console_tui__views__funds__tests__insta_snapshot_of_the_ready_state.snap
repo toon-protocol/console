@@ -1,6 +1,5 @@
 ---
 source: src/views/funds.rs
-assertion_line: 1423
 expression: render(&state)
 ---
 ┌ Native gas ──────────────────────────────────────────────────────────────────────────────────────────────────────────┐
@@ -29,7 +28,7 @@ expression: render(&state)
 │                                              ││                                                                      │
 │addr-evm:84532                                ││                                                                      │
 │m/44'/60'/0'/0/0                              ││                                                                      │
-│y copies the address                          ││                                                                      │
+│y copies (address, channel id, connector)     ││                                                                      │
 │                                              ││                                                                      │
 │Faucet drips 10 USDC here. f asks it.         ││                                                                      │
 │                                              ││                                                                      │

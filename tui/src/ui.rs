@@ -15,6 +15,7 @@ use ratatui::Frame;
 
 use crate::app::{App, DaemonStatus, View};
 use crate::views;
+use crate::widgets::copy_picker;
 
 /// Where things landed on screen this frame, for `app::handle_mouse` to test
 /// a click against next event (ADR 0028: "mouse clicks select tabs and
@@ -51,6 +52,10 @@ pub fn draw(frame: &mut Frame, app: &App) -> Hits {
     let sidebar = draw_sidebar(frame, body[0], app.view);
     let rows = draw_content(frame, body[1], app);
     draw_footer(frame, outer[2], app);
+
+    if let Some(picker) = &app.copy_picker {
+        copy_picker::draw(frame, area, picker);
+    }
 
     if app.help_open {
         draw_help(frame, area);
@@ -257,13 +262,23 @@ fn draw_loading(frame: &mut Frame, area: Rect, view_title: &str) {
 }
 
 fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
-    let mut spans = vec![Span::raw(" Tab/h/l switch  1-7 jump ")];
+    let mut spans = Vec::new();
+    // TOON_Network#138: the last copy/paste outcome, ahead of the hints —
+    // shown regardless of which view is current, so it is never lost the
+    // moment a view-specific hint would otherwise crowd it out.
+    if let Some(status) = &app.clipboard_status {
+        spans.push(Span::styled(
+            format!(" {status} "),
+            Style::default().fg(Color::Green),
+        ));
+    }
+    spans.push(Span::raw(" Tab/h/l switch  1-7 jump  y copy "));
     if app.view == View::Health {
         spans.push(Span::raw(" r refresh "));
     }
     if app.view == View::Workloads {
         spans.push(Span::raw(
-            " j/k select  / filter  e extend  x terminate  y copy  a auto-extend  r rotate  g gateway  R refresh ",
+            " j/k select  / filter  e extend  x terminate  a auto-extend  r rotate  g gateway  R refresh ",
         ));
     }
     if app.view == View::Directory {
@@ -280,7 +295,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     }
     if app.view == View::Account {
         spans.push(Span::raw(
-            " j/k move  Enter edit/act  Esc stop editing  r refresh ",
+            " j/k move  Enter edit/act  Ctrl+V paste  Esc stop editing  r refresh ",
         ));
         if app.account_view.chain_seed.confirm.is_some() {
             spans.push(Span::raw(" type yes, Enter to publish  Esc cancel "));
@@ -288,14 +303,14 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     }
     if app.view == View::Funds {
         spans.push(Span::raw(
-            " j/k chain  y copy  o open  f faucet  g quote  b buy  r refresh ",
+            " j/k chain  o open  f faucet  g quote  b buy  r refresh ",
         ));
     }
     if app.view == View::New {
         spans.push(Span::raw(match app.new_workload.stage {
             views::new_workload::Stage::Gallery => " j/k select  / filter  Enter open  r refresh ",
             views::new_workload::Stage::Form => {
-                " j/k move  Enter edit/preview  Esc stop editing  Backspace back "
+                " j/k move  Enter edit/preview  Ctrl+V paste  Esc stop editing  Backspace back "
             }
             views::new_workload::Stage::Listing => " j/k move  Enter choose  Backspace back ",
             views::new_workload::Stage::Standbys => {
@@ -309,6 +324,9 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
             spans.push(Span::raw(" type yes, Enter to spawn  Esc cancel "));
         }
     }
+    if app.copy_picker.is_some() {
+        spans.push(Span::raw(" j/k move  Enter copy  Esc close "));
+    }
     spans.push(Span::raw(" ? help  q quit "));
     let block = Block::default().borders(Borders::ALL);
     frame.render_widget(Paragraph::new(Line::from(spans)).block(block), area);
@@ -321,6 +339,11 @@ const HELP_LINES: &[&str] = &[
     "h / l      previous / next view",
     "r          refresh Health, the open Docs page/list, Account, or Funds",
     "R          refresh Workloads",
+    "y          copy what's on screen — straight away with one thing to",
+    "           copy, or j/k/Enter/Esc over a small picker with more than one",
+    "Ctrl+V     paste the system clipboard into the field being typed into",
+    "paste      pasting into a field (a terminal's own paste, not typed",
+    "           keys) lands there too, whole, minus any \\r/\\n",
     "j / k      Docs: select a page, or scroll an open one",
     "Enter      Docs: open the selected page",
     "n / N      Docs: focus the next / previous link",
@@ -335,7 +358,6 @@ const HELP_LINES: &[&str] = &[
     "q / Esc    quit",
     "-- Funds --",
     "j / k      select a chain",
-    "y          copy the selected chain's deposit address",
     "o          open a payment channel (asks for confirmation)",
     "f          ask the faucet",
     "g          get a gas quote",
@@ -345,7 +367,6 @@ const HELP_LINES: &[&str] = &[
     "/          filter the list",
     "e          extend (asks for confirmation)",
     "x          terminate (asks for confirmation)",
-    "y          copy access details (wl-copy)",
     "a          set/clear the auto-extend budget (asks for confirmation)",
     "r          rotate the Continuation Token (asks for confirmation)",
     "g          hand over to / withdraw from a gateway (asks for confirmation)",

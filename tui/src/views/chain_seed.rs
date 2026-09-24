@@ -123,6 +123,33 @@ pub fn targets(status: Option<&ChainSeedStatus>, show_import: bool) -> Vec<Targe
     out
 }
 
+/// What this section offers `y` (TOON_Network#138): each chain's derived
+/// address, and the published record's id once there is one — never the
+/// mnemonic, never anything held-but-unpublished (`status.held` carries no
+/// address of its own to offer, and the warning/held text is prose, not a
+/// value worth copying). `views::account::copyables` appends this to its own
+/// list, the same way this section's `Target`s fold into that view's cursor.
+pub fn copyables(status: Option<&ChainSeedStatus>) -> Vec<(String, String)> {
+    let Some(status) = status else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    if let Some(addresses) = &status.addresses {
+        out.push((
+            "Chain Seed EVM address".to_string(),
+            addresses.evm.address.clone(),
+        ));
+        out.push((
+            "Chain Seed Solana address".to_string(),
+            addresses.solana.address.clone(),
+        ));
+    }
+    if let Some(record) = &status.record {
+        out.push(("Chain Seed record id".to_string(), record.event_id.clone()));
+    }
+    out
+}
+
 /// Whether the daemon has yet to look for this account's seed on its relays:
 /// `unknown` means nobody has asked, so neither "none yet" nor a published
 /// record can be told apart. The runtime asks once per signed-in pubkey (a
@@ -689,6 +716,41 @@ mod tests {
         status.reason =
             Some("This account's key does not open that record: invalid MAC".to_string());
         status
+    }
+
+    // -- copyables (TOON_Network#138) ----------------------------------------
+
+    #[test]
+    fn copyables_is_empty_with_no_status() {
+        assert_eq!(copyables(None), Vec::<(String, String)>::new());
+    }
+
+    #[test]
+    fn copyables_offers_both_addresses_and_the_record_id_once_ready() {
+        let status = ready_status();
+        let items = copyables(Some(&status));
+        assert_eq!(
+            items,
+            vec![
+                (
+                    "Chain Seed EVM address".to_string(),
+                    status.addresses.as_ref().unwrap().evm.address.clone()
+                ),
+                (
+                    "Chain Seed Solana address".to_string(),
+                    status.addresses.as_ref().unwrap().solana.address.clone()
+                ),
+                (
+                    "Chain Seed record id".to_string(),
+                    status.record.as_ref().unwrap().event_id.clone()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn copyables_offers_nothing_before_a_seed_exists() {
+        assert_eq!(copyables(Some(&unknown_status())), Vec::new());
     }
 
     // -- key handling: pure state, no rendering ------------------------------

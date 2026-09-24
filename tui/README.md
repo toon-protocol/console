@@ -33,10 +33,13 @@ and per-launch token from `$XDG_RUNTIME_DIR/toon-console/launch.json` (see
   into `views::<name>::draw` for the current view.
 - `src/views/<name>.rs` — one file per sidebar view.
 - `src/widgets/<name>.rs` — pieces more than one view reuses: `list.rs` is a
-  filterable, `j`/`k`-navigable list's key-handling state machine, and
+  filterable, `j`/`k`-navigable list's key-handling state machine,
   `confirm.rs` is a confirmation modal that one keypress cannot pass (typing
-  `yes`, not the key that opened it). A view drives these and draws around
-  them; see `views/workloads.rs` (TOON_Network#143) for the pattern.
+  `yes`, not the key that opened it), `input.rs` is `TextField` (a masked,
+  zeroizing text field every editable form in this crate uses), and
+  `copy_picker.rs` is the one copy mechanism for the whole app (below). A
+  view drives these and draws around them; see `views/workloads.rs`
+  (TOON_Network#143) for the pattern.
 - `src/clipboard.rs` — `wl-copy` when it is there, a message saying so when
   it is not. Runs the program directly, never through a shell.
 - `src/main.rs` — thin wiring only (terminal setup/teardown, the event loop).
@@ -86,6 +89,32 @@ map.insert("workloads", check::<WorkloadsDashboard> as Check);
 the build on a fixture with no registry entry — so forgetting the second
 step is a failing test, not a silently-unchecked file.
 
+## Copy and paste
+
+**Paste** works in every text field this crate draws (`widgets::input::TextField`):
+the Account view's bunker URI/nsec/mnemonic/passphrases, the Chain Seed
+import mnemonic, every New workload form field, and Workloads' auto-extend
+budget entry (digits only there — it is not a `TextField`). A terminal's own
+paste arrives as one `Event::Paste(String)` (`EnableBracketedPaste`, set in
+`main.rs`'s `setup_terminal`), which `app::handle_paste` routes to whichever
+field the current view has focused AND is actively editing — a paste while
+nothing is being edited is silently dropped, never interpreted as
+keystrokes. Ctrl+V does the same thing from the system clipboard: it reads
+`wl-paste --no-newline` off the UI thread (`main.rs`'s `spawn_clipboard_paste`,
+mirroring how a copy runs `wl-copy` off it) and feeds the result through the
+same `handle_paste` seam. Either way lands in `TextField::insert_str`, which
+strips `\r`/`\n` and trims the pasted text's own leading/trailing whitespace
+(never the field's existing value) through a `Zeroizing` buffer.
+
+**Copy** is one mechanism for the whole app: `y` builds the current view's
+own `copyables() -> Vec<(String, String)>` — what is on screen or selected,
+never a secret — and either copies the one item straight away, or opens
+`widgets::copy_picker::CopyPicker` (`j`/`k` move, `Enter` copies, `Esc`
+closes) when there is more than one. A view adds a copyable by extending its
+own `copyables()`; `app::view_copyables` is the one place that dispatches on
+`View` to call it. The footer's status line says which label was copied,
+never the value.
+
 ## Rules a change here should not break
 
 - **No colour of its own.** Every `Style` uses one of `ratatui::style::Color`'s
@@ -96,6 +125,12 @@ step is a failing test, not a silently-unchecked file.
   one `Authorization` header and `src/launch.rs`'s read of the file the
   daemon already wrote. `LaunchRecord`'s `Debug` impl is hand-written to
   redact it, on purpose — see `src/launch.rs`.
+- **No view's `copyables()` ever offers a secret** — an nsec, a mnemonic, a
+  passphrase, the launch token, a Continuation Token, a Root Secret, or
+  anything else the daemon marks secret. `tests/copy_no_secrets.rs` walks
+  every view's `copyables()` built from the daemon's real committed
+  fixtures and fails the build if one looks like an nsec or a BIP-39
+  mnemonic.
 - **Health's refresh cadence matches the web UI's**: read once (on connect)
   and again only on `r` — `packages/ui/src/hooks/use-console.ts` has no
   auto-poll for Health, so neither does this.

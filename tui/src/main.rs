@@ -13,7 +13,10 @@ use std::io::{self, Stdout};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crossterm::event::{DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyEventKind};
+use crossterm::event::{
+    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event,
+    EventStream, KeyEventKind,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -22,9 +25,12 @@ use futures_util::StreamExt;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
+use zeroize::Zeroizing;
 
 use toon_console_tui::api;
-use toon_console_tui::app::{handle_key, handle_mouse, now_ms, App, Command, DaemonStatus, View};
+use toon_console_tui::app::{
+    handle_key, handle_mouse, handle_paste, now_ms, App, Command, DaemonStatus, View,
+};
 use toon_console_tui::client::{ClientError, DaemonClient};
 use toon_console_tui::clipboard;
 use toon_console_tui::desktop;
@@ -114,11 +120,18 @@ enum RuntimeEvent {
     /// workload is selected — see `views::workloads`'s module doc.
     RotationLoaded(Box<Result<RotationView, String>>),
     GatewayLoaded(Box<Result<GatewayView, String>>),
-    /// `Command::CopyToClipboard`'s answer, wherever it was issued from
-    /// (Workloads' `y`, Funds' `y`) — `run`'s handler routes it to whichever
-    /// view is current when it lands (`app.view`), since the command itself
-    /// carries no view tag.
-    ClipboardDone(clipboard::ClipboardOutcome),
+    /// `Command::CopyToClipboard`'s answer — the label travels alongside the
+    /// outcome (TOON_Network#138) so the footer's status line can say WHAT
+    /// was copied without `main.rs` needing to remember it across the
+    /// `await`.
+    ClipboardDone {
+        label: String,
+        outcome: clipboard::ClipboardOutcome,
+    },
+    /// `Command::RequestClipboardPaste`'s answer (Ctrl+V, TOON_Network#138):
+    /// `wl-paste --no-newline`'s stdout, or the reason it could not be read
+    /// (missing, or exited non-zero).
+    ClipboardPasted(Result<String, String>),
     /// The answer to `GET /api/chain-seed`, or to any Chain Seed action
     /// (acknowledge, mint, import, publish, refresh) — every one of those
     /// routes answers with the same `ChainSeedStatus` (TOON_Network#142).
@@ -152,9 +165,21 @@ async fn main() -> io::Result<()> {
 fn setup_terminal() -> io::Result<Terminal<CrosstermBackend<Stdout>>> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    // `EnableBracketedPaste` (TOON_Network#138) is what turns a terminal
+    // paste into one `Event::Paste(String)` instead of a keystroke per
+    // character — without it, pasting a bunker URI or a mnemonic would type
+    // it one `KeyCode::Char` at a time, indistinguishable from someone
+    // actually typing that fast.
+    execute!(
+        stdout,
+        EnterAlternateScreen,
+        EnableMouseCapture,
+        EnableBracketedPaste
+    )?;
     // A panic must still leave the terminal usable — nobody wants a stuck
-    // raw-mode shell after a bug in this crate.
+    // raw-mode shell after a bug in this crate. `restore_terminal` disables
+    // bracketed paste too, so the hook covers that the same way it already
+    // covers mouse capture and the alternate screen.
     let previous_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = restore_terminal();
@@ -165,7 +190,12 @@ fn setup_terminal() -> io::Result<Terminal<CrosstermBackend<Stdout>>> {
 
 fn restore_terminal() -> io::Result<()> {
     disable_raw_mode()?;
-    execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture)?;
+    execute!(
+        io::stdout(),
+        LeaveAlternateScreen,
+        DisableMouseCapture,
+        DisableBracketedPaste
+    )?;
     Ok(())
 }
 
@@ -407,11 +437,17 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()
                                     spawn_withdraw(client.clone(), tx.clone(), workload_id);
                                 }
                             }
-                            // Shared by Workloads' `y` and Funds' `y` — the
-                            // command carries no view tag, so `ClipboardDone`
-                            // below routes its answer by `app.view`.
-                            Command::CopyToClipboard(text) => {
-                                spawn_clipboard_copy(text, tx.clone());
+                            // TOON_Network#138: the one `y` mechanism, for
+                            // every view — see `app::global_key` and
+                            // `widgets::copy_picker`.
+                            Command::CopyToClipboard { label, value } => {
+                                spawn_clipboard_copy(label, value, tx.clone());
+                            }
+                            // Ctrl+V while a field is focused (TOON_Network#138).
+                            // No `client` involved — this never reaches the
+                            // daemon.
+                            Command::RequestClipboardPaste => {
+                                spawn_clipboard_paste(tx.clone());
                             }
                             // -- New workload (TOON_Network#146) --
                             Command::RefreshTemplates => {
@@ -453,6 +489,17 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()
                     }
                     Event::Mouse(mouse) => {
                         handle_mouse(&mut app, mouse, &hits.sidebar, &hits.rows);
+                    }
+                    // TOON_Network#138: bracketed paste (`EnableBracketedPaste`
+                    // in `setup_terminal`) lands here as one event rather than
+                    // a keystroke per character. Wrapped in `Zeroizing` for
+                    // the length of this call only, so a pasted secret (an
+                    // nsec, a mnemonic) does not linger in this owned
+                    // `String` once `app::handle_paste` has copied what it
+                    // needs into the focused field's own zeroizing buffer.
+                    Event::Paste(text) => {
+                        let text = Zeroizing::new(text);
+                        handle_paste(&mut app, &text);
                     }
                     _ => {}
                 }
@@ -782,25 +829,28 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()
                             app.workloads.gateway = Some(view);
                         }
                     }
-                    RuntimeEvent::ClipboardDone(outcome) => {
-                        let message = match outcome {
-                            clipboard::ClipboardOutcome::Copied => {
-                                "Copied to the clipboard.".to_string()
-                            }
+                    RuntimeEvent::ClipboardDone { label, outcome } => {
+                        // TOON_Network#138: "a status line saying what was
+                        // copied (the label, never the value when it is
+                        // long)" — shown in the footer regardless of which
+                        // view is current (`ui::draw_footer`), so this no
+                        // longer needs to guess which view's own status
+                        // field to write into.
+                        app.clipboard_status = Some(match outcome {
+                            clipboard::ClipboardOutcome::Copied => format!("Copied {label}."),
                             clipboard::ClipboardOutcome::Unavailable(message) => message,
                             clipboard::ClipboardOutcome::Failed(message) => {
                                 format!("Could not copy: {message}")
                             }
-                        };
-                        // `Command::CopyToClipboard` carries no view tag, so
-                        // the answer goes to whichever view is current when
-                        // it lands — Workloads' `y` and Funds' `y` are the
-                        // only two sources of it today.
-                        match app.view {
-                            View::Funds => app.funds.clipboard_message = Some(message),
-                            _ => app.workloads.status = Some(message),
-                        }
+                        });
                     }
+                    RuntimeEvent::ClipboardPasted(result) => match result {
+                        Ok(text) => {
+                            let text = Zeroizing::new(text);
+                            handle_paste(&mut app, &text);
+                        }
+                        Err(message) => app.clipboard_status = Some(message),
+                    },
                     // -- New workload (TOON_Network#146) --
                     RuntimeEvent::TemplatesLoaded(result) => {
                         app.new_workload.loading_gallery = false;
@@ -1489,12 +1539,42 @@ fn spawn_workload_detail(
 /// `wl-copy` is a fast local subprocess, but it is still a blocking spawn —
 /// `spawn_blocking` keeps it off the event loop's own task so a slow or
 /// hung clipboard tool cannot stall keypresses or redraws.
-fn spawn_clipboard_copy(text: String, tx: UnboundedSender<RuntimeEvent>) {
+fn spawn_clipboard_copy(label: String, text: String, tx: UnboundedSender<RuntimeEvent>) {
     tokio::spawn(async move {
         let outcome = tokio::task::spawn_blocking(move || clipboard::copy(&text))
             .await
             .unwrap_or_else(|err| clipboard::ClipboardOutcome::Failed(err.to_string()));
-        let _ = tx.send(RuntimeEvent::ClipboardDone(outcome));
+        let _ = tx.send(RuntimeEvent::ClipboardDone { label, outcome });
+    });
+}
+
+/// Ctrl+V (TOON_Network#138): reads the system clipboard with `wl-paste
+/// --no-newline`, run directly (no shell — nothing typed into a paste is
+/// ever interpreted as shell syntax, the same rule `spawn_open_link` and
+/// `clipboard::copy_with` already follow) and off the UI thread, the same
+/// way a copy runs `wl-copy` off it. `--no-newline` matches `wl-copy`'s own
+/// behaviour: neither adds one, so a round trip through both is exact.
+fn spawn_clipboard_paste(tx: UnboundedSender<RuntimeEvent>) {
+    tokio::spawn(async move {
+        let result = match tokio::process::Command::new("wl-paste")
+            .arg("--no-newline")
+            .output()
+            .await
+        {
+            Ok(output) if output.status.success() => {
+                Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+            }
+            Ok(output) => Err(format!(
+                "wl-paste exited with {}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            )),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                Err("wl-paste is not installed, so the clipboard could not be read.".to_string())
+            }
+            Err(err) => Err(err.to_string()),
+        };
+        let _ = tx.send(RuntimeEvent::ClipboardPasted(result));
     });
 }
 

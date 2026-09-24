@@ -37,7 +37,7 @@
 //! if so, hands the key to it and nothing else — see the top of
 //! [`handle_key`].
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -213,6 +213,16 @@ impl AccountViewState {
             self.cursor = index;
         }
     }
+
+    /// `editing` is otherwise private to this module (`handle_key` and
+    /// `handle_paste` are the only things that need it) — this one read-only
+    /// peephole exists for `app.rs`'s own "y types while editing" test
+    /// (TOON_Network#138), which drives the view through `app::handle_key`
+    /// rather than reaching into this struct.
+    #[cfg(test)]
+    pub fn is_editing_for_test(&self) -> bool {
+        self.editing
+    }
 }
 
 impl Default for AccountViewState {
@@ -298,6 +308,13 @@ pub fn handle_key(
     if state.editing {
         match key.code {
             KeyCode::Enter | KeyCode::Esc => state.editing = false,
+            // TOON_Network#138: Ctrl+V reads the system clipboard
+            // (`wl-paste`, off the UI thread — `main.rs`) rather than being
+            // fed to the field as a keystroke (it is not one `TextField`
+            // recognises anyway — see its own Ctrl-modifier check).
+            KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                return Some(Command::RequestClipboardPaste);
+            }
             _ => {
                 let target = list[state.cursor];
                 if let Some(field) = field_mut(state, target) {
@@ -323,6 +340,70 @@ pub fn handle_key(
         }
         _ => None,
     }
+}
+
+/// Routes a paste (bracketed paste or Ctrl+V's `wl-paste` answer) to
+/// whichever field is currently focused AND being edited — the same
+/// `list`/`cursor`/`field_mut` seam [`handle_key`] uses, so this can never
+/// disagree with it about what is focused. A no-op while nothing is being
+/// edited, or while the Chain Seed publish confirm covers the view (neither
+/// one has a field to paste into) — TOON_Network#138: "a paste while no
+/// field is editing is ignored."
+pub fn handle_paste(
+    state: &mut AccountViewState,
+    status: Option<&SessionStatus>,
+    profiles: Option<&Profiles>,
+    chain_seed_status: Option<&ChainSeedStatus>,
+    text: &str,
+) {
+    if state.chain_seed.confirm.is_some() || !state.editing {
+        return;
+    }
+    let list = targets(
+        status,
+        profiles,
+        chain_seed_status,
+        state.local_mode,
+        state.chain_seed.show_import,
+    );
+    let Some(target) = list.get(state.cursor).copied() else {
+        return;
+    };
+    if let Some(field) = field_mut(state, target) {
+        field.insert_str(text);
+    }
+}
+
+/// What `y` offers on the Account view (TOON_Network#138): the npub and hex
+/// pubkey once signed in, the signer's own bunker relays when it is a
+/// remote one, and the account's own relays (NIP-65, or the network
+/// profile's fallback) — never a secret: no nsec, no mnemonic, no
+/// passphrase, nothing this view keeps in a `TextField`. Folds in the Chain
+/// Seed section's own [`chain_seed::copyables`], the same way this view
+/// folds that section's [`Target`]s into its own cursor.
+pub fn copyables(
+    status: Option<&SessionStatus>,
+    chain_seed_status: Option<&ChainSeedStatus>,
+) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    if let Some(status) = status {
+        if let Some(view) = &status.account {
+            out.push(("npub".to_string(), view.npub.clone()));
+            out.push(("Pubkey (hex)".to_string(), view.pubkey.clone()));
+            if let Some(signer) = status.signers.iter().find(|s| s.id == view.signer_id) {
+                for relay in signer.bunker_relays.iter().flatten() {
+                    out.push(("Signer bunker relay".to_string(), relay.clone()));
+                }
+            }
+            if let Some(profile) = &view.profile {
+                for relay in &profile.relays {
+                    out.push(("Account relay".to_string(), relay.clone()));
+                }
+            }
+        }
+    }
+    out.extend(chain_seed::copyables(chain_seed_status));
+    out
 }
 
 /// Turns an `Enter` on `target` into either a state change (entering edit
@@ -1147,6 +1228,91 @@ mod tests {
             error: Some("timed out".to_string()),
         });
         assert!(!poll_needed(&status));
+    }
+
+    // -- paste routing (TOON_Network#138) -----------------------------------
+
+    #[test]
+    fn paste_lands_in_the_focused_field_while_editing() {
+        let mut state = AccountViewState::new();
+        let status = signed_out(false, vec![]);
+        handle_key(&mut state, Some(&status), None, None, key(KeyCode::Enter));
+        assert!(state.editing);
+
+        handle_paste(
+            &mut state,
+            Some(&status),
+            None,
+            None,
+            "bunker://npub1pasted?relay=wss://r\n",
+        );
+        assert_eq!(
+            state.bunker_uri.value(),
+            "bunker://npub1pasted?relay=wss://r"
+        );
+    }
+
+    #[test]
+    fn paste_is_ignored_and_never_typed_when_nothing_is_being_edited() {
+        let mut state = AccountViewState::new();
+        let status = signed_out(false, vec![]);
+        assert!(!state.editing);
+
+        handle_paste(&mut state, Some(&status), None, None, "not typed anywhere");
+        assert!(state.bunker_uri.is_empty());
+        assert!(state.nsec.is_empty());
+    }
+
+    #[test]
+    fn ctrl_v_while_editing_asks_for_a_clipboard_paste_instead_of_typing_v() {
+        let mut state = AccountViewState::new();
+        let status = signed_out(false, vec![]);
+        handle_key(&mut state, Some(&status), None, None, key(KeyCode::Enter));
+        assert!(state.editing);
+
+        let command = handle_key(
+            &mut state,
+            Some(&status),
+            None,
+            None,
+            KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(command, Some(Command::RequestClipboardPaste));
+        assert!(state.bunker_uri.is_empty(), "Ctrl+V must not type a 'v'");
+    }
+
+    // -- copyables (TOON_Network#138) ---------------------------------------
+
+    #[test]
+    fn copyables_is_empty_signed_out() {
+        assert_eq!(
+            copyables(Some(&signed_out(false, vec![])), None),
+            Vec::new()
+        );
+    }
+
+    #[test]
+    fn copyables_offers_npub_hex_pubkey_and_relays_signed_in() {
+        let status = signed_in();
+        let items = copyables(Some(&status), None);
+        assert!(items.contains(&(
+            "npub".to_string(),
+            "npub1exampleexampleexampleexampleexampleexampleexampleexamplex".to_string()
+        )));
+        assert!(items.contains(&("Pubkey (hex)".to_string(), "abc123".to_string())));
+        assert!(items.contains(&(
+            "Account relay".to_string(),
+            "wss://relay.devnet.toonprotocol.dev".to_string()
+        )));
+    }
+
+    #[test]
+    fn copyables_never_offers_a_secret() {
+        let status = signed_in();
+        let items = copyables(Some(&status), None);
+        for (_, value) in &items {
+            assert!(!value.starts_with("nsec1"));
+        }
     }
 
     // -- key handling: pure state, no rendering ----------------------------
