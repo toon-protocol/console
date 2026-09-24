@@ -5,8 +5,10 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { AccountSession } from './account-session.js';
+import { writeApiFixture } from './api-fixtures.testkit.js';
 import type { ApiDeps } from './api.js';
 import type { ConnectorHealth } from './connector-health.js';
+import type { AnonTransportView, HiddenTransportPort } from './hidden-transport.js';
 import { PassphraseFileKeystore, keystoreFilePath } from './keystore-file.js';
 import { activeProfileFilePath, consolePaths } from './paths.js';
 import { ProfileStore } from './profile-store.js';
@@ -38,6 +40,27 @@ const HEALTHY: ConnectorHealth = {
   peerCarriages: [],
   supportedVersions: [1],
 };
+
+/**
+ * A ready Hidden Providers carriage — kept in `beforeEach`'s deps (rather
+ * than left unset) so `/api/health`'s fixture below carries `anon`, and the
+ * TUI's Health view has a real `AnonTransportView` to render, not an absent
+ * field.
+ */
+const READY_ANON: AnonTransportView = {
+  state: 'ready',
+  socksProxy: 'socks5h://127.0.0.1:9050',
+  reason: 'A SOCKS5h proxy answered at socks5h://127.0.0.1:9050, so a `.anyone` address can be dialled.',
+};
+
+function fakeHiddenTransport(view: AnonTransportView): HiddenTransportPort {
+  return {
+    configured: () => view.socksProxy,
+    open: () => Promise.reject(new Error('not used by these tests')),
+    describe: () => Promise.resolve(view),
+    close: () => Promise.resolve(),
+  };
+}
 
 describe('the daemon server', () => {
   let home: string;
@@ -80,6 +103,7 @@ describe('the daemon server', () => {
       paths,
       startedAt: new Date('2026-09-22T00:00:00Z'),
       readHealth: () => Promise.resolve(HEALTHY),
+      hidden: fakeHiddenTransport(READY_ANON),
       readDirectory: () =>
         Promise.resolve({ state: 'unconfigured', reason: 'not what this file tests' }),
       readTemplates: () =>
@@ -159,6 +183,11 @@ describe('the daemon server', () => {
     expect(body.connector.state).toBe('ok');
     expect(body.connector.settlements[0]?.chain).toBe('evm:84532');
     expect(body.storage.channels).toContain(join('profiles', 'devnet', 'channels'));
+
+    // The TUI's fixture contract (TOON_Network#139, ADR 0028): the REAL
+    // response this assertion just checked, committed so `tui/`'s hand-kept
+    // Rust types are checked against it without running this daemon.
+    writeApiFixture('health', body);
   });
 
   it('switches the active profile and keeps it switched', async () => {
