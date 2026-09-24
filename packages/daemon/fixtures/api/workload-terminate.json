@@ -1,0 +1,212 @@
+{
+  "sent": true,
+  "problems": [],
+  "member": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "route": {
+    "route": "g.toon.provider.terminate",
+    "payAt": "https://provider.example/ilp",
+    "via": "provider-connector",
+    "reason": "https://provider.example/ilp prices g.toon.provider.terminate at nothing, so this packet is bought where it is free (spec §5). A connector that merely forwards charges its own fee to carry it.",
+    "price": "0",
+    "chain": "evm:31337",
+    "channelId": "0xchannel"
+  },
+  "ended": "termination",
+  "card": {
+    "workloadId": "06369d93c4badb142985209e2dffdd0fe9f0d4d3e053debc5adbceeee9814ede",
+    "lease": {
+      "workloadId": "06369d93c4badb142985209e2dffdd0fe9f0d4d3e053debc5adbceeee9814ede",
+      "state": "live",
+      "standbySet": [
+        "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      ],
+      "members": [
+        {
+          "pubkey": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "index": 0,
+          "role": "standalone",
+          "provider": {
+            "pubkey": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "ilp_address": "g.toon.provider",
+            "connector_url": "https://provider.example/ilp",
+            "connector_seal_key": "0x04aa"
+          },
+          "listing": {
+            "name": "basic",
+            "version": 1,
+            "address": "30432:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd:basic",
+            "lease_interval_s": 3600,
+            "price": 1000
+          },
+          "paidAt": "https://provider.example/ilp",
+          "paidChain": "evm:31337",
+          "state": "live",
+          "answeredRole": "standalone",
+          "expiresAt": 1790003600,
+          "access": {
+            "host": "203.0.113.7",
+            "ssh_port": 40000,
+            "ports": [
+              {
+                "container_port": 80,
+                "host_port": 41000
+              }
+            ]
+          },
+          "known": true
+        }
+      ],
+      "provider": {
+        "pubkey": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "ilp_address": "g.toon.provider",
+        "connector_url": "https://provider.example/ilp",
+        "connector_seal_key": "0x04aa"
+      },
+      "paidAt": "https://provider.example/ilp",
+      "paidChain": "evm:31337",
+      "listing": {
+        "name": "basic",
+        "version": 1,
+        "address": "30432:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd:basic",
+        "lease_interval_s": 3600,
+        "price": 1000
+      },
+      "profileId": "sandbox",
+      "image": {
+        "digest": "sha256:1474027c316661cdec87df2623e13a41e7e1ce0ba99c24917631de8f300b5420",
+        "reference": "traefik/whoami"
+      },
+      "ports": [
+        {
+          "container_port": 80,
+          "protocol": "tcp"
+        }
+      ],
+      "envKeys": [],
+      "createdAt": "2026-09-24T11:54:03.316Z",
+      "localOnly": false,
+      "role": "standalone",
+      "expiresAt": 1790003600,
+      "access": {
+        "host": "203.0.113.7",
+        "ssh_port": 40000,
+        "ports": [
+          {
+            "container_port": 80,
+            "host_port": 41000
+          }
+        ]
+      },
+      "source": "relays",
+      "relays": [
+        "wss://own.relay.test"
+      ],
+      "recordId": "141a8e402343d42b03077d09756c877290d975c0fbd8fc75c462c859c2094496"
+    },
+    "provider": {
+      "pubkey": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "ilpAddress": "g.toon.provider",
+      "connectorUrl": "https://provider.example/ilp",
+      "hidden": false,
+      "liveness": "live",
+      "inDirectory": true
+    },
+    "status": {
+      "kind": "read",
+      "life": {
+        "phase": "ended",
+        "ending": "termination"
+      },
+      "readAt": "2026-09-24T11:54:03.380Z"
+    },
+    "runway": {
+      "listingPrice": 1000,
+      "leaseIntervalSeconds": 3600,
+      "memberRunways": [
+        {
+          "pubkey": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "index": 0,
+          "leaseIntervalSeconds": 3600,
+          "op": "extend",
+          "ended": true
+        }
+      ],
+      "readAt": "2026-09-24T11:54:03.380Z",
+      "state": "unknown",
+      "reason": "This lease has ended, so it has no runway. Money in the channel is still yours; it is simply not keeping this workload alive any more.",
+      "paidUntil": "2026-09-21T15:13:20.000Z",
+      "expirySource": "vault",
+      "paidSeconds": 0
+    },
+    "extend": {
+      "ok": false,
+      "problems": [
+        "This lease has ended (Termination: its tenant ended it). §6.3 refuses an extension on an ended lease as `expired` and bills for the answer, and there is no way to restart one — a new workload is a new spawn."
+      ],
+      "route": {
+        "route": "g.toon.provider.basic.v1.extend",
+        "payAt": "https://provider.example/ilp",
+        "via": "provider-connector",
+        "reason": "Local sandbox's connector publishes no route carrying g.toon.provider.basic.v1.extend, so the packet is paid at the provider's own connector, which terminates it (spec §4.1, §5).",
+        "price": "1000",
+        "chain": "evm:31337",
+        "channelId": "0xchannel"
+      }
+    },
+    "members": [
+      {
+        "pubkey": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "index": 0,
+        "role": "standalone",
+        "provider": {
+          "ilpAddress": "g.toon.provider",
+          "connectorUrl": "https://provider.example/ilp",
+          "hidden": false,
+          "liveness": "live",
+          "inDirectory": true
+        },
+        "listing": {
+          "name": "basic",
+          "version": 1,
+          "address": "30432:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd:basic",
+          "lease_interval_s": 3600,
+          "price": 1000
+        },
+        "status": {
+          "kind": "read",
+          "life": {
+            "phase": "ended",
+            "ending": "termination"
+          },
+          "readAt": "2026-09-24T11:54:03.380Z"
+        },
+        "extend": {
+          "ok": false,
+          "op": "extend",
+          "problems": [
+            "This lease has ended (Termination: its tenant ended it). §6.3 refuses an extension on an ended lease as `expired` and bills for the answer, and there is no way to restart one — a new workload is a new spawn."
+          ],
+          "route": {
+            "route": "g.toon.provider.basic.v1.extend",
+            "payAt": "https://provider.example/ilp",
+            "via": "provider-connector",
+            "reason": "Local sandbox's connector publishes no route carrying g.toon.provider.basic.v1.extend, so the packet is paid at the provider's own connector, which terminates it (spec §4.1, §5).",
+            "price": "1000",
+            "chain": "evm:31337",
+            "channelId": "0xchannel"
+          }
+        },
+        "runningNow": false,
+        "selfStopped": false,
+        "vaultState": "live",
+        "known": true
+      }
+    ],
+    "set": {
+      "members": 1,
+      "warm": false,
+      "pricePerInterval": "0"
+    },
+    "endedAs": "termination"
+  }
+}

@@ -9,6 +9,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
 use crate::types::Health;
+use crate::views::workloads::{self, WorkloadsViewState};
 
 /// The seven views of the sidebar (ADR 0028), in the order `1`-`7` select
 /// them. `Health` is sixth, matching the spec's own numbering and the web
@@ -102,6 +103,12 @@ pub struct App {
     /// Set while a Health fetch is in flight, so the footer can say so
     /// instead of looking stuck.
     pub loading_health: bool,
+    /// The Workloads view's own state (TOON_Network#143): its list, its
+    /// selected card's detail, and any open confirmation. Kept as one field
+    /// rather than flattened into `App`, the way `ui.rs` keeps a view's
+    /// drawing to itself — `handle_key` only ever reaches into it through
+    /// `views::workloads::handle_key`.
+    pub workloads: WorkloadsViewState,
 }
 
 impl App {
@@ -113,6 +120,7 @@ impl App {
             daemon_status: DaemonStatus::Connecting,
             health: None,
             loading_health: false,
+            workloads: WorkloadsViewState::new(),
         }
     }
 }
@@ -126,11 +134,20 @@ impl Default for App {
 /// What a keypress asks the runtime to do, once `handle_key` has already
 /// applied the parts of it that are pure state (switching views, opening
 /// help). The runtime owns quitting, redrawing and network calls.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     None,
     Quit,
     RefreshHealth,
+    RefreshWorkloads,
+    ExtendWorkload {
+        workload_id: String,
+        max_price: Option<String>,
+    },
+    TerminateWorkload {
+        workload_id: String,
+    },
+    CopyToClipboard(String),
 }
 
 /// The one place a keypress becomes a decision.
@@ -138,6 +155,14 @@ pub enum Command {
 /// `?` toggles the help overlay and swallows every other key while it is
 /// open, except the keys that close it again — a help screen a keypress
 /// falls through is a help screen that also does whatever it was covering.
+///
+/// The Workloads view gets first refusal on every key (via
+/// `views::workloads::handle_key`), the same way `help_open` does above —
+/// its own filter box and confirmation modal need to swallow keys (a digit,
+/// `Esc`, `q`) that would otherwise switch a view or quit, and only it knows
+/// when it is in one of those states. A key it has no opinion about (`None`)
+/// falls through to the ordinary keymap below, which is how `Tab`, `1`-`7`
+/// and `?` keep working while the Workloads view is merely showing its list.
 pub fn handle_key(app: &mut App, key: KeyEvent) -> Command {
     if app.help_open {
         match key.code {
@@ -145,6 +170,12 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> Command {
             _ => {}
         }
         return Command::None;
+    }
+
+    if app.view == View::Workloads {
+        if let Some(command) = workloads::handle_key(&mut app.workloads, key) {
+            return command;
+        }
     }
 
     match key.code {
@@ -184,6 +215,9 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> Command {
         }
         KeyCode::Char('r') | KeyCode::Char('R') if app.view == View::Health => {
             Command::RefreshHealth
+        }
+        KeyCode::Char('r') | KeyCode::Char('R') if app.view == View::Workloads => {
+            Command::RefreshWorkloads
         }
         _ => Command::None,
     }

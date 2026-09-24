@@ -174,6 +174,273 @@ pub struct DesktopView {
     pub at: String,
 }
 
+/* -------------------------------------------------------------------------- */
+/* Workloads (TOON_Network#143), mirroring the dashboard types in             */
+/* `packages/ui/src/lib/daemon.ts` (TOON_Network#93, #97).                    */
+/*                                                                            */
+/* Deliberately partial: a field the shipped views never read (the fine       */
+/* points of a rotation or a Standby Set spawn form, say) is simply left off  */
+/* these structs. `serde` ignores a JSON field with no matching Rust field —  */
+/* it does not fail — so the real daemon fixture still deserializes; a later  */
+/* ticket that needs one of those fields adds it here rather than starting a  */
+/* second copy of the type.                                                  */
+/* -------------------------------------------------------------------------- */
+
+/// `LeaseAccess` in `daemon.ts`. Field names are already `snake_case` on the
+/// wire (unlike the rest of this API), so no `rename` is needed here.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct LeaseAccess {
+    pub host: String,
+    #[serde(default)]
+    pub ssh_port: Option<i64>,
+    #[serde(default)]
+    pub ports: Vec<ForwardedPort>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct ForwardedPort {
+    pub container_port: i64,
+    pub host_port: i64,
+}
+
+/// `OpRouteView` in `daemon.ts`: where an extend or a terminate would be
+/// paid, and what it costs — the figure a confirmation modal shows.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct OpRouteView {
+    pub route: String,
+    #[serde(rename = "payAt")]
+    pub pay_at: String,
+    pub reason: String,
+    #[serde(default)]
+    pub price: Option<String>,
+    #[serde(default)]
+    pub chain: Option<String>,
+}
+
+/// `LeaseView['listing']` in `daemon.ts`, reused for both a lease's own
+/// listing and a member's.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct ListingRef {
+    pub name: String,
+    pub version: i64,
+    #[serde(default)]
+    pub lease_interval_s: i64,
+    #[serde(default)]
+    pub price: f64,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct LeaseImage {
+    #[serde(default)]
+    pub reference: Option<String>,
+    pub digest: String,
+}
+
+/// `LeaseView` in `daemon.ts`, the fields the Workloads view shows.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct LeaseView {
+    #[serde(rename = "workloadId")]
+    pub workload_id: String,
+    pub state: String,
+    pub listing: ListingRef,
+    #[serde(rename = "profileId")]
+    pub profile_id: String,
+    pub image: LeaseImage,
+    #[serde(rename = "localOnly")]
+    pub local_only: bool,
+    #[serde(default)]
+    pub access: Option<LeaseAccess>,
+    #[serde(default)]
+    pub relays: Vec<String>,
+}
+
+/// `LeaseLife` in `daemon.ts`: a tagged union on `phase`, with the three
+/// endings (§6.7) kept apart inside `Ended` rather than collapsed to "over".
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(tag = "phase")]
+pub enum LeaseLife {
+    #[serde(rename = "provisioning")]
+    Provisioning,
+    #[serde(rename = "reserved")]
+    Reserved,
+    #[serde(rename = "running")]
+    Running,
+    #[serde(rename = "stopped")]
+    Stopped,
+    #[serde(rename = "ended")]
+    Ended {
+        ending: String,
+        #[serde(default)]
+        word: Option<String>,
+    },
+}
+
+/// `WorkloadStatus` in `daemon.ts`: a tagged union on `kind`. Four kinds, not
+/// three collapsed into "error" — `Silent` says nothing about the lease,
+/// `Refused` is a definite answer, `Unread` is this console's own failure to
+/// ask.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(tag = "kind")]
+pub enum WorkloadStatus {
+    #[serde(rename = "read")]
+    Read {
+        life: LeaseLife,
+        #[serde(default)]
+        access: Option<LeaseAccess>,
+    },
+    #[serde(rename = "silent")]
+    Silent { reason: String },
+    #[serde(rename = "refused")]
+    Refused { code: String, message: String },
+    #[serde(rename = "unread")]
+    Unread { reason: String },
+}
+
+/// `RunwayView` in `daemon.ts`. Only the fields the Workloads row and detail
+/// pane show — the figure is the daemon's own arithmetic, never recomputed
+/// here (see the module doc above).
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct RunwayView {
+    pub state: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+    /// The whole SET's figure in seconds, bounded by the member that runs
+    /// out first (§7) — `None` when `state` is not `"computed"`.
+    #[serde(default)]
+    pub seconds: Option<i64>,
+}
+
+/// `TakeoverReport` in `daemon.ts` (§7.1, ADR 0010).
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct TakeoverReport {
+    pub winner: String,
+    #[serde(default)]
+    pub from: Option<String>,
+    #[serde(rename = "announcedAt")]
+    #[serde(default)]
+    pub announced_at: Option<String>,
+    #[serde(rename = "firstSeenAt")]
+    pub first_seen_at: String,
+    #[serde(default)]
+    pub rounds: Option<i64>,
+}
+
+/// `StandbySetView` in `daemon.ts`.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct StandbySetView {
+    pub members: i64,
+    pub warm: bool,
+    #[serde(default)]
+    pub takeover: Option<TakeoverReport>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct WorkloadMemberProvider {
+    #[serde(rename = "ilpAddress")]
+    pub ilp_address: String,
+    pub hidden: bool,
+    #[serde(default)]
+    pub liveness: Option<String>,
+}
+
+/// `WorkloadMemberView` in `daemon.ts`: one lease of a Standby Set, primary
+/// or standby (§7).
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct WorkloadMemberView {
+    pub pubkey: String,
+    pub role: String,
+    pub provider: WorkloadMemberProvider,
+    pub listing: ListingRef,
+    pub status: WorkloadStatus,
+    #[serde(rename = "runningNow")]
+    pub running_now: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct WorkloadCardProvider {
+    #[serde(rename = "ilpAddress")]
+    pub ilp_address: String,
+    pub hidden: bool,
+    #[serde(default)]
+    pub liveness: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct CardExtend {
+    pub ok: bool,
+    #[serde(default)]
+    pub problems: Vec<String>,
+    #[serde(default)]
+    pub route: Option<OpRouteView>,
+}
+
+/// `WorkloadCard` in `daemon.ts` (TOON_Network#93): one row of the dashboard.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct WorkloadCard {
+    #[serde(rename = "workloadId")]
+    pub workload_id: String,
+    pub lease: LeaseView,
+    pub provider: WorkloadCardProvider,
+    pub status: WorkloadStatus,
+    pub runway: RunwayView,
+    pub extend: CardExtend,
+    /** Every member of the Standby Set, primary first (§7). Never empty. */
+    #[serde(default)]
+    pub members: Vec<WorkloadMemberView>,
+    pub set: StandbySetView,
+}
+
+/// `Dashboard` in `daemon.ts`.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct Dashboard {
+    pub state: String,
+    #[serde(default)]
+    pub pubkey: Option<String>,
+    #[serde(rename = "profileId")]
+    pub profile_id: String,
+    pub cards: Vec<WorkloadCard>,
+    pub unreadable: i64,
+    #[serde(rename = "checkedAt")]
+    pub checked_at: String,
+}
+
+/// `ExtendResult` in `daemon.ts`.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct ExtendResult {
+    /// `false` means nothing was sent and nothing was paid.
+    pub sent: bool,
+    #[serde(default)]
+    pub problems: Vec<String>,
+    #[serde(default)]
+    pub route: Option<OpRouteView>,
+    #[serde(default)]
+    pub cost: Option<String>,
+    #[serde(rename = "providerError")]
+    #[serde(default)]
+    pub provider_error: Option<String>,
+    #[serde(default)]
+    pub message: Option<String>,
+    pub card: WorkloadCard,
+}
+
+/// `TerminateResult` in `daemon.ts`.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct TerminateResult {
+    pub sent: bool,
+    #[serde(default)]
+    pub problems: Vec<String>,
+    #[serde(default)]
+    pub cost: Option<String>,
+    #[serde(default)]
+    pub ended: Option<String>,
+    #[serde(rename = "providerError")]
+    #[serde(default)]
+    pub provider_error: Option<String>,
+    #[serde(default)]
+    pub message: Option<String>,
+    pub card: WorkloadCard,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

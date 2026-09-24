@@ -3,3 +3,4 @@
 
 pub mod health;
 pub mod placeholder;
+pub mod workloads;

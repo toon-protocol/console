@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { handleApi, type ApiDeps, type ApiResponse } from './api.js';
+import { writeApiFixture } from './api-fixtures.testkit.js';
 import { AutoExtender, InMemoryAutoExtendStore } from './auto-extend.js';
 import { ChainSeedStore } from './chain-seed.js';
 import { InMemoryChainSeedCache } from './chain-seed-cache.js';
@@ -179,6 +180,11 @@ describe('the dashboard routes', () => {
     expect((answer.body as DashboardView).cards[0]?.status.kind).toBe('read');
     expect(port.sent).toHaveLength(1);
     expect(port.sent[0]?.route).toBe('g.toon.provider.status');
+
+    // The TUI's fixture contract (TOON_Network#139, ADR 0028): the REAL
+    // dashboard this assertion just checked, committed so `tui/`'s hand-kept
+    // `Dashboard` type is checked against it without running this daemon.
+    writeApiFixture('workloads', answer.body);
   });
 
   it('answers one card, and refuses a workload id this account does not hold', async () => {
@@ -203,6 +209,9 @@ describe('the dashboard routes', () => {
 
     expect(answer.status).toBe(200);
     expect(answer.body).toMatchObject({ sent: true, cost: '1000', expiresAt: 1_790_007_200 });
+
+    // The TUI's fixture contract (TOON_Network#139, ADR 0028).
+    writeApiFixture('workload-extend', answer.body);
   });
 
   it('answers a refusal as a 200 that says it was refused, with the provider’s code', async () => {
@@ -228,6 +237,9 @@ describe('the dashboard routes', () => {
     expect(answer.body).toMatchObject({ sent: true, ended: 'termination' });
     const card = (answer.body as { card: WorkloadCard }).card;
     expect(card.endedAs).toBe('termination');
+
+    // The TUI's fixture contract (TOON_Network#139, ADR 0028).
+    writeApiFixture('workload-terminate', answer.body);
   });
 
   it('shows a silent provider as silent rather than failing the request', async () => {

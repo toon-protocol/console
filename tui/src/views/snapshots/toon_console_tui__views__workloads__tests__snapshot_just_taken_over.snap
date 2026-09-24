@@ -1,0 +1,35 @@
+---
+source: src/views/workloads.rs
+assertion_line: 932
+expression: render(&state)
+---
+┌ Workloads────────────────────────────────────────────────────────┐┌ Detail ────────────────────────────────────────────────────────────────────────┐
+│  ID            LISTING    STATUS      RUNWAY      SB   GW        ││e3e292ee009eb3fc064aaa7a1bc70a28adc1039f495751d4caa0cb9c08fd8ab3                │
+│> e3e292ee009e… basic v1   running     3 d 0 h     +1   ✓         ││Listing basic v1  Provider g.toon.provider                                      │
+│                                                                  ││Runway 3 d 0 h                                                                  │
+│                                                                  ││Gateway                                                                         │
+│                                                                  ││4prjf3qat2z7ybskvj5bxrykfcw4ca47jflvdvgkudfzych5rkzq.gw.devnet.toonprotocol.dev │
+│                                                                  ││                                                                                │
+│                                                                  ││Leases (primary first)                                                          │
+│                                                                  ││  standalone running          basic v1  running now                             │
+│                                                                  ││                                                                                │
+│                                                                  ││Access                                                                          │
+│                                                                  ││  Host 203.0.113.7                                                              │
+│                                                                  ││  SSH  ssh -p 40000 tenant@203.0.113.7                                          │
+│                                                                  ││                                                                                │
+│                                                                  ││Most recent takeover                                                            │
+│                                                                  ││  ffffffffffffffff… runs this workload now, taken over from dddddddddddddddd….  │
+│                                                                  ││  Announced 2026-09-24T10:00:00.000Z                                            │
+│                                                                  ││                                                                                │
+│                                                                  ││                                                                                │
+│                                                                  ││                                                                                │
+│                                                                  ││                                                                                │
+│                                                                  ││                                                                                │
+│                                                                  ││                                                                                │
+│                                                                  ││                                                                                │
+│                                                                  ││                                                                                │
+│                                                                  ││                                                                                │
+│                                                                  ││                                                                                │
+│                                                                  ││                                                                                │
+│                                                                  ││                                                                                │
+└──────────────────────────────────────────────────────────────────┘└────────────────────────────────────────────────────────────────────────────────┘

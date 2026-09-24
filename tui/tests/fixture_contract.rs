@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use toon_console_tui::types::Health;
+use toon_console_tui::types::{Dashboard, ExtendResult, Health, TerminateResult};
 
 type Check = fn(&str) -> Result<(), String>;
 
@@ -35,6 +35,10 @@ fn check<T: serde::de::DeserializeOwned>(text: &str) -> Result<(), String> {
 fn registry() -> BTreeMap<&'static str, Check> {
     let mut map: BTreeMap<&'static str, Check> = BTreeMap::new();
     map.insert("health", check::<Health> as Check);
+    // TOON_Network#143 (Workloads view).
+    map.insert("workloads", check::<Dashboard> as Check);
+    map.insert("workload-extend", check::<ExtendResult> as Check);
+    map.insert("workload-terminate", check::<TerminateResult> as Check);
     map
 }
 

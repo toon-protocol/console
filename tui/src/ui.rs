@@ -123,6 +123,13 @@ fn draw_content(frame: &mut Frame, area: Rect, app: &App) {
             Some(health) => views::health::draw(frame, area, health),
             None => draw_loading(frame, area, "Health"),
         },
+        (View::Workloads, _) => {
+            let gateway_domain = app
+                .health
+                .as_ref()
+                .map(|h| h.profile.gateway_domain.as_str());
+            views::workloads::draw(frame, area, &app.workloads, gateway_domain);
+        }
         (view, _) => views::placeholder::draw(frame, area, view.title()),
     }
 }
@@ -159,6 +166,11 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     if app.view == View::Health {
         spans.push(Span::raw(" r refresh "));
     }
+    if app.view == View::Workloads {
+        spans.push(Span::raw(
+            " j/k select  / filter  e extend  x terminate  y copy  r refresh ",
+        ));
+    }
     spans.push(Span::raw(" ? help  q quit "));
     let block = Block::default().borders(Borders::ALL);
     frame.render_widget(Paragraph::new(Line::from(spans)).block(block), area);
@@ -169,10 +181,16 @@ const HELP_LINES: &[&str] = &[
     "Tab        next view",
     "Shift+Tab  previous view",
     "h / l      previous / next view",
-    "r          refresh Health",
+    "r          refresh Health or Workloads",
     "mouse      click a sidebar row to select it",
     "?          toggle this help",
     "q / Esc    quit",
+    "-- Workloads --",
+    "j / k      select a workload",
+    "/          filter the list",
+    "e          extend (asks for confirmation)",
+    "x          terminate (asks for confirmation)",
+    "y          copy access details (wl-copy)",
 ];
 
 fn draw_help(frame: &mut Frame, area: Rect) {

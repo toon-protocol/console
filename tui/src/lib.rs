@@ -10,12 +10,18 @@
 //! - `ui`        — the shell (header, sidebar, footer, help overlay).
 //! - `views::*`  — one module per sidebar view.
 //! - `format`    — small display formatters shared by views.
+//! - `widgets::*` — reusable pieces a view's own module draws with: a
+//!   filterable list's key handling (`widgets::list`) and a confirmation
+//!   modal that one keypress cannot pass (`widgets::confirm`).
+//! - `clipboard` — `wl-copy`, or a message saying it is not there.
 
 pub mod app;
 pub mod client;
+pub mod clipboard;
 pub mod desktop;
 pub mod format;
 pub mod launch;
 pub mod types;
 pub mod ui;
 pub mod views;
+pub mod widgets;

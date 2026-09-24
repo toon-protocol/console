@@ -26,6 +26,13 @@ and per-launch token from `$XDG_RUNTIME_DIR/toon-console/launch.json` (see
 - `src/ui.rs` — the shell: header, sidebar, footer, `?` help overlay. Calls
   into `views::<name>::draw` for the current view.
 - `src/views/<name>.rs` — one file per sidebar view.
+- `src/widgets/<name>.rs` — pieces more than one view reuses: `list.rs` is a
+  filterable, `j`/`k`-navigable list's key-handling state machine, and
+  `confirm.rs` is a confirmation modal that one keypress cannot pass (typing
+  `yes`, not the key that opened it). A view drives these and draws around
+  them; see `views/workloads.rs` (TOON_Network#143) for the pattern.
+- `src/clipboard.rs` — `wl-copy` when it is there, a message saying so when
+  it is not. Runs the program directly, never through a shell.
 - `src/main.rs` — thin wiring only (terminal setup/teardown, the event loop).
   Nothing here is worth a unit test that `src/`'s modules don't already cover
   without a real terminal.
@@ -85,6 +92,10 @@ step is a failing test, not a silently-unchecked file.
 - **Health's refresh cadence matches the web UI's**: read once (on connect)
   and again only on `r` — `packages/ui/src/hooks/use-console.ts` has no
   auto-poll for Health, so neither does this.
+- **Workloads polls every 30 seconds**, matching `POLL_MS` in
+  `packages/ui/src/hooks/use-workloads.ts` (TOON_Network#143) — `r` asks for
+  one early. Extend and terminate go through `widgets::confirm`, never
+  straight from `e`/`x`.
 
 ## Testing
 
