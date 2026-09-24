@@ -38,8 +38,8 @@ use toon_console_tui::launch::{launch_file_path, LaunchError};
 use toon_console_tui::markdown;
 use toon_console_tui::types::{
     BunkerSignerRequest, ChainSeedStatus, Dashboard, Directory, DirectoryFilters, DocsIndex,
-    DocsPage, ExpandTemplateRequest, ExpandedTemplate, ExtendResult, FundingStatus, GasPurchase,
-    GasQuote, GasStationStatus, GatewayView, HandoverResult, Health, PreflightView,
+    DocsPage, ExpandTemplateRequest, ExpandedTemplate, ExtendResult, ForgetResult, FundingStatus,
+    GasPurchase, GasQuote, GasStationStatus, GatewayView, HandoverResult, Health, PreflightView,
     ProfileEndpointsError, ProfileEndpointsRequest, Profiles, RotationResult, RotationView,
     SessionStatus, SignInRequest, SpawnRequestBody, SpawnResult, StandbySetPreflightView,
     StandbySetRequestBody, StandbySetResult, TemplateGallery, TemplatePublishPreview,
@@ -129,6 +129,11 @@ enum RuntimeEvent {
     WorkloadsLoaded(Box<Result<Dashboard, String>>),
     WorkloadExtended(Box<Result<ExtendResult, String>>),
     WorkloadTerminated(Box<Result<TerminateResult, String>>),
+    /// `DELETE /api/workloads/<id>` answered (TOON_Network#138): the card
+    /// leaves `app.workloads.dashboard` on success (the daemon's own list no
+    /// longer holds it either), whether or not the best-effort relay
+    /// tombstone confirmed.
+    WorkloadForgotten(Box<Result<ForgetResult, String>>),
     // -- Workloads: auto-extend, rotate, gateway (TOON_Network#144) --
     AutoExtendArmed(Box<Result<WorkloadCard, String>>),
     AutoExtendDisarmed(Box<Result<WorkloadCard, String>>),
@@ -497,6 +502,11 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()
                             Command::WithdrawWorkload { workload_id } => {
                                 if let Some(client) = &client {
                                     spawn_withdraw(client.clone(), tx.clone(), workload_id);
+                                }
+                            }
+                            Command::ForgetWorkload { workload_id } => {
+                                if let Some(client) = &client {
+                                    spawn_forget(client.clone(), tx.clone(), workload_id);
                                 }
                             }
                             // TOON_Network#138: the one `y` mechanism, for
@@ -913,6 +923,19 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()
                         Ok(terminate) => {
                             replace_card(&mut app.workloads.dashboard, terminate.card.clone());
                             app.workloads.status = Some(terminate_summary(&terminate));
+                        }
+                        Err(message) => app.workloads.error = Some(message),
+                    },
+                    RuntimeEvent::WorkloadForgotten(result) => match *result {
+                        Ok(forget) => {
+                            remove_card(&mut app.workloads.dashboard, &forget.workload_id);
+                            app.workloads.list.clamp(
+                                app.workloads
+                                    .dashboard
+                                    .as_ref()
+                                    .map_or(0, |d| d.cards.len()),
+                            );
+                            app.workloads.status = Some(forget_summary(&forget));
                         }
                         Err(message) => app.workloads.error = Some(message),
                     },
@@ -1807,6 +1830,17 @@ fn spawn_terminate(
     );
 }
 
+/// Forgets an ENDED workload (TOON_Network#138): free, and refused outright
+/// by the daemon on anything still live — reached only after a typed `yes`,
+/// same as the two above.
+fn spawn_forget(client: Arc<DaemonClient>, tx: UnboundedSender<RuntimeEvent>, workload_id: String) {
+    spawn_call(
+        tx,
+        move || async move { api::forget(&client, &workload_id).await },
+        RuntimeEvent::WorkloadForgotten,
+    );
+}
+
 /// Arms a budget. Spends money with nobody present (`workload-card.tsx`'s own
 /// warning): only ever reached after a typed `yes`, the same as extend and
 /// terminate.
@@ -1960,6 +1994,17 @@ fn replace_card(dashboard: &mut Option<Dashboard>, card: WorkloadCard) {
     }
 }
 
+/// Drops a workload's card from the dashboard once `DELETE /api/workloads/<id>`
+/// has succeeded (TOON_Network#138): the daemon's own list no longer holds
+/// it either, so there is nothing left to keep the row for.
+fn remove_card(dashboard: &mut Option<Dashboard>, workload_id: &str) {
+    if let Some(dashboard) = dashboard {
+        dashboard
+            .cards
+            .retain(|candidate| candidate.workload_id != workload_id);
+    }
+}
+
 fn extend_summary(result: &ExtendResult) -> String {
     if !result.sent {
         return "Nothing was sent, and nothing was paid.".to_string();
@@ -1981,6 +2026,20 @@ fn terminate_summary(result: &TerminateResult) -> String {
         return format!("The provider refused this termination: {provider_error_msg}");
     }
     "This lease has ended.".to_string()
+}
+
+/// `forgotten: false` here means only that a best-effort relay tombstone did
+/// not confirm (TOON_Network#138) — the card is already gone from the list
+/// either way, so this is a caveat, not a failure.
+fn forget_summary(result: &ForgetResult) -> String {
+    if result.forgotten {
+        "Forgotten.".to_string()
+    } else {
+        format!(
+            "Forgotten locally; the relay cleanup did not confirm: {}",
+            result.reason.as_deref().unwrap_or("no reason given")
+        )
+    }
 }
 
 fn auto_extend_summary(card: &WorkloadCard) -> String {

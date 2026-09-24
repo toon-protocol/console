@@ -3,8 +3,8 @@ source: src/views/workloads.rs
 expression: render(&state)
 ---
 ┌ Workloads────────────────────────────────────────────────────────┐┌ Detail ────────────────────────────────────────────────────────────────────────┐
-│  ID            LISTING    STATUS      RUNWAY      SB   GW        ││aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa                │
-│> aaaaaaaaaaaa… basic v1   running     3 d 0 h          ✓         ││Listing basic v1  Provider g.toon.provider                                      │
+│  ID            LISTING    STATUS         RUNWAY      SB   GW     ││aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa                │
+│> aaaaaaaaaaaa… basic v1   running        3 d 0 h          ✓      ││Listing basic v1  Provider g.toon.provider                                      │
 │                                                                  ││Runway 3 d 0 h                                                                  │
 │                                                                  ││                                                                                │
 │                                                                  ││Leases (primary first)                                                          │

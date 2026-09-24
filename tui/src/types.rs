@@ -1191,6 +1191,14 @@ pub struct LeaseView {
     /// its mere presence proves nothing. See `lease-vault.ts`'s own field.
     #[serde(rename = "sshOffered")]
     pub ssh_offered: bool,
+    /// Unix seconds: this account's own last-known paid-until for this
+    /// lease, from the Lease Vault record (TOON_Network#138) — set at spawn
+    /// and moved by a successful `extend`. It is what an Expired label's
+    /// relative time is read against, and it is the fact that decides
+    /// whether an `unknown_workload` is that ending at all: see
+    /// `unknownWorkloadMessage` in `packages/daemon/src/workload.ts`.
+    #[serde(rename = "expiresAt", default)]
+    pub expires_at: Option<i64>,
 }
 
 /// `LeaseLife` in `daemon.ts`: a tagged union on `phase`, with the three
@@ -1396,6 +1404,16 @@ pub struct WorkloadCard {
     #[serde(rename = "autoExtend")]
     #[serde(default)]
     pub auto_extend: Option<AutoExtendView>,
+    /// The last ending this console saw, kept across restarts and across a
+    /// provider's sweep (TOON_Network#138): once a provider forgets a lease,
+    /// `status` goes back to `unknown_workload` and `WorkloadStatus` alone
+    /// can no longer say why — this is what still can. `"expired"` is this
+    /// console's OWN word, for a provider that no longer holds a lease whose
+    /// Lease Vault expiry had already passed; `"termination"` is `x`'s own
+    /// doing. See `has_ended` in `views::workloads`.
+    #[serde(rename = "endedAs")]
+    #[serde(default)]
+    pub ended_as: Option<String>,
 }
 
 /// `Dashboard` in `daemon.ts`.
@@ -1451,6 +1469,21 @@ pub struct TerminateResult {
     #[serde(default)]
     pub message: Option<String>,
     pub card: WorkloadCard,
+}
+
+/// `ForgetResult` in `daemon.ts` (TOON_Network#138): `DELETE /api/workloads/<id>`'s
+/// answer. The daemon refuses the route outright — 409, `not_ended` — on
+/// anything still live, so a successful answer always means the card is
+/// already gone from `WorkloadStore`'s own list; `forgotten: false` here
+/// means only that a best-effort relay tombstone did not confirm, not that
+/// the workload is still in the list.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct ForgetResult {
+    #[serde(rename = "workloadId")]
+    pub workload_id: String,
+    pub forgotten: bool,
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 /* -------------------------------------------------------------------------- */

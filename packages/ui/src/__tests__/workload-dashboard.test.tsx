@@ -869,4 +869,82 @@ describe('the workload dashboard', () => {
     expect(screen.getByText('web')).toBeInTheDocument();
     expect(screen.getByText('http://203.0.113.7:30080')).toBeInTheDocument();
   });
+
+  /* ---------------------------------------------------------------------- */
+  /* Expired, and forgetting (TOON_Network#138)                             */
+  /* ---------------------------------------------------------------------- */
+
+  it('shows an expired lease as expired, and how to keep one alive', async () => {
+    dashboard = dashboardOf(
+      card({
+        status: {
+          kind: 'read',
+          life: { phase: 'ended', ending: 'expired' },
+          expiresAt: 1_790_003_600,
+          readAt: '2026-09-23T10:00:00.000Z',
+        },
+        extend: { ok: false, problems: ['This lease has ended (Expired).'] },
+        endedAs: 'expired',
+      })
+    );
+    await open();
+
+    expect(await screen.findByText('ended — expired')).toBeInTheDocument();
+    expect(screen.getByText(/the paid time ran out/u)).toBeInTheDocument();
+    expect(screen.getByText(/Extend it/u)).toBeInTheDocument();
+    expect(screen.getByText(/only way to get it back/u)).toBeInTheDocument();
+    // Dim, not the alert styling `role="alert"` would carry.
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Terminate' })).not.toBeInTheDocument();
+  });
+
+  it('keeps the ending after a provider sweeps an expired or terminated lease away', async () => {
+    dashboard = dashboardOf(
+      card({
+        status: {
+          kind: 'refused',
+          code: 'unknown_workload',
+          message: 'this provider holds no lease with that workload_id',
+          readAt: '2026-09-23T10:05:00.000Z',
+        },
+        endedAs: 'expired',
+      })
+    );
+    await open();
+
+    // The badge AND the message both say `unknown_workload` (one in the
+    // header badge, one in the `<code>` inside `Life`'s sentence).
+    expect((await screen.findAllByText('unknown_workload')).length).toBeGreaterThan(0);
+    expect(
+      await screen.findByText(/This console last saw this lease end by/u)
+    ).toBeInTheDocument();
+    // `card.endedAs` itself, in its own `<span>` at the end of that
+    // sentence.
+    expect(screen.getByText('expired')).toBeInTheDocument();
+  });
+
+  it('hides ended workloads once something is still live, and a button brings them back', async () => {
+    const running = card();
+    const ended = card({
+      workloadId: 'b'.repeat(64),
+      lease: { ...card().lease, workloadId: 'b'.repeat(64) },
+      status: {
+        kind: 'read',
+        life: { phase: 'ended', ending: 'termination' },
+        readAt: '2026-09-23T10:00:00.000Z',
+      },
+      endedAs: 'termination',
+    });
+    dashboard = { ...dashboardOf(running), cards: [running, ended] };
+    const person = await open();
+
+    // The live one is shown; the ended one starts hidden.
+    await screen.findByText('running');
+    expect(screen.queryByText('ended — termination')).not.toBeInTheDocument();
+    const toggle = screen.getByRole('button', { name: /Show ended/u });
+
+    await person.click(toggle);
+    expect(await screen.findByText('ended — termination')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Hide ended' })).toBeInTheDocument();
+  });
 });

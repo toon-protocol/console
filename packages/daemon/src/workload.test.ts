@@ -316,6 +316,77 @@ describe('the workload dashboard', () => {
 
   /* ---------------------------------------------------------------------- */
 
+  /**
+   * `unknown_workload`, read against the Lease Vault's own expiry
+   * (TOON_Network#138).
+   *
+   * A provider that no longer holds a lease says one thing: it does not have
+   * it. What that MEANS is read from this account's own record, never from
+   * the wire, and the two answers below are the two facts that record can
+   * hold: the paid time really is up, or it is not — and a provider that has
+   * lost a lease it should still be running is a different problem entirely.
+   */
+  describe('a provider that no longer holds the lease (TOON_Network#138)', () => {
+    const at = (ms: number) =>
+      workloadFixture({
+        vault: leases.vault,
+        chainSeed: seed,
+        paths,
+        provider: port,
+        notes,
+        now: () => new Date(ms),
+      }).workloads;
+
+    it('reports it as expired once the vault’s own paid-until has passed', async () => {
+      const expiresAt = fixture().lease.expiresAt;
+      if (expiresAt === undefined) throw new Error('fixture has no expiry to test against');
+      port.answer = refusal('unknown_workload', 'this provider holds no lease with that id');
+
+      const past = at((expiresAt + 3600) * 1000);
+      const card = await past.card(workloadId, { refresh: true });
+
+      if (card.status.kind !== 'read') throw new Error('unreachable');
+      expect(card.status.life).toEqual({ phase: 'ended', ending: 'expired' });
+      expect(card.status.expiresAt).toBe(expiresAt);
+      expect(card.endedAs).toBe('expired');
+      // An expired lease has no runway and cannot be extended, exactly like
+      // any other ending (§6.7).
+      expect(card.extend.ok).toBe(false);
+      expect(card.runway.state).toBe('unknown');
+    });
+
+    it('keeps it as unknown_workload — with a clearer message — while the vault says it is still paid', async () => {
+      const expiresAt = fixture().lease.expiresAt;
+      if (expiresAt === undefined) throw new Error('fixture has no expiry to test against');
+      port.answer = refusal('unknown_workload', 'this provider holds no lease with that id');
+
+      const before = at((expiresAt - 3600) * 1000);
+      const card = await before.card(workloadId, { refresh: true });
+
+      expect(card.status.kind).toBe('refused');
+      if (card.status.kind !== 'refused') throw new Error('unreachable');
+      expect(card.status.code).toBe('unknown_workload');
+      expect(card.status.message).toContain('paid until');
+      expect(card.status.message.toLowerCase()).toContain('lost');
+      expect(card.endedAs).toBeUndefined();
+    });
+
+    it('does not overwrite a Termination or Eviction this console already knows with a guess', async () => {
+      port.answer = TERMINATE_OK;
+      await workloads.terminate(workloadId);
+
+      // The provider has swept the workload away, as it does after a
+      // termination — but this console already knows why it is gone.
+      port.answer = refusal('unknown_workload', 'never heard of it');
+      const card = await workloads.card(workloadId, { refresh: true });
+
+      expect(card.status.kind).toBe('refused');
+      expect(card.endedAs).toBe('termination');
+    });
+  });
+
+  /* ---------------------------------------------------------------------- */
+
   describe('runway', () => {
     it('is paid time plus what the channel can still buy', async () => {
       const now = 1_700_000_000_000;
@@ -641,6 +712,36 @@ describe('the workload dashboard', () => {
 
       expect(result.sent).toBe(false);
       expect(port.sent.length - before).toBe(1);
+    });
+  });
+
+  /* ---------------------------------------------------------------------- */
+
+  describe('forget (TOON_Network#138)', () => {
+    it('refuses a lease this console has not seen end, and touches nothing', async () => {
+      await expect(workloads.forget(workloadId)).rejects.toMatchObject({
+        code: 'not_ended',
+        status: 409,
+      });
+      expect(leases.vault.find(workloadId)).toBeDefined();
+    });
+
+    it('drops an ended lease from the vault’s list', async () => {
+      port.answer = TERMINATE_OK;
+      await workloads.terminate(workloadId);
+
+      const result = await workloads.forget(workloadId);
+
+      expect(result).toMatchObject({ workloadId, forgotten: true });
+      expect(leases.vault.find(workloadId)).toBeUndefined();
+      expect((await workloads.dashboard()).cards).toHaveLength(0);
+    });
+
+    it('refuses an id this account holds no record of at all', async () => {
+      await expect(workloads.forget('f'.repeat(64))).rejects.toMatchObject({
+        code: 'unknown_workload',
+        status: 404,
+      });
     });
   });
 

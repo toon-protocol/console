@@ -43,7 +43,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::app::Command;
-use crate::format::{duration, gateway_hostname_for};
+use crate::format::{duration, format_seconds, gateway_hostname_for};
 use crate::types::{
     Dashboard, GatewayView, LeaseAccess, LeaseLife, RotationView, WorkloadCard, WorkloadStatus,
 };
@@ -101,6 +101,14 @@ pub enum WorkloadAction {
     Withdraw {
         workload_id: String,
     },
+    /// `DELETE /api/workloads/<id>` (TOON_Network#138) — `D` on an ended
+    /// workload. Drops this account's Lease Vault entry for it, so it
+    /// leaves the list; the daemon refuses this outright on anything still
+    /// live, and `handle_key`'s own `has_ended` check keeps this action
+    /// from ever being offered for one.
+    Forget {
+        workload_id: String,
+    },
 }
 
 /// The auto-extend budget's own tiny state machine (TOON_Network#144): open
@@ -152,6 +160,12 @@ pub struct WorkloadsViewState {
     /// `WorkloadsLoaded`, whether or not [`select_workload`] found the row
     /// yet (see that handler's own comment).
     pub pending_select: Option<String>,
+    /// `H` toggles this. `None` until touched — the default is then computed
+    /// from the dashboard itself (TOON_Network#138): hidden when there is at
+    /// least one live workload, so the list opens on what matters, and shown
+    /// when every workload has ended, so an all-ended account is not shown
+    /// an empty list. See [`effective_hide_ended`].
+    pub hide_ended: Option<bool>,
 }
 
 impl WorkloadsViewState {
@@ -165,9 +179,13 @@ impl WorkloadsViewState {
 /// fresh (TOON_Network#144).
 pub fn selected_workload_id(state: &WorkloadsViewState) -> Option<String> {
     let dashboard = state.dashboard.as_ref()?;
-    filtered(dashboard, &state.list)
-        .get(state.list.selected)
-        .map(|card| card.workload_id.clone())
+    filtered(
+        dashboard,
+        &state.list,
+        effective_hide_ended(state.hide_ended, dashboard),
+    )
+    .get(state.list.selected)
+    .map(|card| card.workload_id.clone())
 }
 
 /// Lands the list's selection on `workload_id`, once it appears in a
@@ -185,9 +203,13 @@ pub fn select_workload(state: &mut WorkloadsViewState, workload_id: &str) -> boo
         state.list.filter.clear();
         state.list.filtering = false;
     }
-    match filtered(dashboard, &state.list)
-        .iter()
-        .position(|card| card.workload_id == workload_id)
+    match filtered(
+        dashboard,
+        &state.list,
+        effective_hide_ended(state.hide_ended, dashboard),
+    )
+    .iter()
+    .position(|card| card.workload_id == workload_id)
     {
         Some(index) => {
             state.list.selected = index;
@@ -221,11 +243,18 @@ pub fn detail_needed(state: &WorkloadsViewState, workload_id: &str) -> bool {
 
 /// Every card whose text matches the current filter, in dashboard order —
 /// the same list both `handle_key` (for bounds and which row `e`/`x`/`y` act
-/// on) and `draw` (for what is on screen) must agree on.
-fn filtered<'a>(dashboard: &'a Dashboard, list: &ListState) -> Vec<&'a WorkloadCard> {
+/// on) and `draw` (for what is on screen) must agree on. `hide_ended`
+/// additionally drops every ended card (TOON_Network#138) — see
+/// [`effective_hide_ended`] for how a caller decides that flag.
+fn filtered<'a>(
+    dashboard: &'a Dashboard,
+    list: &ListState,
+    hide_ended: bool,
+) -> Vec<&'a WorkloadCard> {
     dashboard
         .cards
         .iter()
+        .filter(|card| !(hide_ended && has_ended(card)))
         .filter(|card| {
             let haystack = format!(
                 "{} {} {}",
@@ -236,14 +265,52 @@ fn filtered<'a>(dashboard: &'a Dashboard, list: &ListState) -> Vec<&'a WorkloadC
         .collect()
 }
 
+/// Whether `H` is currently hiding ended workloads — the person's own choice
+/// once they have pressed it (`chosen`, from [`WorkloadsViewState::hide_ended`]),
+/// and a sensible default before they have (TOON_Network#138): hidden the
+/// moment at least one workload is still live, so the list opens on what
+/// matters rather than a page of dead rows, and shown when every workload
+/// has ended, so an account with nothing live is not shown an empty list
+/// with no way to see why. Takes the field rather than the whole state so a
+/// caller can compute it without holding a borrow of anything else.
+fn effective_hide_ended(chosen: Option<bool>, dashboard: &Dashboard) -> bool {
+    chosen.unwrap_or_else(|| dashboard.cards.iter().any(|card| !has_ended(card)))
+}
+
+/// How many ended workloads `H` is currently hiding, for the footer
+/// (TOON_Network#138) — `0` whenever nothing is hidden, whether because
+/// `H` is off or because there is nothing ended to hide.
+pub fn hidden_count(state: &WorkloadsViewState) -> usize {
+    let Some(dashboard) = &state.dashboard else {
+        return 0;
+    };
+    if !effective_hide_ended(state.hide_ended, dashboard) {
+        return 0;
+    }
+    dashboard
+        .cards
+        .iter()
+        .filter(|card| has_ended(card))
+        .count()
+}
+
+/// Whether this workload is over — Expired, Terminated, Evicted, anything
+/// (TOON_Network#138). `card.ended_as` is read FIRST and is usually the
+/// whole answer: it is what survives a provider's sweep, which turns a
+/// fresh `Read { life: Ended { .. } }` back into `unknown_workload` on the
+/// very next refresh (`workload-cache.ts`'s own doc). The live status is
+/// still checked as a fallback for the one moment `ended_as` has not landed
+/// yet — the read that first discovers an ending, before the note behind it
+/// is written.
 fn has_ended(card: &WorkloadCard) -> bool {
-    matches!(
-        card.status,
-        WorkloadStatus::Read {
-            life: LeaseLife::Ended { .. },
-            ..
-        }
-    )
+    card.ended_as.is_some()
+        || matches!(
+            card.status,
+            WorkloadStatus::Read {
+                life: LeaseLife::Ended { .. },
+                ..
+            }
+        )
 }
 
 fn short_id(id: &str) -> String {
@@ -326,7 +393,11 @@ pub fn copyables(state: &WorkloadsViewState) -> Vec<(String, String)> {
     let Some(dashboard) = &state.dashboard else {
         return Vec::new();
     };
-    let cards = filtered(dashboard, &state.list);
+    let cards = filtered(
+        dashboard,
+        &state.list,
+        effective_hide_ended(state.hide_ended, dashboard),
+    );
     let Some(card) = cards.get(state.list.selected) else {
         return Vec::new();
     };
@@ -407,6 +478,94 @@ fn status_style(status: &WorkloadStatus) -> Style {
         WorkloadStatus::Refused { .. } => Style::default().fg(Color::Red),
         _ => Style::default(),
     }
+}
+
+/// Marks an Expired row the way `WARNING_SYMBOL` marks a low runway — a
+/// symbol, because colour alone is not guaranteed to survive every theme
+/// (ADR 0028), and this one must never read as an error the way
+/// `WorkloadStatus::Refused`'s red does (TOON_Network#138).
+const EXPIRED_SYMBOL: &str = "\u{231b}"; // ⌛
+
+/// Seconds since `card.lease.expires_at`, when this console still has that
+/// figure on record — `None` when it never learned one (a record from
+/// before TOON_Network#138, or a local-only lease this build has not read
+/// an expiry for yet).
+fn expired_ago_seconds(card: &WorkloadCard, now_ms: i64) -> Option<i64> {
+    card.lease
+        .expires_at
+        .map(|expires_at| (now_ms / 1_000 - expires_at).max(0))
+}
+
+/// The word for what a lease is doing right now, reading `card.ended_as`
+/// FIRST (TOON_Network#138) — see [`has_ended`]'s own doc for why that
+/// survives a sweep that `card.status` alone does not. `expired` and
+/// `termination` get their own word instead of the generic "ended — X":
+/// `terminated` because that is the verb `x` performs, and `expired …`
+/// because it is the one ending worth dating — the compact form for a row's
+/// narrow column; [`life_detail_lines`] has the full sentence.
+fn life_word(card: &WorkloadCard, now_ms: i64) -> String {
+    match card.ended_as.as_deref() {
+        Some("expired") => match expired_ago_seconds(card, now_ms) {
+            Some(ago) => format!("expired {}", format_seconds(ago)),
+            None => "expired".to_string(),
+        },
+        Some("termination") => "terminated".to_string(),
+        Some(ending) => format!("ended \u{2014} {ending}"),
+        None => status_word(&card.status),
+    }
+}
+
+/// Whether this row's status word ends in [`EXPIRED_SYMBOL`] — decided
+/// alongside [`life_word`] rather than by re-parsing its output.
+fn life_expired(card: &WorkloadCard) -> bool {
+    card.ended_as.as_deref() == Some("expired")
+}
+
+/// The dim, non-error style for anything `card.ended_as` already accounts
+/// for (TOON_Network#138) — overriding `status_style`'s red for the
+/// `unknown_workload` a sweep leaves behind: that refusal is old news the
+/// moment this console already knows why, not a fresh problem.
+fn life_style(card: &WorkloadCard) -> Style {
+    if card.ended_as.is_some() {
+        Style::default().fg(Color::DarkGray)
+    } else {
+        status_style(&card.status)
+    }
+}
+
+/// The detail pane's account of an ended workload, right under the header
+/// and ahead of the runway line — an ended lease's runway already says "no
+/// runway" (`runway_sentence`), and this is the sentence that says WHY
+/// (TOON_Network#138). Empty for anything still live: `card.ended_as` is
+/// `None` for every phase short of an ending, so nothing is added and the
+/// pane looks exactly as it did before this ticket.
+fn life_detail_lines(card: &WorkloadCard, now_ms: i64) -> Vec<Line<'static>> {
+    let Some(ending) = card.ended_as.as_deref() else {
+        return Vec::new();
+    };
+    let style = Style::default().fg(Color::DarkGray);
+    let sentence = match ending {
+        "expired" => {
+            let when = match expired_ago_seconds(card, now_ms) {
+                Some(ago) => format!("{} ago", duration(ago)),
+                None => "some time ago".to_string(),
+            };
+            format!(
+                "Expired {when}: the paid time ran out with nothing extending it, and the \
+                 provider has removed it. Auto-extend (a) or extend (e) before the paid time \
+                 runs out to keep one alive; spawning again is the only way to get this one \
+                 back."
+            )
+        }
+        "termination" => "Terminated: this lease was ended on purpose, and there is no refund. \
+             Spawning again is the only way to get this workload back."
+            .to_string(),
+        "eviction" => "Evicted: the provider ended this lease and must publish an Eviction \
+             Notice saying why."
+            .to_string(),
+        other => format!("Ended \u{2014} {other}."),
+    };
+    vec![Line::from(Span::styled(sentence, style)), Line::raw("")]
 }
 
 struct RunwayText {
@@ -526,6 +685,9 @@ pub fn handle_key(state: &mut WorkloadsViewState, key: KeyEvent) -> Option<Comma
                     WorkloadAction::Withdraw { workload_id } => {
                         Command::WithdrawWorkload { workload_id }
                     }
+                    WorkloadAction::Forget { workload_id } => {
+                        Command::ForgetWorkload { workload_id }
+                    }
                 }
             }
         });
@@ -597,10 +759,17 @@ pub fn handle_key(state: &mut WorkloadsViewState, key: KeyEvent) -> Option<Comma
         });
     }
 
+    let hide_ended = state.hide_ended;
     let cards = state
         .dashboard
         .as_ref()
-        .map(|dashboard| filtered(dashboard, &state.list))
+        .map(|dashboard| {
+            filtered(
+                dashboard,
+                &state.list,
+                effective_hide_ended(hide_ended, dashboard),
+            )
+        })
         .unwrap_or_default();
 
     match state.list.handle_key(key, cards.len()) {
@@ -828,6 +997,61 @@ pub fn handle_key(state: &mut WorkloadsViewState, key: KeyEvent) -> Option<Comma
         // review). Reached only once the list/confirm/budget-entry swallows
         // above have already had first refusal, same as before.
         KeyCode::Char('R') => Some(Command::RefreshWorkloads),
+        // TOON_Network#138: toggles whether ended (expired or terminated)
+        // workloads are shown at all. `None` before the first press lets
+        // `effective_hide_ended` keep computing its own default off the
+        // dashboard; a press always sets an explicit choice from here on,
+        // even if that choice happens to match the default.
+        KeyCode::Char('H') => {
+            let Some(dashboard) = state.dashboard.as_ref() else {
+                return Some(Command::None);
+            };
+            let now_hidden = !effective_hide_ended(state.hide_ended, dashboard);
+            state.hide_ended = Some(now_hidden);
+            let visible = filtered(dashboard, &state.list, now_hidden).len();
+            state.list.clamp(visible);
+            state.status = Some(if now_hidden {
+                "Hiding ended workloads.".to_string()
+            } else {
+                "Showing ended workloads.".to_string()
+            });
+            Some(Command::None)
+        }
+        // TOON_Network#138: forgets an ENDED workload — refused outright
+        // for anything still live, both here (no confirm is even offered)
+        // and again by the daemon if one somehow reached it.
+        KeyCode::Char('D') => {
+            state.status = None;
+            let Some(card) = cards.get(state.list.selected) else {
+                return Some(Command::None);
+            };
+            if !has_ended(card) {
+                state.status = Some(
+                    "Only an ended workload can be forgotten — extend or terminate it first."
+                        .to_string(),
+                );
+                return Some(Command::None);
+            }
+            state.confirm = Some(Confirm::new(
+                "Forget",
+                vec![
+                    format!(
+                        "Removes {} from this account's list.",
+                        short_id(&card.workload_id)
+                    ),
+                    "It has already ended, so nothing changes about the workload itself \u{2014} \
+                     only this account's own record of it goes."
+                        .to_string(),
+                    "If its record was published, retracting it is two paid relay writes \
+                     (a tombstone, then a deletion) at the relay's price, about 1 base unit each."
+                        .to_string(),
+                ],
+                WorkloadAction::Forget {
+                    workload_id: card.workload_id.clone(),
+                },
+            ));
+            Some(Command::None)
+        }
         _ => None,
     }
 }
@@ -840,6 +1064,7 @@ pub fn draw(
     area: Rect,
     state: &WorkloadsViewState,
     gateway_domain: Option<&str>,
+    now_ms: i64,
 ) -> Vec<(u16, usize)> {
     let content = if let Some(message) = state.error.as_deref().or(state.status.as_deref()) {
         let chunks = Layout::default()
@@ -857,20 +1082,25 @@ pub fn draw(
         return Vec::new();
     };
 
-    let cards = filtered(dashboard, &state.list);
+    let cards = filtered(
+        dashboard,
+        &state.list,
+        effective_hide_ended(state.hide_ended, dashboard),
+    );
 
     let cols = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
         .split(content);
 
-    let hits = draw_list(frame, cols[0], &cards, state, gateway_domain);
+    let hits = draw_list(frame, cols[0], &cards, state, gateway_domain, now_ms);
     draw_detail(
         frame,
         cols[1],
         cards.get(state.list.selected).copied(),
         state,
         gateway_domain,
+        now_ms,
     );
 
     if let Some(confirm) = &state.confirm {
@@ -970,6 +1200,7 @@ fn draw_list(
     cards: &[&WorkloadCard],
     state: &WorkloadsViewState,
     gateway_domain: Option<&str>,
+    now_ms: i64,
 ) -> Vec<(u16, usize)> {
     let title = format!(
         " Workloads{}",
@@ -999,7 +1230,7 @@ fn draw_list(
     lines.push(header_line());
     for (index, card) in cards.iter().enumerate() {
         let selected = index == state.list.selected;
-        lines.push(row_line(card, selected, gateway_domain));
+        lines.push(row_line(card, selected, gateway_domain, now_ms));
     }
     frame.render_widget(Paragraph::new(lines), inner);
 
@@ -1028,7 +1259,9 @@ fn truncate(text: &str, max: usize) -> String {
 /// header's labels line up over the values underneath them.
 const COL_ID: usize = 13;
 const COL_LISTING: usize = 10;
-const COL_STATUS: usize = 11;
+// Wide enough for "expired 2h ⌛" (TOON_Network#138) without truncating the
+// one status word this ticket actually needs to keep whole in a narrow row.
+const COL_STATUS: usize = 14;
 const COL_RUNWAY: usize = 11;
 const COL_STANDBY: usize = 4;
 
@@ -1047,12 +1280,34 @@ fn header_line() -> Line<'static> {
     ))
 }
 
-fn row_line(card: &WorkloadCard, selected: bool, gateway_domain: Option<&str>) -> Line<'static> {
+fn row_line(
+    card: &WorkloadCard,
+    selected: bool,
+    gateway_domain: Option<&str>,
+    now_ms: i64,
+) -> Line<'static> {
     let base = if selected {
         Style::default().add_modifier(Modifier::REVERSED)
     } else {
         Style::default()
     };
+
+    // Same "reserve room for the symbol" trick as the runway cell below
+    // (TOON_Network#138): `EXPIRED_SYMBOL` must survive truncation, not be
+    // the character a narrow column cuts first.
+    let expired = life_expired(card);
+    let status_cell = format!(
+        "{}{}",
+        truncate(
+            &life_word(card, now_ms),
+            if expired { COL_STATUS - 2 } else { COL_STATUS }
+        ),
+        if expired {
+            format!(" {EXPIRED_SYMBOL}")
+        } else {
+            String::new()
+        }
+    );
 
     let runway = runway_text(card);
     let runway_style = if runway.low {
@@ -1116,13 +1371,7 @@ fn row_line(card: &WorkloadCard, selected: bool, gateway_domain: Option<&str>) -
             ),
             base,
         ),
-        Span::styled(
-            format!(
-                "{:<COL_STATUS$} ",
-                truncate(&status_word(&card.status), COL_STATUS)
-            ),
-            status_style(&card.status),
-        ),
+        Span::styled(format!("{status_cell:<COL_STATUS$} "), life_style(card)),
         Span::styled(format!("{runway_cell:<COL_RUNWAY$} "), runway_style),
         Span::styled(
             format!("{standby_cell:<COL_STANDBY$} "),
@@ -1138,6 +1387,7 @@ fn draw_detail(
     card: Option<&WorkloadCard>,
     state: &WorkloadsViewState,
     gateway_domain: Option<&str>,
+    now_ms: i64,
 ) {
     let block = Block::default().title(" Detail ").borders(Borders::ALL);
     let inner = block.inner(area);
@@ -1169,6 +1419,7 @@ fn draw_detail(
             Span::raw(card.provider.ilp_address.clone()),
         ]),
     ];
+    lines.extend(life_detail_lines(card, now_ms));
 
     let runway = runway_text(card);
     let runway_style = if runway.low {
@@ -1461,6 +1712,7 @@ mod tests {
                 relays: vec!["wss://own.relay.test".to_string()],
                 template: None,
                 ssh_offered: true,
+                expires_at: None,
             },
             provider: WorkloadCardProvider {
                 ilp_address: "g.toon.provider".to_string(),
@@ -1513,6 +1765,7 @@ mod tests {
                 takeover: None,
             },
             auto_extend: None,
+            ended_as: None,
         }
     }
 
@@ -1522,6 +1775,58 @@ mod tests {
             reason: None,
             seconds: Some(seconds),
         }
+    }
+
+    /// A card the way it looks the moment this console FIRST reads a
+    /// workload as expired (TOON_Network#138): a live `status` naming the
+    /// ending, `card.ended_as` set to match, and `lease.expires_at` at
+    /// `expires_at`. `ran_out_ago` is added to it to place `TEST_NOW_MS`
+    /// that many seconds after.
+    fn expired_card(workload_id: &str, expires_at: i64, ran_out_ago: i64) -> WorkloadCard {
+        let mut expired = card(
+            workload_id,
+            LeaseLife::Ended {
+                ending: "expired".to_string(),
+                word: None,
+            },
+        );
+        expired.lease.expires_at = Some(expires_at);
+        expired.status = WorkloadStatus::Read {
+            life: LeaseLife::Ended {
+                ending: "expired".to_string(),
+                word: None,
+            },
+            access: None,
+            expires_at: Some(expires_at),
+            cost: None,
+        };
+        expired.ended_as = Some("expired".to_string());
+        expired.extend.ok = false;
+        expired.runway = crate::types::RunwayView {
+            state: "unknown".to_string(),
+            reason: Some("This lease has ended, so it has no runway.".to_string()),
+            seconds: None,
+        };
+        assert_eq!(TEST_NOW_MS / 1_000 - expires_at, ran_out_ago);
+        expired
+    }
+
+    /// A card the way it looks AFTER a provider has swept an ended
+    /// workload away (TOON_Network#138): `status` is back to a bare
+    /// `unknown_workload` refusal — the live wire no longer says anything —
+    /// and only `card.ended_as` still carries what this console already
+    /// knew. Used for both Expired and Terminated: which one is the whole
+    /// point of `has_ended`/`life_word` reading `ended_as` first.
+    fn swept_card(workload_id: &str, ended_as: &str) -> WorkloadCard {
+        let mut swept = card(workload_id, LeaseLife::Running);
+        swept.status = WorkloadStatus::Refused {
+            code: "unknown_workload".to_string(),
+            message: "this provider holds no lease with that workload_id".to_string(),
+            cost: None,
+        };
+        swept.ended_as = Some(ended_as.to_string());
+        swept.extend.ok = false;
+        swept
     }
 
     fn dashboard(cards: Vec<WorkloadCard>) -> Dashboard {
@@ -1573,6 +1878,11 @@ mod tests {
         assert!(!select_workload(&mut state, "workload-a"));
     }
 
+    /// A fixed instant for every snapshot and render in this module
+    /// (TOON_Network#138) — only the Expired label reads it at all, and a
+    /// snapshot must not depend on when `cargo test` happened to run.
+    const TEST_NOW_MS: i64 = 1_700_000_000_000;
+
     fn render(state: &WorkloadsViewState) -> String {
         let backend = TestBackend::new(150, 30);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -1583,6 +1893,7 @@ mod tests {
                     frame.area(),
                     state,
                     Some("gw.devnet.toonprotocol.dev"),
+                    TEST_NOW_MS,
                 );
             })
             .unwrap();
@@ -1621,7 +1932,7 @@ mod tests {
         let mut hits = Vec::new();
         terminal
             .draw(|frame| {
-                hits = draw(frame, frame.area(), &state, None);
+                hits = draw(frame, frame.area(), &state, None, TEST_NOW_MS);
             })
             .unwrap();
         assert_eq!(hits.len(), 2);
@@ -1663,7 +1974,7 @@ mod tests {
         let mut hits = Vec::new();
         terminal
             .draw(|frame| {
-                hits = draw(frame, frame.area(), &state, None);
+                hits = draw(frame, frame.area(), &state, None, TEST_NOW_MS);
             })
             .unwrap();
         assert!(hits.is_empty());
@@ -2472,5 +2783,135 @@ mod tests {
         let outcome = handle_key(&mut state, key(KeyCode::Char('1')));
         assert_eq!(outcome, Some(Command::None));
         assert_eq!(state.list.filter, "1");
+    }
+
+    /* -- Expired vs. a genuinely lost lease, and forgetting (TOON_Network#138) -- */
+
+    #[test]
+    fn an_expired_workload_reads_the_vaults_paid_until_dimly_and_with_a_symbol_not_an_error() {
+        // 2 hours before TEST_NOW_MS.
+        let expired = expired_card(&"a".repeat(64), TEST_NOW_MS / 1_000 - 7_200, 7_200);
+        assert_eq!(life_word(&expired, TEST_NOW_MS), "expired 2h");
+        assert!(life_expired(&expired));
+        assert_eq!(life_style(&expired), Style::default().fg(Color::DarkGray));
+        // Never the error colour a bare `unknown_workload` refusal gets.
+        assert_ne!(life_style(&expired), Style::default().fg(Color::Red));
+    }
+
+    #[test]
+    fn has_ended_survives_a_sweep_back_to_unknown_workload_that_status_alone_would_miss() {
+        let swept = swept_card(&"a".repeat(64), "expired");
+        // The live wire alone says nothing about an ending any more — only
+        // `ended_as` still does. This is the exact regression TOON_Network#138
+        // fixes: before it, a swept lease's row went back to reading its raw
+        // `unknown_workload` refusal as though nothing were known.
+        assert!(matches!(swept.status, WorkloadStatus::Refused { .. }));
+        assert!(has_ended(&swept));
+        assert_eq!(life_word(&swept, TEST_NOW_MS), "expired");
+        assert_eq!(
+            life_word(&swept_card(&"a".repeat(64), "termination"), TEST_NOW_MS),
+            "terminated"
+        );
+    }
+
+    #[test]
+    fn snapshot_expired() {
+        let mut state = WorkloadsViewState::new();
+        state.dashboard = Some(dashboard(vec![expired_card(
+            "b2e292ee009eb3fc064aaa7a1bc70a28adc1039f495751d4caa0cb9c08fd8abd",
+            TEST_NOW_MS / 1_000 - 7_200,
+            7_200,
+        )]));
+        insta::assert_snapshot!(render(&state));
+    }
+
+    #[test]
+    fn snapshot_terminated_after_sweep() {
+        let mut state = WorkloadsViewState::new();
+        state.dashboard = Some(dashboard(vec![swept_card(
+            "b2e292ee009eb3fc064aaa7a1bc70a28adc1039f495751d4caa0cb9c08fd8abd",
+            "termination",
+        )]));
+        insta::assert_snapshot!(render(&state));
+    }
+
+    #[test]
+    fn h_hides_ended_workloads_by_default_while_one_workload_is_still_live() {
+        let mut state = WorkloadsViewState::new();
+        state.dashboard = Some(dashboard(vec![
+            card(&"a".repeat(64), LeaseLife::Running),
+            swept_card(&"b".repeat(64), "termination"),
+        ]));
+        // Nothing pressed `H` yet: the default already hides the ended one.
+        assert_eq!(hidden_count(&state), 1);
+        let cards = filtered(
+            state.dashboard.as_ref().unwrap(),
+            &state.list,
+            effective_hide_ended(state.hide_ended, state.dashboard.as_ref().unwrap()),
+        );
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0].workload_id, "a".repeat(64));
+    }
+
+    #[test]
+    fn h_shows_every_workload_when_every_one_of_them_has_ended() {
+        let state_dashboard = dashboard(vec![
+            swept_card(&"a".repeat(64), "expired"),
+            swept_card(&"b".repeat(64), "termination"),
+        ]);
+        let mut state = WorkloadsViewState::new();
+        state.dashboard = Some(state_dashboard);
+        // Nothing is live, so the default shows everything rather than an
+        // empty list with no way to see why.
+        assert_eq!(hidden_count(&state), 0);
+    }
+
+    #[test]
+    fn h_toggles_explicitly_and_the_footer_count_follows() {
+        let mut state = WorkloadsViewState::new();
+        state.dashboard = Some(dashboard(vec![
+            card(&"a".repeat(64), LeaseLife::Running),
+            swept_card(&"b".repeat(64), "expired"),
+        ]));
+        assert_eq!(hidden_count(&state), 1); // default: hidden
+
+        handle_key(&mut state, key(KeyCode::Char('H')));
+        assert_eq!(state.hide_ended, Some(false));
+        assert_eq!(hidden_count(&state), 0);
+
+        handle_key(&mut state, key(KeyCode::Char('H')));
+        assert_eq!(state.hide_ended, Some(true));
+        assert_eq!(hidden_count(&state), 1);
+    }
+
+    #[test]
+    fn d_on_a_live_lease_refuses_with_a_status_message_and_opens_no_confirm() {
+        let mut state = WorkloadsViewState::new();
+        state.dashboard = Some(dashboard(vec![card(&"a".repeat(64), LeaseLife::Running)]));
+        handle_key(&mut state, key(KeyCode::Char('D')));
+        assert!(state.confirm.is_none());
+        assert!(state.status.is_some());
+    }
+
+    #[test]
+    fn d_then_yes_enter_confirms_forget_on_an_ended_workload() {
+        let mut state = WorkloadsViewState::new();
+        let workload_id = "a".repeat(64);
+        // Nothing else on this dashboard is live, so `H`'s default leaves
+        // this one visible without pressing it first (see
+        // `h_shows_every_workload_when_every_one_of_them_has_ended`).
+        state.dashboard = Some(dashboard(vec![swept_card(&workload_id, "termination")]));
+        handle_key(&mut state, key(KeyCode::Char('D')));
+        assert!(state.confirm.is_some());
+        for c in "yes".chars() {
+            handle_key(&mut state, key(KeyCode::Char(c)));
+        }
+        let command = handle_key(&mut state, key(KeyCode::Enter));
+        assert_eq!(
+            command,
+            Some(Command::ForgetWorkload {
+                workload_id: workload_id.clone(),
+            })
+        );
     }
 }

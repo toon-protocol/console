@@ -16,13 +16,14 @@ use serde::Serialize;
 use crate::client::{ClientError, DaemonClient};
 use crate::types::{
     BunkerSignerRequest, ChainSeedStatus, Dashboard, Directory, DirectoryFilters,
-    ExpandTemplateRequest, ExpandedTemplate, ExtendResult, FundingStatus, GasPurchase, GasQuote,
-    GasStationStatus, GatewayView, HandoverResult, Health, ImportChainSeedRequest,
-    LocalSignerRequest, PreflightView, ProfileEndpointsRequest, ProfileSwitchRequest, Profiles,
-    RotationResult, RotationView, SessionStatus, SignInRequest, SpawnRequestBody, SpawnResult,
-    StandbySetPreflightView, StandbySetRequestBody, StandbySetResult, TemplateGallery,
-    TemplatePublishPreview, TemplatePublishRequestBody, TemplatePublishResult,
-    TemplateSpawnRequestBody, TerminateResult, WithdrawalResult, WorkloadCard,
+    ExpandTemplateRequest, ExpandedTemplate, ExtendResult, ForgetResult, FundingStatus,
+    GasPurchase, GasQuote, GasStationStatus, GatewayView, HandoverResult, Health,
+    ImportChainSeedRequest, LocalSignerRequest, PreflightView, ProfileEndpointsRequest,
+    ProfileSwitchRequest, Profiles, RotationResult, RotationView, SessionStatus, SignInRequest,
+    SpawnRequestBody, SpawnResult, StandbySetPreflightView, StandbySetRequestBody,
+    StandbySetResult, TemplateGallery, TemplatePublishPreview, TemplatePublishRequestBody,
+    TemplatePublishResult, TemplateSpawnRequestBody, TerminateResult, WithdrawalResult,
+    WorkloadCard,
 };
 use crate::views::directory::directory_query;
 
@@ -409,6 +410,13 @@ pub async fn terminate(client: &DaemonClient, workload_id: &str) -> Answer<Termi
             &serde_json::json!({}),
         )
         .await
+}
+
+/// `DELETE /api/workloads/<id>` — `Command::ForgetWorkload` (TOON_Network#138).
+/// Drops this account's Lease Vault entry for an ENDED workload; the daemon
+/// refuses this route outright — `409 not_ended` — on anything still live.
+pub async fn forget(client: &DaemonClient, workload_id: &str) -> Answer<ForgetResult> {
+    client.delete(&workload_path(workload_id, "")).await
 }
 
 #[derive(Serialize)]

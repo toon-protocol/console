@@ -185,7 +185,7 @@ fn draw_content(frame: &mut Frame, area: Rect, app: &App) -> Vec<(u16, usize)> {
                 .health
                 .as_ref()
                 .map(|h| h.profile.gateway_domain.as_str());
-            views::workloads::draw(frame, area, &app.workloads, gateway_domain)
+            views::workloads::draw(frame, area, &app.workloads, gateway_domain, app.now_ms)
         }
         (View::Directory, _) => views::directory::draw(
             frame,
@@ -289,8 +289,18 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     }
     if app.view == View::Workloads {
         spans.push(Span::raw(
-            " j/k select  / filter  e extend  x terminate  a auto-extend  r rotate  g gateway  R refresh ",
+            " j/k select  / filter  e extend  x terminate  a auto-extend  r rotate  g gateway  H hide ended  D forget  R refresh ",
         ));
+        // TOON_Network#138: how many ended workloads `H` is hiding right
+        // now — nothing when it is off, or when there is nothing ended to
+        // hide.
+        let hidden = views::workloads::hidden_count(&app.workloads);
+        if hidden > 0 {
+            spans.push(Span::styled(
+                format!(" {hidden} hidden "),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
     }
     if app.view == View::Directory {
         spans.push(Span::raw(
@@ -392,6 +402,8 @@ const HELP_LINES: &[&str] = &[
     "a          set/clear the auto-extend budget (asks for confirmation)",
     "r          rotate the Continuation Token (asks for confirmation)",
     "g          hand over to / withdraw from a gateway (asks for confirmation)",
+    "H          hide/show ended (expired or terminated) workloads",
+    "D          forget an ended workload (asks for confirmation)",
     "-- New workload --",
     "j / k      Gallery: select a Template; Form/Listing/Standbys: move",
     "/          Gallery: filter the list",

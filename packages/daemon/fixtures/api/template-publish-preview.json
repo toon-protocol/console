@@ -1,9 +1,9 @@
 {
   "entryKind": 30434,
-  "entryAddress": "30434:d10a76268987796c2d5c52b5f6d160fb49eff78b37f25266d4d17db6d7135fa0:ssh-box:latest",
+  "entryAddress": "30434:9c73240b7ad8df1baa4c1f28ab687c0892f4bba529f2896d37b858447db220a5:ssh-box:latest",
   "entryEvent": {
     "kind": 30434,
-    "created_at": 1790279861,
+    "created_at": 1790281052,
     "tags": [
       [
         "d",
@@ -21,10 +21,10 @@
     "content": "{\"digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000\",\"media_type\":\"application/vnd.oci.image.manifest.v1+json\",\"blobs\":[{\"digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000\",\"size\":512,\"media_type\":\"application/vnd.oci.image.manifest.v1+json\",\"source\":{\"type\":\"oci\",\"registry\":\"ghcr.io\",\"repository\":\"toon-protocol/ssh-box\"}},{\"digest\":\"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"size\":1234,\"media_type\":\"application/vnd.oci.image.config.v1+json\",\"source\":{\"type\":\"oci\",\"registry\":\"ghcr.io\",\"repository\":\"toon-protocol/ssh-box\"}},{\"digest\":\"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"size\":2226327,\"media_type\":\"application/vnd.oci.image.layer.v1.tar+gzip\",\"source\":{\"type\":\"oci\",\"registry\":\"ghcr.io\",\"repository\":\"toon-protocol/ssh-box\"}}]}"
   },
   "templateKind": 30436,
-  "templateAddress": "30436:d10a76268987796c2d5c52b5f6d160fb49eff78b37f25266d4d17db6d7135fa0:ssh-box",
+  "templateAddress": "30436:9c73240b7ad8df1baa4c1f28ab687c0892f4bba529f2896d37b858447db220a5:ssh-box",
   "templateEvent": {
     "kind": 30436,
-    "created_at": 1790279861,
+    "created_at": 1790281052,
     "tags": [
       [
         "d",
@@ -35,7 +35,7 @@
         "toon.network"
       ]
     ],
-    "content": "{\"version\":1,\"image\":{\"digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000\",\"registry_entry\":{\"address\":\"30434:d10a76268987796c2d5c52b5f6d160fb49eff78b37f25266d4d17db6d7135fa0:ssh-box:latest\"}},\"ports\":[{\"container_port\":22,\"protocol\":\"tcp\"}],\"env_fixed\":{},\"env_tenant\":[],\"title\":\"SSH box (Alpine)\",\"summary\":\"An SSH shell with your key and nothing else.\",\"ssh_key\":{\"required\":true,\"note\":\"your own key\"}}"
+    "content": "{\"version\":1,\"image\":{\"digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000\",\"registry_entry\":{\"address\":\"30434:9c73240b7ad8df1baa4c1f28ab687c0892f4bba529f2896d37b858447db220a5:ssh-box:latest\"}},\"ports\":[{\"container_port\":22,\"protocol\":\"tcp\"}],\"env_fixed\":{},\"env_tenant\":[],\"title\":\"SSH box (Alpine)\",\"summary\":\"An SSH shell with your key and nothing else.\",\"ssh_key\":{\"required\":true,\"note\":\"your own key\"}}"
   },
   "imageDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
   "title": "SSH box (Alpine)",

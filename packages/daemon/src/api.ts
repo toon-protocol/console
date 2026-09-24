@@ -72,6 +72,7 @@ import {
   WorkloadError,
   type DashboardView,
   type ExtendResult,
+  type ForgetResult,
   type TerminateResult,
   type WorkloadCard,
 } from './workload.js';
@@ -214,6 +215,8 @@ export interface WorkloadPort {
     workloadId: string,
     options?: { member?: string | undefined }
   ): Promise<TerminateResult>;
+  /** Drop an ended workload's Lease Vault entry (TOON_Network#138). */
+  forget(workloadId: string): Promise<ForgetResult>;
 }
 
 /** What `/api/workloads/<id>/gateway*` needs of `GatewayStore`, and no more. */
@@ -1137,6 +1140,13 @@ async function handleWorkloads(
   try {
     if (action === undefined && method === 'GET') {
       return ok(await workloads.card(workloadId, { refresh }));
+    }
+    // Forgets an ENDED workload's Lease Vault entry, so it leaves the list
+    // (TOON_Network#138). `WorkloadStore.forget` refuses anything this
+    // console has not seen end — a live lease's Root Secret is the only
+    // thing that could ever stop it, and this route never touches one.
+    if (action === undefined && method === 'DELETE') {
+      return ok(await workloads.forget(workloadId));
     }
     if (action === 'status' && method === 'POST') {
       return ok(await workloads.card(workloadId, { refresh: true }));

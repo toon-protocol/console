@@ -264,12 +264,31 @@ function Vault({ leases, workloads }: { leases: LeasesState; workloads: Workload
   const rows = vault?.leases ?? [];
   const cards = workloads.dashboard?.cards ?? [];
 
+  // `undefined` until pressed once, so the default is computed off the
+  // dashboard itself (TOON_Network#138) — hidden while at least one
+  // workload is still live, shown once every one of them has ended, so an
+  // all-ended account is not shown an empty list with no way to see why.
+  const [hideEndedChoice, setHideEndedChoice] = useState<boolean | undefined>(undefined);
+  const hasLive = cards.some((card) => card.endedAs === undefined);
+  const hideEnded = hideEndedChoice ?? hasLive;
+  const visibleCards = hideEnded ? cards.filter((card) => card.endedAs === undefined) : cards;
+  const hiddenCount = cards.length - visibleCards.length;
+
   return (
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center justify-between gap-3">
           <span>Workloads</span>
           <span className="flex gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setHideEndedChoice(!hideEnded)}
+            >
+              {hideEnded
+                ? `Show ended${hiddenCount > 0 ? ` (${hiddenCount})` : ''}`
+                : 'Hide ended'}
+            </Button>
             <Button
               size="sm"
               variant="outline"
@@ -314,7 +333,7 @@ function Vault({ leases, workloads }: { leases: LeasesState; workloads: Workload
               : 'No leases yet. Spawn one below.'}
           </p>
         )}
-        {cards.map((card) => (
+        {visibleCards.map((card) => (
           <WorkloadCard key={card.workloadId} card={card} workloads={workloads} />
         ))}
         {/* A vault record the dashboard has not caught up with yet — a spawn

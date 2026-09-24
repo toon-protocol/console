@@ -1086,7 +1086,15 @@ export interface DocsPage extends DocsIndex {
  * one.
  */
 
-export type LeaseEnding = 'expiry' | 'termination' | 'eviction' | 'unstated';
+/**
+ * §6.7's endings, plus `expired` — this console's OWN word, not the
+ * provider's (TOON_Network#138). It is shown when a provider no longer even
+ * holds a lease (`unknown_workload`) and this account's own Lease Vault
+ * record says the paid time was already up: a real ending, just not one any
+ * provider stated, which is why it is spelled differently from `expiry`
+ * (the provider's own word for the same fact, told while it still answers).
+ */
+export type LeaseEnding = 'expiry' | 'termination' | 'eviction' | 'unstated' | 'expired';
 
 export type LeaseLife =
   | { phase: 'provisioning' | 'reserved' | 'running' | 'stopped' }
@@ -1290,6 +1298,19 @@ export interface TerminateResult {
   providerError?: string;
   message?: string;
   card: WorkloadCard;
+}
+
+/**
+ * `DELETE /api/workloads/<id>`'s answer (TOON_Network#138). The daemon
+ * refuses the route outright on anything still live, so a successful answer
+ * always means the card is already gone from the account's own list;
+ * `forgotten: false` here means only that a best-effort relay tombstone did
+ * not confirm.
+ */
+export interface ForgetResult {
+  workloadId: string;
+  forgotten: boolean;
+  reason?: string;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1751,6 +1772,16 @@ export const daemon = {
       `/api/workloads/${encodeURIComponent(workloadId)}/terminate`,
       options
     ),
+  /**
+   * Forget an ENDED workload: drop this account's Lease Vault entry for it,
+   * so it leaves the list (TOON_Network#138). Refused on anything still
+   * live — a lease this console has not seen end holds the only Root Secret
+   * that could ever stop it.
+   */
+  forgetWorkload: (workloadId: string) =>
+    call<ForgetResult>(`/api/workloads/${encodeURIComponent(workloadId)}`, {
+      method: 'DELETE',
+    }),
   /**
    * Arm a budget: a standing instruction to keep extending while nobody is
    * watching. `confirm` is the whole of the consent, and `agreedPrice` is
