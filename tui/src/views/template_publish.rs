@@ -243,6 +243,13 @@ fn form_handle_key(state: &mut TemplatePublishState, key: KeyEvent) -> Outcome {
             state.cursor = (state.cursor + 1).min(FORM_TARGETS.len() - 1);
             cmd(Command::None)
         }
+        KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            if field_mut(state, FORM_TARGETS[state.cursor]).is_some() {
+                state.editing = true;
+                return cmd(Command::RequestClipboardPaste);
+            }
+            cmd(Command::None)
+        }
         KeyCode::Enter => form_activate(state, FORM_TARGETS[state.cursor]),
         _ => cmd(Command::None),
     }
@@ -343,12 +350,13 @@ fn doubled(price: &str) -> String {
 /// open, or while nothing is being edited, the same "ignored" rule every
 /// other paste target in this crate follows.
 pub fn handle_paste(state: &mut TemplatePublishState, text: &str) {
-    if state.confirm.is_some() || state.stage != Stage::Form || !state.editing {
+    if state.confirm.is_some() || state.stage != Stage::Form {
         return;
     }
     let target = FORM_TARGETS[state.cursor];
     if let Some(field) = field_mut(state, target) {
         field.insert_str(text);
+        state.editing = true;
     }
 }
 
@@ -776,11 +784,12 @@ mod tests {
     }
 
     #[test]
-    fn paste_is_ignored_while_not_editing() {
+    fn a_paste_lands_in_the_selected_field_without_enter_first() {
         let mut state = state_with_no_prefill();
         state.path.clear();
         handle_paste(&mut state, "images/other/template.json");
-        assert_eq!(state.path.value(), "");
+        assert_eq!(state.path.value(), "images/other/template.json");
+        assert!(state.editing);
     }
 
     fn render(state: &TemplatePublishState) -> String {

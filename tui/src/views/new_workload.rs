@@ -604,15 +604,19 @@ pub fn handle_paste(state: &mut NewWorkloadViewState, text: &str) {
         template_publish::handle_paste(publish, text);
         return;
     }
-    if state.confirm.is_some() || state.stage != Stage::Form || !state.form.editing {
+    if state.confirm.is_some() || state.stage != Stage::Form {
         return;
     }
     let targets = form_targets(state);
     let Some(target) = targets.get(state.form.cursor).copied() else {
         return;
     };
+    // A paste lands in the SELECTED text field whether or not it is being
+    // typed in yet, and starts typing there: the field shows as selected, so
+    // a paste that waited for `Enter` first looked like a paste that failed.
     if let Some(field) = form_field_mut(state, target) {
         field.insert_str(text);
+        state.form.editing = true;
     }
 }
 
@@ -673,6 +677,16 @@ fn form_handle_key(state: &mut NewWorkloadViewState, key: KeyEvent) -> Option<Co
         }
         KeyCode::Backspace => {
             state.stage = Stage::Gallery;
+            Some(Command::None)
+        }
+        // Ctrl+V on a selected text field pastes into it without an `Enter`
+        // first — see `handle_paste`.
+        KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            let target = targets[state.form.cursor];
+            if form_field_mut(state, target).is_some() {
+                state.form.editing = true;
+                return Some(Command::RequestClipboardPaste);
+            }
             Some(Command::None)
         }
         KeyCode::Enter => {
@@ -2928,6 +2942,33 @@ mod tests {
         state.stage = Stage::Form;
         form_handle_key(&mut state, key(KeyCode::Enter)); // no SSH key typed yet
         insta::assert_snapshot!(render(&state));
+    }
+
+    #[test]
+    fn a_paste_lands_in_the_selected_ssh_key_field_without_enter_first() {
+        let mut state = NewWorkloadViewState::new();
+        state.template = Some(available_template("ssh-box"));
+        state.form = FormFields::new(state.template.as_ref().unwrap());
+        state.stage = Stage::Form;
+        let targets = form_targets(&state);
+        state.form.cursor = targets
+            .iter()
+            .position(|target| *target == FormTarget::Ssh)
+            .expect("an SSH-offering Template has a key field");
+        assert!(!state.form.editing);
+
+        handle_paste(&mut state, "ssh-ed25519 AAAAC3Nza tenant\n");
+        assert_eq!(state.form.ssh.value(), "ssh-ed25519 AAAAC3Nza tenant");
+        assert!(state.form.editing);
+
+        // Ctrl+V on the selected field, not yet typed in, asks for the clipboard.
+        state.form.editing = false;
+        let ctrl_v = KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL);
+        assert_eq!(
+            handle_key(&mut state, ctrl_v),
+            Some(Command::RequestClipboardPaste)
+        );
+        assert!(state.form.editing);
     }
 
     #[test]

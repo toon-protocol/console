@@ -412,6 +412,14 @@ pub fn handle_key(
             state.cursor = (state.cursor + 1).min(list.len() - 1);
             Some(Command::None)
         }
+        KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            let target = list[state.cursor];
+            if field_mut(state, target).is_some() {
+                state.editing = true;
+                return Some(Command::RequestClipboardPaste);
+            }
+            Some(Command::None)
+        }
         KeyCode::Enter => {
             let target = list[state.cursor];
             Some(activate(state, status, profiles, chain_seed_status, target))
@@ -438,7 +446,7 @@ pub fn handle_paste(
         network::handle_paste(editor, text);
         return;
     }
-    if state.chain_seed.confirm.is_some() || !state.editing {
+    if state.chain_seed.confirm.is_some() {
         return;
     }
     let list = targets(
@@ -451,8 +459,11 @@ pub fn handle_paste(
     let Some(target) = list.get(state.cursor).copied() else {
         return;
     };
+    // Lands in the selected text field and starts typing there — see
+    // `views::new_workload::handle_paste`.
     if let Some(field) = field_mut(state, target) {
         field.insert_str(text);
+        state.editing = true;
     }
 }
 
@@ -1364,14 +1375,29 @@ mod tests {
     }
 
     #[test]
-    fn paste_is_ignored_and_never_typed_when_nothing_is_being_edited() {
+    fn a_paste_lands_in_the_selected_field_and_is_ignored_on_a_button() {
         let mut state = AccountViewState::new();
         let status = signed_out(false, vec![]);
         assert!(!state.editing);
 
+        // The cursor starts on the bunker URI field: a paste goes straight in.
+        handle_paste(&mut state, Some(&status), None, None, "bunker://abc");
+        assert_eq!(state.bunker_uri.value(), "bunker://abc");
+        assert!(state.editing);
+        handle_key(&mut state, Some(&status), None, None, key(KeyCode::Esc));
+
+        // On the Connect button there is no field, so nothing is typed anywhere.
+        handle_key(
+            &mut state,
+            Some(&status),
+            None,
+            None,
+            key(KeyCode::Char('j')),
+        );
         handle_paste(&mut state, Some(&status), None, None, "not typed anywhere");
-        assert!(state.bunker_uri.is_empty());
+        assert_eq!(state.bunker_uri.value(), "bunker://abc");
         assert!(state.nsec.is_empty());
+        assert!(!state.editing);
     }
 
     #[test]

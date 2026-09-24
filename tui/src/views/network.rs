@@ -400,6 +400,14 @@ pub fn handle_key(state: &mut NetworkEditorState, key: KeyEvent) -> Outcome {
             state.cursor = (state.cursor + 1).min(list.len() - 1);
             Outcome::Pending
         }
+        KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            let field = list[state.cursor];
+            if state.field_mut(field).is_some() {
+                state.editing = true;
+                return Outcome::Paste;
+            }
+            Outcome::Pending
+        }
         KeyCode::Tab => {
             state.cursor = (state.cursor + 1) % list.len();
             Outcome::Pending
@@ -433,12 +441,10 @@ pub fn handle_key(state: &mut NetworkEditorState, key: KeyEvent) -> Outcome {
 /// A paste (bracketed, or Ctrl+V's clipboard read) lands in the field being
 /// edited, and nowhere when none is — the same rule as every other form.
 pub fn handle_paste(state: &mut NetworkEditorState, text: &str) {
-    if !state.editing {
-        return;
-    }
     let field = state.field_list()[state.cursor];
     if let Some(value) = state.field_mut(field) {
         value.insert_str(text);
+        state.editing = true;
     }
 }
 
@@ -669,13 +675,17 @@ mod tests {
     #[test]
     fn a_paste_fills_the_field_being_edited_and_nothing_else() {
         let mut state = NetworkEditorState::for_edit(&sample_profile(&[]));
-        handle_paste(&mut state, "https://ignored.example/ilp");
-        assert_eq!(state.connector_url.value(), "");
-        handle_key(&mut state, key(KeyCode::Enter));
+        // Selected, not yet typed in: the paste still lands, and typing starts.
         handle_paste(&mut state, "  https://my-fork.example/ilp\n");
         assert_eq!(state.connector_url.value(), "https://my-fork.example/ilp");
+        assert!(state.editing);
         let ctrl_v = KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL);
         assert!(matches!(handle_key(&mut state, ctrl_v), Outcome::Paste));
+        // Ctrl+V on a selected field that is not being typed in pastes too.
+        handle_key(&mut state, key(KeyCode::Esc));
+        assert!(!state.editing);
+        assert!(matches!(handle_key(&mut state, ctrl_v), Outcome::Paste));
+        assert!(state.editing);
     }
 
     #[test]
