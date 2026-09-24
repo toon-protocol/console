@@ -22,21 +22,28 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
-use toon_console_tui::app::{handle_key, handle_mouse, App, Command, DaemonStatus, View};
+use toon_console_tui::app::{handle_key, handle_mouse, now_ms, App, Command, DaemonStatus, View};
 use toon_console_tui::client::DaemonClient;
 use toon_console_tui::desktop;
 use toon_console_tui::launch::{launch_file_path, LaunchError};
-use toon_console_tui::types::Health;
+use toon_console_tui::types::{Directory, DirectoryFilters, Health};
 use toon_console_tui::ui;
+use toon_console_tui::views::directory::directory_query;
 
 /// How long to wait between attempts to find the daemon while it is down —
 /// the TUI's answer to the launcher script's `wait_for_launch_file` poll.
 const RECONNECT_MS: u64 = 1_000;
 
+/// How often `App::now_ms` is refreshed — the one clock this crate keeps, so
+/// the Directory view's Liveness countdown ages on screen with nothing
+/// refetched and no new event (mirrors `useNow` in `use-directory.ts`).
+const CLOCK_TICK_MS: u64 = 1_000;
+
 enum RuntimeEvent {
     Connected(Arc<DaemonClient>),
     ConnectFailed(String),
     HealthLoaded(Box<Result<Health, String>>),
+    DirectoryLoaded(Box<Result<Directory, String>>),
     SwitchView(View),
 }
 
@@ -80,6 +87,7 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()
     spawn_connect_loop(tx.clone());
 
     let mut events = EventStream::new();
+    let mut clock = tokio::time::interval(Duration::from_millis(CLOCK_TICK_MS));
 
     loop {
         terminal.draw(|frame| {
@@ -103,6 +111,16 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()
                                     app.loading_health = true;
                                 }
                             }
+                            Command::RefreshDirectory => {
+                                if let Some(client) = &client {
+                                    spawn_directory_fetch(
+                                        client.clone(),
+                                        tx.clone(),
+                                        app.directory.filters.clone(),
+                                    );
+                                    app.loading_directory = true;
+                                }
+                            }
                             Command::None => {}
                         }
                     }
@@ -118,6 +136,8 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()
                         app.daemon_status = DaemonStatus::Connected;
                         spawn_health_fetch(connected.clone(), tx.clone());
                         app.loading_health = true;
+                        spawn_directory_fetch(connected.clone(), tx.clone(), DirectoryFilters::default());
+                        app.loading_directory = true;
                         spawn_desktop(connected.clone(), tx.clone());
                         client = Some(connected);
                     }
@@ -135,10 +155,24 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()
                             app.daemon_status = DaemonStatus::Error(message);
                         }
                     },
+                    RuntimeEvent::DirectoryLoaded(result) => match *result {
+                        Ok(directory) => {
+                            app.directory.apply(directory);
+                            app.loading_directory = false;
+                            app.daemon_status = DaemonStatus::Connected;
+                        }
+                        Err(message) => {
+                            app.loading_directory = false;
+                            app.daemon_status = DaemonStatus::Error(message);
+                        }
+                    },
                     RuntimeEvent::SwitchView(view) => {
                         app.view = view;
                     }
                 }
+            }
+            _ = clock.tick() => {
+                app.now_ms = now_ms();
             }
         }
 
@@ -193,6 +227,24 @@ fn spawn_health_fetch(client: Arc<DaemonClient>, tx: UnboundedSender<RuntimeEven
             .await
             .map_err(|err| err.to_string());
         let _ = tx.send(RuntimeEvent::HealthLoaded(Box::new(result)));
+    });
+}
+
+/// `GET /api/directory`, with whichever filters are current: once on connect
+/// (matching Health's cadence), and again whenever `views::directory`'s
+/// keymap asks for a refresh — a filter change or `r`.
+fn spawn_directory_fetch(
+    client: Arc<DaemonClient>,
+    tx: UnboundedSender<RuntimeEvent>,
+    filters: DirectoryFilters,
+) {
+    tokio::spawn(async move {
+        let path = format!("/api/directory{}", directory_query(&filters));
+        let result = client
+            .get::<Directory>(&path)
+            .await
+            .map_err(|err| err.to_string());
+        let _ = tx.send(RuntimeEvent::DirectoryLoaded(Box::new(result)));
     });
 }
 

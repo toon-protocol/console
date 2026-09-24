@@ -123,6 +123,13 @@ fn draw_content(frame: &mut Frame, area: Rect, app: &App) {
             Some(health) => views::health::draw(frame, area, health),
             None => draw_loading(frame, area, "Health"),
         },
+        (View::Directory, _) => views::directory::draw(
+            frame,
+            area,
+            &app.directory,
+            app.now_ms,
+            app.loading_directory,
+        ),
         (view, _) => views::placeholder::draw(frame, area, view.title()),
     }
 }
@@ -158,6 +165,11 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     let mut spans = vec![Span::raw(" Tab/h/l switch  1-7 jump ")];
     if app.view == View::Health {
         spans.push(Span::raw(" r refresh "));
+    }
+    if app.view == View::Directory {
+        spans.push(Span::raw(
+            " j/k move  Enter detail  i/a/g/d/n/H filter  r refresh ",
+        ));
     }
     spans.push(Span::raw(" ? help  q quit "));
     let block = Block::default().borders(Borders::ALL);

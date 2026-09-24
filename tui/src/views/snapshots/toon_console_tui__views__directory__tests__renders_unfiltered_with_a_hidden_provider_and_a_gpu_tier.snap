@@ -1,0 +1,34 @@
+---
+source: src/views/directory.rs
+expression: "render(&state, NOW_MS, false)"
+---
+┌ Directory ───────────────────────────────────────────────────────────────────────────────────────┐
+│Isolation any  Arch any  GPU any  Hidden both  Grants none                                        │
+│i isolation  a arch  g gpu  d/n capability  H hidden  x clear  r refresh  Enter detail            │
+│Read free over NIP-01 from 2 relays at 2026-09-22T12:00:00.000Z — wss://acme.relay.test (failed)  │
+│g.acme  [shared-kernel]   live · 2m left                                                          │
+│▶ basic        v1   amd64  1,000 µUSDC/1h  no standby  1000 mCPU 1024 MB 10 GB  3 avail           │
+│  ci           v1   amd64  5,000 µUSDC/1h  no standby  1000 mCPU 1024 MB 10 GB  docker  3 avail   │
+│  gpu          v1   amd64  20,000 µUSDC/1h  no standby  1000 mCPU 1024 MB 10 GB  [nvidia-a100-80gb│
+│g.shady  [shared-kernel]   HIDDEN    live · 2m left                                               │
+│  quiet        v1   amd64  9,000 µUSDC/1h  no standby  1000 mCPU 1024 MB 10 GB  3 avail           │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘

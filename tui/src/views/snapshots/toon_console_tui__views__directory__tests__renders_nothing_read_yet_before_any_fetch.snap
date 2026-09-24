@@ -1,0 +1,34 @@
+---
+source: src/views/directory.rs
+expression: "render(&state, NOW_MS, false)"
+---
+┌ Directory ───────────────────────────────────────────────────────────────────────────────────────┐
+│Isolation any  Arch any  GPU any  Hidden both  Grants none                                        │
+│i isolation  a arch  g gpu  d/n capability  H hidden  x clear  r refresh  Enter detail            │
+│                                                                                                  │
+│Nothing read yet.                                                                                 │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
