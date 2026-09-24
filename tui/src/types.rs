@@ -174,6 +174,102 @@ pub struct DesktopView {
     pub at: String,
 }
 
+/// The docs (TOON_Network#102, #148), mirroring `DocsIndex`/`DocsPage` in
+/// `packages/daemon/src/docs.ts` and `packages/ui/src/lib/daemon.ts`.
+///
+/// `source` on each summary and on the opened article is the field the Docs
+/// view exists to show: `"relays"` for a published NIP-23 article, `"bundled"`
+/// for the Markdown this console shipped with. `fallback`, when present, is
+/// already the sentence to put above the page — see `docs.ts`'s doc comment
+/// for why it is prose rather than a code the view would have to translate.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct DocsAuthorView {
+    pub npub: String,
+    pub pubkey: String,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct RelayOutcome {
+    pub url: String,
+    pub state: String,
+    pub events: i64,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct DocSummary {
+    pub d: String,
+    pub title: String,
+    pub summary: String,
+    pub order: i64,
+    #[serde(rename = "publishedAt")]
+    pub published_at: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// `"relays" | "bundled"`.
+    pub source: String,
+    #[serde(default)]
+    pub address: Option<String>,
+    #[serde(rename = "updatedAt")]
+    #[serde(default)]
+    pub updated_at: Option<String>,
+}
+
+/// `doc` on `DocsPage` — NOT `DocSummary` plus `markdown`, on purpose.
+///
+/// This is a straight mirror of `DocArticle` in `packages/daemon/src/
+/// docs-article.ts`, the type `DocsStore#page` actually returns for `doc`
+/// (`docs.ts`'s own `DocArticle extends DocSummary` is what the ROUTE'S
+/// TYPE claims; the object it hands back is the lower-level one, which has
+/// no `order` and an `updatedAt` that is a Unix seconds count, not the ISO
+/// string `DocSummary.updatedAt` is elsewhere in this same response). The
+/// fixture contract catches either side drifting from what ships.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct DocArticle {
+    pub d: String,
+    pub title: String,
+    pub summary: String,
+    #[serde(rename = "publishedAt")]
+    pub published_at: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    pub markdown: String,
+    /// `"relays" | "bundled"`.
+    pub source: String,
+    #[serde(rename = "eventId")]
+    #[serde(default)]
+    pub event_id: Option<String>,
+    #[serde(rename = "updatedAt")]
+    #[serde(default)]
+    pub updated_at: Option<i64>,
+    #[serde(default)]
+    pub pubkey: Option<String>,
+    #[serde(default)]
+    pub address: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct DocsIndex {
+    #[serde(default)]
+    pub author: Option<DocsAuthorView>,
+    pub relays: Vec<String>,
+    #[serde(default)]
+    pub read: Vec<RelayOutcome>,
+    #[serde(default)]
+    pub fallback: Option<String>,
+    pub docs: Vec<DocSummary>,
+    #[serde(rename = "readAt")]
+    pub read_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct DocsPage {
+    #[serde(flatten)]
+    pub index: DocsIndex,
+    pub doc: DocArticle,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -209,5 +305,49 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(unreachable, ConnectorHealth::Unreachable { .. }));
+    }
+
+    #[test]
+    fn docs_index_deserializes_with_no_npub_configured() {
+        let json = serde_json::json!({
+            "relays": [],
+            "read": [],
+            "fallback": "These are the pages that shipped with this console.",
+            "docs": [
+                {"d": "concepts", "title": "Concepts", "summary": "The words.", "order": 1,
+                 "publishedAt": "2026-09-23", "tags": ["toon-network"], "source": "bundled"}
+            ],
+            "readAt": "2026-09-24T00:00:00.000Z"
+        });
+        let index: DocsIndex = serde_json::from_value(json).unwrap();
+        assert!(index.author.is_none());
+        assert_eq!(index.docs[0].source, "bundled");
+        assert_eq!(
+            index.fallback.as_deref(),
+            Some("These are the pages that shipped with this console.")
+        );
+    }
+
+    #[test]
+    fn docs_page_flattens_the_index_alongside_the_opened_article() {
+        let json = serde_json::json!({
+            "author": {"npub": "npub1x", "pubkey": "a".repeat(64)},
+            "relays": ["wss://relay.test"],
+            "read": [{"url": "wss://relay.test", "state": "read", "events": 1}],
+            "docs": [],
+            "readAt": "2026-09-24T00:00:00.000Z",
+            "doc": {
+                "d": "concepts", "title": "Concepts", "summary": "The words.",
+                "publishedAt": "2026-09-23", "tags": [], "source": "relays",
+                "address": "30023:a:concepts", "updatedAt": 1_790_000_000,
+                "markdown": "# Concepts\n\nBody."
+            }
+        });
+        let page: DocsPage = serde_json::from_value(json).unwrap();
+        assert_eq!(page.index.author.as_ref().unwrap().npub, "npub1x");
+        assert_eq!(page.doc.d, "concepts");
+        assert_eq!(page.doc.updated_at, Some(1_790_000_000));
+        assert_eq!(page.doc.markdown, "# Concepts\n\nBody.");
+        assert_eq!(page.index.read[0].state, "read");
     }
 }

@@ -123,6 +123,7 @@ fn draw_content(frame: &mut Frame, area: Rect, app: &App) {
             Some(health) => views::health::draw(frame, area, health),
             None => draw_loading(frame, area, "Health"),
         },
+        (View::Docs, _) => views::docs::draw(frame, area, app),
         (view, _) => views::placeholder::draw(frame, area, view.title()),
     }
 }
@@ -159,6 +160,13 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     if app.view == View::Health {
         spans.push(Span::raw(" r refresh "));
     }
+    if app.view == View::Docs {
+        spans.push(if app.docs_page.is_some() {
+            Span::raw(" j/k scroll  n/N link  o open  r refresh  Backspace back ")
+        } else {
+            Span::raw(" j/k select  Enter open  r refresh ")
+        });
+    }
     spans.push(Span::raw(" ? help  q quit "));
     let block = Block::default().borders(Borders::ALL);
     frame.render_widget(Paragraph::new(Line::from(spans)).block(block), area);
@@ -169,7 +177,12 @@ const HELP_LINES: &[&str] = &[
     "Tab        next view",
     "Shift+Tab  previous view",
     "h / l      previous / next view",
-    "r          refresh Health",
+    "r          refresh Health, or the open Docs page/list",
+    "j / k      Docs: select a page, or scroll an open one",
+    "Enter      Docs: open the selected page",
+    "n / N      Docs: focus the next / previous link",
+    "o          Docs: open the focused link (xdg-open)",
+    "Backspace  Docs: back to the reading list",
     "mouse      click a sidebar row to select it",
     "?          toggle this help",
     "q / Esc    quit",

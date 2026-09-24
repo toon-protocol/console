@@ -23,6 +23,8 @@ and per-launch token from `$XDG_RUNTIME_DIR/toon-console/launch.json` (see
 - `src/desktop.rs` — the `GET /api/desktop` long poll that lets an Omarchy
   menu entry switch an already-open window's view.
 - `src/format.rs` — small display formatters shared by views.
+- `src/markdown.rs` — Markdown -> ratatui `Text` (headings, emphasis, lists,
+  code blocks, links), for the Docs view.
 - `src/ui.rs` — the shell: header, sidebar, footer, `?` help overlay. Calls
   into `views::<name>::draw` for the current view.
 - `src/views/<name>.rs` — one file per sidebar view.

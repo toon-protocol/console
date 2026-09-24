@@ -10,12 +10,14 @@
 //! - `ui`        — the shell (header, sidebar, footer, help overlay).
 //! - `views::*`  — one module per sidebar view.
 //! - `format`    — small display formatters shared by views.
+//! - `markdown`  — Markdown -> ratatui `Text`, for the Docs view.
 
 pub mod app;
 pub mod client;
 pub mod desktop;
 pub mod format;
 pub mod launch;
+pub mod markdown;
 pub mod types;
 pub mod ui;
 pub mod views;
