@@ -1,0 +1,21 @@
+[Desktop Entry]
+# The console's SECOND launcher entry: the browser web app, for anything a
+# person would rather do there than in the TUI (TOON_Network#140, ADR 0028).
+# `packaging/desktop/toon-console.desktop` is the primary entry, which opens
+# the TUI.
+#
+# @BIN@ and @ICON@ are substituted exactly as they are in that file --
+# `packaging/aur/PKGBUILD` for the package, `toon-console-install` for a
+# checkout. `--web` is what makes this the web app rather than the TUI:
+# `toon-console --web` does what `toon-console` used to do by itself.
+Version=1.0
+Type=Application
+Name=TOON Console (web)
+GenericName=Workload console (web)
+Comment=Run workloads on TOON Network, in the browser
+Exec=@BIN@ --web
+Icon=@ICON@
+Terminal=false
+StartupNotify=true
+Categories=Network;RemoteAccess;
+Keywords=TOON;workload;lease;provider;nostr;

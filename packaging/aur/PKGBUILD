@@ -30,15 +30,17 @@ pkgdesc="Run workloads on TOON Network: a local daemon and web UI, as an Omarchy
 arch=('any')
 url="https://github.com/toon-protocol/console"
 license=('Apache-2.0')
-# node is the daemon; bash is the launcher, the installer and the hooks.
-# Everything else the console can do without, so everything else is optional.
+# node is the daemon; bash is the launcher, the installer and the hooks. The
+# TUI (TOON_Network#138, ADR 0028) is a prebuilt Rust binary by the time this
+# runs, so rust/cargo are build-time only -- nothing at runtime needs them.
 depends=('nodejs>=22' 'bash')
-makedepends=('git' 'npm')
+makedepends=('git' 'npm' 'rust' 'cargo')
 optdepends=(
   'libsecret: keep the account key in the system keyring (`secret-tool`) instead of a passphrase file'
   'gnome-keyring: a Secret Service for libsecret to talk to'
   'chromium: the browser the Omarchy web-app window is'
   'xdg-utils: open the console in the default browser on a desktop without Omarchy'
+  'xdg-terminal-exec: open the TUI in the default terminal on a desktop without Omarchy'
   'anon: reach a Hidden Provider over a circuit (TOON_CONSOLE_SOCKS_PROXY)'
 )
 install="$pkgname.install"
@@ -46,11 +48,21 @@ source=("$pkgname::git+https://github.com/toon-protocol/console.git#tag=v$pkgver
 # A git source is verified by the tag it is fetched at, so there is no
 # checksum to record. A release tarball would carry a real sha256 here.
 sha256sums=('SKIP')
-# Pure JavaScript: nothing to strip, and no debug package to split out.
-options=('!strip' '!debug')
+# The daemon and the launcher are JavaScript and bash: nothing to strip
+# there. The TUI (TOON_Network#138) is a real ELF binary now, and it gets
+# makepkg's ordinary strip/debug handling -- no override needed for it.
+options=('!debug')
 
 build() {
   cd "$srcdir/$pkgname"
+
+  # The TUI (TOON_Network#138, ADR 0028): a separate Cargo crate at tui/,
+  # pinned to its own tui/Cargo.lock exactly the way npm below is pinned to
+  # package-lock.json. It has no runtime dependency on anything npm builds --
+  # it talks to the daemon over the same loopback HTTP the web UI uses -- so
+  # building it first or after the npm build makes no difference; it is first
+  # because a broken TUI build should fail fast, before the slower npm build.
+  (cd tui && cargo build --release --locked)
 
   # npm reaches the network here. That is unavoidable for a package built from
   # source out of an npm workspace, and it is why `makepkg` in a network-less
@@ -145,6 +157,15 @@ package() {
   find "$share" -type f -exec chmod 644 {} +
 
   # ---------------------------------------------------------------------
+  # The TUI
+  # ---------------------------------------------------------------------
+  #
+  # Beside the daemon's own commands, on PATH: packaging/bin/toon-console execs
+  # it by its bare name (`toon-console-tui`), never by an absolute path, so it
+  # has to live somewhere that launcher's PATH already reaches.
+  install -Dm755 tui/target/release/toon-console-tui "$pkgdir/usr/bin/toon-console-tui"
+
+  # ---------------------------------------------------------------------
   # The commands
   # ---------------------------------------------------------------------
   install -Dm755 packaging/bin/toon-console "$pkgdir/usr/bin/toon-console"
@@ -187,6 +208,16 @@ package() {
     >"$srcdir/toon-console.desktop"
   install -Dm644 "$srcdir/toon-console.desktop" \
     "$pkgdir/usr/share/applications/toon-console.desktop"
+
+  # The second entry, "TOON Console (web)" (`--web`): the browser app this one
+  # used to open by default.
+  sed \
+    -e "s|@BIN@|/usr/bin/toon-console|g" \
+    -e "s|@ICON@|toon-console|g" \
+    packaging/desktop/toon-console-web.desktop \
+    >"$srcdir/toon-console-web.desktop"
+  install -Dm644 "$srcdir/toon-console-web.desktop" \
+    "$pkgdir/usr/share/applications/toon-console-web.desktop"
 
   install -Dm644 packaging/icons/toon-console.svg \
     "$pkgdir/usr/share/icons/hicolor/scalable/apps/toon-console.svg"

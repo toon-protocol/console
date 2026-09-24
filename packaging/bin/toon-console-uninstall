@@ -33,7 +33,12 @@ if command -v systemctl >/dev/null 2>&1; then
 fi
 
 rm -f "$UNIT_DIR/toon-console.service" "$BIN_DIR/toon-console"
+# The primary (TUI) entry, plain either way it was written.
 rm -f "$APP_DIR/TOON Console.desktop" "$APP_DIR/toon-console.desktop"
+# The second (web app) entry (TOON_Network#140): "TOON Console (web).desktop"
+# is what omarchy-webapp-install names it, toon-console-web.desktop is the
+# plain fallback on a desktop without it.
+rm -f "$APP_DIR/TOON Console (web).desktop" "$APP_DIR/toon-console-web.desktop"
 
 rm -f "$OMARCHY_DIR/themed/toon-console.css.tpl"
 rm -f "$OMARCHY_DIR/hooks/theme-set.d/toon-console"

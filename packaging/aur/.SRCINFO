@@ -8,14 +8,16 @@ pkgbase = toon-console
 	license = Apache-2.0
 	makedepends = git
 	makedepends = npm
+	makedepends = rust
+	makedepends = cargo
 	depends = nodejs>=22
 	depends = bash
 	optdepends = libsecret: keep the account key in the system keyring (`secret-tool`) instead of a passphrase file
 	optdepends = gnome-keyring: a Secret Service for libsecret to talk to
 	optdepends = chromium: the browser the Omarchy web-app window is
 	optdepends = xdg-utils: open the console in the default browser on a desktop without Omarchy
+	optdepends = xdg-terminal-exec: open the TUI in the default terminal on a desktop without Omarchy
 	optdepends = anon: reach a Hidden Provider over a circuit (TOON_CONSOLE_SOCKS_PROXY)
-	options = !strip
 	options = !debug
 	source = toon-console::git+https://github.com/toon-protocol/console.git#tag=v0.1.0
 	sha256sums = SKIP

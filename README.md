@@ -50,7 +50,8 @@ server's port with the same `?t=` the daemon printed.
 Two ways in, and they install the same thing in two different places. A package puts the
 console in `/usr` and pacman owns it; a checkout puts it in your `$HOME` and you own it.
 Either way the daemon is a `systemd --user` service and the console is opened by
-`toon-console`.
+`toon-console`, which opens the TUI (TOON_Network#138, ADR 0028); `toon-console --web`
+opens the browser app instead.
 
 ### From the AUR (Arch, Omarchy)
 
@@ -79,7 +80,7 @@ already open rather than opening a second one.
 | the daemon and its `node_modules` | `/usr/lib/toon-console` |
 | the unit | `/usr/lib/systemd/user/toon-console.service` |
 | the UI, the docs, the Omarchy sources | `/usr/share/toon-console` |
-| the launcher and the two setup commands | `/usr/bin` |
+| the launcher, the TUI and the two setup commands | `/usr/bin` |
 | **your** channel state, Chain Seed, Lease Vault cache and keystore | `~/.local/share/toon-console` |
 | **your** active profile | `~/.config/toon-console` |
 | this login session's launch token | `$XDG_RUNTIME_DIR/toon-console` |
@@ -124,17 +125,22 @@ packaging/bin/toon-console-install
 
 That writes the launcher to `~/.local/bin/toon-console` and the unit to
 `~/.config/systemd/user/toon-console.service`, both pointing at this checkout, enables the
-service and installs a launcher entry: an `omarchy-webapp-install` web app where Omarchy is
-present, and a plain `~/.local/share/applications/toon-console.desktop` where it is not.
+service and installs two launcher entries: a plain
+`~/.local/share/applications/toon-console.desktop` that opens the TUI, and a second, "TOON
+Console (web)", for the browser app (`toon-console --web`) — an `omarchy-webapp-install` web
+app where Omarchy is present, and a plain `toon-console-web.desktop` where it is not.
 It also installs the Omarchy integration below if `~/.config/omarchy` exists, and skips it
 silently if it does not.
 
 `--omarchy-only` installs just that desktop half, leaving a running service and its
-launcher alone; `--no-omarchy` leaves it out; `--no-webapp` forces the plain desktop entry.
+launcher alone; `--no-omarchy` leaves it out; `--no-webapp` forces the web entry to the
+plain desktop form instead of `omarchy-webapp-install`.
 
-On a desktop that is not Omarchy the console opens in your browser through `xdg-open`,
-with the default theme in `packages/daemon/src/theme.ts` rather than your desktop's
-colours. Everything else — the service, the API, the notifications — is the same.
+On a desktop that is not Omarchy the launcher opens the TUI through `xdg-terminal-exec`,
+falling back to `$TERMINAL` if that is not installed either; `--web` opens the browser app
+through `xdg-open` instead, with the default theme in `packages/daemon/src/theme.ts` rather
+than your desktop's colours. Everything else — the service, the API, the notifications — is
+the same.
 
 `packaging/bin/toon-console-uninstall` removes all of it. It never touches
 `~/.local/share/toon-console`, which is where channel state and the Lease Vault cache live,
@@ -189,10 +195,12 @@ fallback it is.
 ### The menu opens a view
 
 Each entry runs `toon-console --view <workloads|new-workload|funds>`, which posts the view to
-the daemon and then hands the window to `omarchy-launch-or-focus-webapp`. The post is what
-makes the entry work on a window that is **already open**: focusing is all Omarchy can do to
-one, so the window is told separately and switches tab. A request older than a minute is
-ignored, so a window opened an hour later opens where it always does.
+the daemon and then hands the TUI to `omarchy-launch-or-focus-tui`. The post is what makes
+the entry work on a window that is **already open**: focusing is all Omarchy can do to one, so
+the window is told separately and switches view. With no window open yet, the TUI's own first
+poll of `GET /api/desktop`, on startup, picks up that same post and opens on that view instead
+of the default one. A request older than a minute is ignored, so a window opened an hour later
+opens where it always does.
 
 ### Three notifications, once per event
 

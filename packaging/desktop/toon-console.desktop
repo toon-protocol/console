@@ -1,5 +1,8 @@
 [Desktop Entry]
-# The console's launcher entry, for every desktop including Omarchy.
+# The console's PRIMARY launcher entry, for every desktop including Omarchy
+# (TOON_Network#140, ADR 0028). `packaging/desktop/toon-console-web.desktop`
+# is the second entry, "TOON Console (web)", for the browser app this one
+# used to open by default.
 #
 # @BIN@ is the launcher and @ICON@ is either an icon theme NAME (the package,
 # which installs into hicolor) or an absolute path to a file (a checkout,
@@ -8,12 +11,14 @@
 # `packaging/aur/PKGBUILD` for the package, `toon-console-install` for a
 # checkout.
 #
-# Exec is the LAUNCHER and not a URL, because the URL that opens the console
-# carries a token minted at launch: there is no long-lived credential that
-# could be written into a desktop file. The launcher starts the daemon if it
-# is not running, reads the URL the daemon published, and on Omarchy hands it
-# to omarchy-launch-or-focus-webapp, which focuses the window that is already
-# open rather than opening a second one.
+# Exec is the LAUNCHER and not a bare command, because the launcher has to
+# make sure the daemon is running first: with no arguments it ensures the
+# daemon, then hands `toon-console-tui` to `omarchy-launch-or-focus-tui`
+# (which focuses the terminal that is already open rather than starting a
+# second one) or, off Omarchy, to `xdg-terminal-exec`/`$TERMINAL`.
+# Terminal=false because the launcher opens its OWN terminal window for the
+# TUI; a Terminal=true here would additionally wrap the launcher script
+# itself in one.
 Version=1.0
 Type=Application
 Name=TOON Console
