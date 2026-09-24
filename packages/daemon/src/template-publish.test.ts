@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
+import { brokeWriter, fakeAccount, fakePaidWriter, fakeRelayServer } from './chain-seed.testkit.js';
 import { fakeProvider, sign } from './directory.testkit.js';
 import { RelayWriteError, type RelayWriteReceipt, type RelayWriteRequest } from './relay-write.js';
 import type { RelayWriter, RelayWriteTargets } from './relay-write.js';
 import { readImageEntry, readTemplateContent, resolveImage } from './templates.js';
 import {
+  ConsoleTemplatePublisher,
   parseImageReference,
   planTemplatePublish,
   publishTemplatePlan,
@@ -500,5 +502,159 @@ describe('publishTemplatePlan', () => {
         writer,
       })
     ).rejects.toThrow(/refused/u);
+  });
+});
+
+describe('ConsoleTemplatePublisher', () => {
+  const RAW_TEMPLATE = {
+    name: 'ssh-box',
+    title: 'SSH box (Alpine)',
+    summary: 'An SSH shell with your key and nothing else.',
+    ports: [{ container_port: 22, protocol: 'tcp' }],
+    env_fixed: {},
+    env_tenant: [],
+    ssh_key: { required: true, note: 'your own key' },
+  };
+  const IMAGE = `ghcr.io/toon-protocol/ssh-box@${MANIFEST_DIGEST}`;
+
+  function fetchOk(): typeof fetch {
+    return (async () =>
+      jsonResponse(200, SINGLE_MANIFEST, { 'content-length': '512' })) as typeof fetch;
+  }
+
+  it('refuses a preview when nobody is signed in', async () => {
+    const publisher = new ConsoleTemplatePublisher({
+      signer: () => undefined,
+      writer: () => fakePaidWriter(undefined),
+      fetchImpl: fetchOk(),
+    });
+    await expect(
+      publisher.preview({ template: RAW_TEMPLATE, image: IMAGE })
+    ).rejects.toMatchObject({ code: 'not_signed_in', status: 409 });
+  });
+
+  it('previews without sending anything — no write, no relay event', async () => {
+    const relay = fakeRelayServer('wss://relay.test');
+    const writer = fakePaidWriter(relay);
+    const account = fakeAccount();
+    const publisher = new ConsoleTemplatePublisher({
+      signer: () => account,
+      writer: () => writer,
+      fetchImpl: fetchOk(),
+    });
+
+    const preview = await publisher.preview({ template: RAW_TEMPLATE, image: IMAGE });
+
+    expect(preview.entryKind).toBe(30434);
+    expect(preview.templateKind).toBe(30436);
+    expect(preview.entryAddress).toBe(`30434:${account.pubkey}:ssh-box:latest`);
+    expect(preview.templateAddress).toBe(`30436:${account.pubkey}:ssh-box`);
+    expect(preview.title).toBe('SSH box (Alpine)');
+    expect(preview.summary).toContain('SSH shell');
+    expect(preview.imageDigest).toBe(MANIFEST_DIGEST);
+    expect(preview.targets.ready).toBe(true);
+    expect(preview.targets.price).toBe('1');
+    expect(preview.targets.totalPrice).toBe('1');
+    expect(writer.written).toEqual([]);
+    expect(relay.events).toEqual([]);
+  });
+
+  it('reports blockedBy in a preview rather than pretending a write is payable', async () => {
+    const relay = fakeRelayServer('wss://relay.test');
+    const writer = brokeWriter(relay);
+    const account = fakeAccount();
+    const publisher = new ConsoleTemplatePublisher({
+      signer: () => account,
+      writer: () => writer,
+      fetchImpl: fetchOk(),
+    });
+
+    const preview = await publisher.preview({ template: RAW_TEMPLATE, image: IMAGE });
+    expect(preview.targets.ready).toBe(false);
+    expect(preview.targets.blockedBy).toBeTruthy();
+    expect(writer.written).toEqual([]);
+  });
+
+  it('refuses a template.json that will not parse, before anything is resolved or spent', async () => {
+    const account = fakeAccount();
+    const calls: string[] = [];
+    const publisher = new ConsoleTemplatePublisher({
+      signer: () => account,
+      writer: () => fakePaidWriter(undefined),
+      fetchImpl: (async (url: string | URL) => {
+        calls.push(String(url));
+        return jsonResponse(200, SINGLE_MANIFEST, { 'content-length': '512' });
+      }) as typeof fetch,
+    });
+
+    const { title: _title, ...withoutTitle } = RAW_TEMPLATE;
+    await expect(
+      publisher.preview({ template: withoutTitle, image: IMAGE })
+    ).rejects.toMatchObject({ code: 'invalid_template', status: 400 });
+  });
+
+  it('refuses an image it cannot resolve', async () => {
+    const account = fakeAccount();
+    const publisher = new ConsoleTemplatePublisher({
+      signer: () => account,
+      writer: () => fakePaidWriter(undefined),
+      fetchImpl: (async () => new Response('nope', { status: 404 })) as typeof fetch,
+    });
+
+    await expect(
+      publisher.preview({ template: RAW_TEMPLATE, image: IMAGE })
+    ).rejects.toMatchObject({ code: 'image_unresolved', status: 400 });
+  });
+
+  it('signs and writes exactly the image entry then the Template, as the signed-in account', async () => {
+    const relay = fakeRelayServer('wss://relay.test');
+    const writer = fakePaidWriter(relay);
+    const account = fakeAccount();
+    const publisher = new ConsoleTemplatePublisher({
+      signer: () => account,
+      writer: () => writer,
+      fetchImpl: fetchOk(),
+    });
+
+    const result = await publisher.publish({ template: RAW_TEMPLATE, image: IMAGE });
+
+    expect(result.outcomes.map((outcome) => outcome.what)).toEqual(['image-entry', 'template']);
+    expect(result.templateAddress).toBe(`30436:${account.pubkey}:ssh-box`);
+    expect(result.cost).toBe('2');
+    expect(writer.written).toHaveLength(2);
+    expect(writer.written.map((event) => event.kind)).toEqual([30434, 30436]);
+    expect(writer.written.every((event) => event.pubkey === account.pubkey)).toBe(true);
+    expect(relay.events.map((event) => event.kind).sort()).toEqual([30434, 30436]);
+  });
+
+  it('refuses a publish nothing can pay for, and writes nothing', async () => {
+    const relay = fakeRelayServer('wss://relay.test');
+    const writer = brokeWriter(relay);
+    const account = fakeAccount();
+    const publisher = new ConsoleTemplatePublisher({
+      signer: () => account,
+      writer: () => writer,
+      fetchImpl: fetchOk(),
+    });
+
+    await expect(
+      publisher.publish({ template: RAW_TEMPLATE, image: IMAGE })
+    ).rejects.toBeInstanceOf(RelayWriteError);
+    expect(writer.written).toEqual([]);
+    expect(relay.events).toEqual([]);
+  });
+
+  it('refuses a publish when nobody is signed in, without touching the writer', async () => {
+    const writer = fakePaidWriter(fakeRelayServer('wss://relay.test'));
+    const publisher = new ConsoleTemplatePublisher({
+      signer: () => undefined,
+      writer: () => writer,
+      fetchImpl: fetchOk(),
+    });
+
+    await expect(
+      publisher.publish({ template: RAW_TEMPLATE, image: IMAGE })
+    ).rejects.toMatchObject({ code: 'not_signed_in', status: 409 });
+    expect(writer.written).toEqual([]);
   });
 });

@@ -23,8 +23,8 @@ use toon_console_tui::types::{
     ChainSeedStatus, Dashboard, Directory, DocsIndex, DocsPage, ExpandedTemplate, ExtendResult,
     FundingStatus, GasPurchase, GasQuote, GasStationStatus, GatewayView, HandoverResult, Health,
     PreflightView, ProfileEndpointsError, Profiles, RotationResult, RotationView, SessionStatus,
-    SpawnResult, StandbySetPreflightView, StandbySetResult, TemplateGallery, TerminateResult,
-    WithdrawalResult, WorkloadCard,
+    SpawnResult, StandbySetPreflightView, StandbySetResult, TemplateGallery,
+    TemplatePublishPreview, TemplatePublishResult, TerminateResult, WithdrawalResult, WorkloadCard,
 };
 
 type Check = fn(&str) -> Result<(), String>;
@@ -114,6 +114,17 @@ fn registry() -> BTreeMap<&'static str, Check> {
     // Set's own pair (`api-leases-standby-set.test.ts`, spec §7).
     map.insert("templates", check::<TemplateGallery> as Check);
     map.insert("template-expand", check::<ExpandedTemplate> as Check);
+    // TOON_Network#138 (Publish a Template): `POST /api/templates/publish`
+    // and its `/preview`, both from `api-template-publish.test.ts`.
+    map.insert(
+        "template-publish-preview",
+        check::<TemplatePublishPreview> as Check,
+    );
+    map.insert(
+        "template-publish-preview-blocked",
+        check::<TemplatePublishPreview> as Check,
+    );
+    map.insert("template-publish", check::<TemplatePublishResult> as Check);
     map.insert("leases-preflight", check::<PreflightView> as Check);
     // TOON_Network#138: the same route with no channel bound yet — the
     // structural shape New workload's Preflight stage detects `o` on

@@ -1,0 +1,29 @@
+---
+source: src/views/template_publish.rs
+assertion_line: 771
+expression: render(&state)
+---
+                                                                                          
+                                                                                          
+                                                                                          
+                                                                                          
+                                                                                          
+                                                                                          
+       ┌ Publish a Template ──────────────────────────────────────────────────────┐       
+       │template.json path: …                                                     │       
+       │Image (by digest):                                                        │       
+       │ghcr.io/toon-protocol/ssh-box@sha256:f9f8eb3e68dd23d8bbac21ca253a02bcf20eb│       
+       │bcc44eb5d4b7ca0d7d972fc4e97                                               │       
+       │                                                                          │       
+       │ Preview                                                                  │       
+       │                                                                          │       
+       │                                                                          │       
+       │                                                                          │       
+       │                                                                          │       
+       │                                                                          │       
+       │                                                                          │       
+       │                                                                          │       
+       │                                                                          │       
+       │                                                                          │       
+       │                                                                          │       
+       └──────────────────────────────────────────────────────────────────────────┘

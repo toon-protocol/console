@@ -21,6 +21,7 @@ use crate::types::{
     LocalSignerRequest, PreflightView, ProfileEndpointsRequest, ProfileSwitchRequest, Profiles,
     RotationResult, RotationView, SessionStatus, SignInRequest, SpawnRequestBody, SpawnResult,
     StandbySetPreflightView, StandbySetRequestBody, StandbySetResult, TemplateGallery,
+    TemplatePublishPreview, TemplatePublishRequestBody, TemplatePublishResult,
     TemplateSpawnRequestBody, TerminateResult, WithdrawalResult, WorkloadCard,
 };
 use crate::views::directory::directory_query;
@@ -293,6 +294,27 @@ pub async fn expand_template(
     request: &ExpandTemplateRequest,
 ) -> Answer<ExpandedTemplate> {
     client.post("/api/templates/expand", request).await
+}
+
+/// `POST /api/templates/publish/preview` — `Command::PreviewTemplatePublish`
+/// (TOON_Network#138). Free: it answers the two events, their addresses and
+/// the writer's own quote, and sends nothing to any relay.
+pub async fn preview_template_publish(
+    client: &DaemonClient,
+    request: &TemplatePublishRequestBody,
+) -> Answer<TemplatePublishPreview> {
+    client.post("/api/templates/publish/preview", request).await
+}
+
+/// `POST /api/templates/publish` — `Command::PublishTemplate`. **Spends**:
+/// two paid relay writes, signed by the session's own `ConsoleSigner` and
+/// paid from the account's existing relay channel — the same way
+/// `publish_chain_seed` above does.
+pub async fn publish_template(
+    client: &DaemonClient,
+    request: &TemplatePublishRequestBody,
+) -> Answer<TemplatePublishResult> {
+    client.post("/api/templates/publish", request).await
 }
 
 /// `POST /api/leases/preflight` — `Command::PreflightSpawn`. Free.

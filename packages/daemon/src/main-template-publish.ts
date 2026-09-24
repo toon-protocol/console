@@ -24,6 +24,17 @@ import {
  * `toon-template-publish` — publish an Image Registry entry and a Template
  * for a workload image (TOON_Network#138).
  *
+ * **Most people should reach for the console's own "Publish a Template"
+ * action first** (New workload's Gallery, `p`) rather than this CLI: it
+ * publishes AS whoever is signed in, paying from that account's own relay
+ * channel, with no key ever leaving the daemon — the same way the Chain Seed
+ * publishes. This tool exists for the case the console cannot cover: signing
+ * with a key that has never been (and will never be) imported into a
+ * console session, e.g. a CI job or a key held only as `TOON_TEMPLATE_NSEC`.
+ * If the account publishing a Template was generated inside the console, it
+ * holds neither an nsec nor a Chain Seed mnemonic to hand this tool, and the
+ * console action is the only way to publish as it.
+ *
  * ```
  * npm run template:publish -- --file images/ssh-box/template.json \
  *   --image ghcr.io/toon-protocol/ssh-box@sha256:… --dry-run
@@ -72,6 +83,12 @@ interface Args {
 
 const USAGE = `toon-template-publish — publish an Image Registry entry (30434) and a
 Template (30436) for a workload image
+
+Prefer the console's own "Publish a Template" action first (New workload's
+Gallery, p): it signs and pays as the signed-in account, with no key ever
+leaving the daemon. Reach for this CLI only for a key the console does not
+(and for a console-generated account, cannot) hold — it has no nsec or Chain
+Seed mnemonic to give this tool.
 
   --file <path>        the Template's template.json (required)
   --image <ref>         the image, by digest: registry/repo@sha256:… (required)
