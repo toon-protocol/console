@@ -21,5 +21,6 @@
     "ssh_public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGxvbmdlbm91Z2hmb3JhdGVzdGtleQ tenant@fixture",
     "template": "30436:141418103fdd4f1badfe103a378c07b152d24046f9b2ce024a2612b34dd3d70b:static-site"
   },
+  "sshOffered": true,
   "warnings": []
 }

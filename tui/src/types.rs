@@ -1185,6 +1185,12 @@ pub struct LeaseView {
     /// where it came from.
     #[serde(default)]
     pub template: Option<String>,
+    /// Whether `access.ssh_port` is worth an `ssh` command (TOON_Network#138):
+    /// set once at spawn time from whether a real key was actually sent, and
+    /// kept — the provider always hands back an `ssh_port`, sshd or not, so
+    /// its mere presence proves nothing. See `lease-vault.ts`'s own field.
+    #[serde(rename = "sshOffered")]
+    pub ssh_offered: bool,
 }
 
 /// `LeaseLife` in `daemon.ts`: a tagged union on `phase`, with the three
@@ -1788,6 +1794,11 @@ pub struct TemplateView {
     pub env_tenant: Vec<String>,
     #[serde(rename = "minResources", default)]
     pub min_resources: Option<TemplateResources>,
+    /// Informational, not part of spec §8.3's shape (TOON_Network#138): see
+    /// `templates.ts`'s own field. `true` unless the publisher said plainly
+    /// `ssh_offered: false`.
+    #[serde(rename = "sshOffered")]
+    pub ssh_offered: bool,
     pub availability: TemplateAvailability,
     #[serde(default)]
     pub warnings: Vec<String>,
@@ -1902,6 +1913,10 @@ pub struct SpawnContent {
 pub struct ExpandedTemplate {
     pub template: String,
     pub spawn: SpawnContent,
+    /// `template.sshOffered`, echoed: whether `spawn.ssh_public_key` is real
+    /// (TOON_Network#138).
+    #[serde(rename = "sshOffered")]
+    pub ssh_offered: bool,
     #[serde(default)]
     pub warnings: Vec<String>,
 }

@@ -129,7 +129,11 @@ export function WorkloadCard({ card, workloads }: { card: Card; workloads: Workl
       <Life card={card} />
       <Takeover set={card.set} />
       <Runway runway={card.runway} set={card.set} />
-      <Access access={runningAccess(card)} hidden={card.provider.hidden} />
+      <Access
+        access={runningAccess(card)}
+        hidden={card.provider.hidden}
+        sshOffered={card.lease.sshOffered}
+      />
 
       <Actions card={card} workloads={workloads} busy={busy} />
       {card.set.warm && <Members card={card} workloads={workloads} busy={busy} />}
@@ -509,8 +513,27 @@ export function duration(seconds: number): string {
  * showing it is not a leak — it is the whole of how a tenant reaches its own
  * workload, and §10 says a tenant dials it exactly as it would an IP. What is
  * never shown, here or anywhere, is a host for the PROVIDER.
+ *
+ * **The SSH command is conditional** (TOON_Network#138). The provider always
+ * hands back an `access.ssh_port` — it forwards to the container's port 22
+ * whether or not anything is listening there — so `ssh_port !== undefined` is
+ * not a reason to believe SSH works. `sshOffered` is: it comes from the Lease
+ * Vault record set once at spawn time (`lease.ts`), true unless the Template
+ * this workload was spawned from said plainly that it has no SSH, or no real
+ * key was ever sent. A key that WAS sent for an image that turns out not to
+ * run sshd cannot be told apart from here, so that case keeps showing the
+ * command — the false negative is worse than the false positive. Only the
+ * cases this console actually knows about are hidden.
  */
-function Access({ access, hidden }: { access?: LeaseAccess | undefined; hidden?: boolean }) {
+function Access({
+  access,
+  hidden,
+  sshOffered,
+}: {
+  access?: LeaseAccess | undefined;
+  hidden?: boolean;
+  sshOffered: boolean;
+}) {
   if (!access) return null;
   const { host, ssh_port: sshPort, ports } = access;
   return (
@@ -524,7 +547,7 @@ function Access({ access, hidden }: { access?: LeaseAccess | undefined; hidden?:
           </span>
         )}
       </dd>
-      {sshPort !== undefined && (
+      {sshOffered && sshPort !== undefined && (
         <>
           <dt className="text-muted-foreground">SSH</dt>
           <dd className="font-mono">
@@ -532,9 +555,21 @@ function Access({ access, hidden }: { access?: LeaseAccess | undefined; hidden?:
           </dd>
         </>
       )}
-      {(ports ?? []).map((port) => (
-        <ForwardedPort key={port.container_port} host={host} port={port} />
-      ))}
+      {!sshOffered && (
+        <>
+          <dt className="text-muted-foreground">SSH</dt>
+          <dd className="text-muted-foreground text-xs">
+            Not offered — this workload was spawned with no SSH key.
+          </dd>
+        </>
+      )}
+      {(ports ?? []).map((port) =>
+        sshOffered ? (
+          <ForwardedPort key={port.container_port} host={host} port={port} />
+        ) : (
+          <HttpPort key={port.container_port} host={host} port={port} />
+        )
+      )}
     </dl>
   );
 }
@@ -551,6 +586,31 @@ function ForwardedPort({
       <dt className="text-muted-foreground">Port {port.container_port}</dt>
       <dd className="font-mono">
         {host}:{port.host_port}
+      </dd>
+    </>
+  );
+}
+
+/**
+ * A port shown as the URL it actually is, for a workload with no SSH command
+ * on the card (TOON_Network#138) — "web: http://host:port", clickable rather
+ * than a host and a number a person has to assemble themselves.
+ */
+function HttpPort({
+  host,
+  port,
+}: {
+  host: string;
+  port: { container_port: number; host_port: number };
+}) {
+  const url = `http://${host}:${port.host_port}`;
+  return (
+    <>
+      <dt className="text-muted-foreground">web</dt>
+      <dd className="font-mono">
+        <a href={url} target="_blank" rel="noreferrer" className="underline">
+          {url}
+        </a>
       </dd>
     </>
   );

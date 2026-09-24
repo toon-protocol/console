@@ -99,6 +99,35 @@ export const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 export const SSH_PUBLIC_KEY =
   /^(ssh-ed25519|ssh-rsa|ssh-dss|ecdsa-sha2-[a-z0-9-]+|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com) [A-Za-z0-9+/]+={0,3}( .*)?$/u;
 
+/**
+ * The key a spawn carries when its Template does not offer SSH (`templates.ts`'s
+ * `sshOffered`), used in place of the tenant's own.
+ *
+ * §6.2 makes `ssh_public_key` a required field on EVERY spawn — the provider
+ * forwards `access.ssh_port` to the container's port 22 and installs whatever
+ * key it is given, whether or not the image runs an SSH daemon at all
+ * (TOON_Network#138's smoke found this the hard way: `traefik/whoami` has no
+ * sshd, and the console was asking for a key and showing an `ssh` command
+ * anyway). A Template that is honest about not offering SSH still has to send
+ * SOMETHING to satisfy the wire — and what it sends must not be the tenant's
+ * real key, which nobody could use against this image anyway and which has no
+ * business leaving this machine for no reason. This fixed, well-formed,
+ * never-secret placeholder is that something.
+ *
+ * `lease.ts` compares a spawn's `ssh_public_key` against this constant to
+ * decide `ssh_offered` on the Lease Vault record — the one signal recorded at
+ * spawn time and kept for as long as the lease is, rather than re-derived from
+ * a Template that may since have changed or vanished from the relays.
+ *
+ * It is an ordinary ed25519 public key whose private half was generated and
+ * destroyed at once (`ssh-keygen`, then `shred`), so nobody can log in with
+ * it. It is deliberately NOT an all-zero key: that encodes a small-order
+ * point, for which some ed25519 verifiers accept forged signatures, and an
+ * image that does run sshd would then take a login from anyone.
+ */
+export const NO_SSH_PLACEHOLDER_KEY =
+  'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEiTFdstu+75Fi+qE6yXVLgSdoRQ7DYKJ16TL0PLGRK7 no-ssh-offered-by-template';
+
 /** A fresh `workload_id`: 32 bytes the tenant chooses at random (§6.2). */
 export function newWorkloadId(): string {
   return randomBytes(32).toString('hex');

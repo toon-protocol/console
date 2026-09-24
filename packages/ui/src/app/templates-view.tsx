@@ -258,7 +258,10 @@ function SpawnForm({
     );
     void templates.expand(template.address, {
       ...(Object.keys(wanted).length === 0 ? {} : { env: wanted }),
-      sshPublicKey,
+      // `template.sshOffered` false means the daemon substitutes its own
+      // placeholder key (TOON_Network#138) — nothing this form collects
+      // would ever reach the wire, so the field is not even shown below.
+      sshPublicKey: template.sshOffered ? sshPublicKey : '',
       ...(volumeGb === '' ? {} : { volumeGb: Number(volumeGb) }),
     });
   };
@@ -302,18 +305,24 @@ function SpawnForm({
         </div>
       )}
 
-      <div className="grid gap-1">
-        <Label htmlFor={`${template.address}-ssh`}>SSH public key</Label>
-        <Input
-          id={`${template.address}-ssh`}
-          placeholder="ssh-ed25519 AAAA…"
-          value={sshPublicKey}
-          onChange={(event) => setSshPublicKey(event.target.value)}
-        />
+      {template.sshOffered ? (
+        <div className="grid gap-1">
+          <Label htmlFor={`${template.address}-ssh`}>SSH public key</Label>
+          <Input
+            id={`${template.address}-ssh`}
+            placeholder="ssh-ed25519 AAAA…"
+            value={sshPublicKey}
+            onChange={(event) => setSshPublicKey(event.target.value)}
+          />
+          <p className="text-muted-foreground text-xs">
+            The only way into the workload: no password is ever issued (§9).
+          </p>
+        </div>
+      ) : (
         <p className="text-muted-foreground text-xs">
-          The only way into the workload: no password is ever issued (§9).
+          {template.name} does not offer SSH, so no key is asked for.
         </p>
-      </div>
+      )}
 
       <div className="grid gap-1">
         <Label htmlFor={`${template.address}-volume`}>Volume (GB, optional)</Label>

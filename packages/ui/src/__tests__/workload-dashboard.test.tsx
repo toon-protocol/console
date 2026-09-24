@@ -145,6 +145,7 @@ function card(overrides: Partial<WorkloadCard> = {}): WorkloadCard {
       image: { reference: 'traefik/whoami', digest: `sha256:${'c'.repeat(64)}` },
       ports: [],
       envKeys: [],
+      sshOffered: true,
       createdAt: '2026-09-23T10:00:00.000Z',
       localOnly: false,
       source: 'relays',
@@ -829,5 +830,43 @@ describe('the workload dashboard', () => {
 
     expect(await screen.findByText('Automatic extension is off')).toBeInTheDocument();
     expect(screen.getByText(/It stopped: The budget is spent/u)).toBeInTheDocument();
+  });
+
+  /* ------------------------------------------------------------------- */
+  /* Showing SSH only when it was offered (TOON_Network#138)              */
+  /* ------------------------------------------------------------------- */
+
+  it('shows the SSH command when the lease was spawned with a key', async () => {
+    await open();
+
+    expect(await screen.findByText('SSH')).toBeInTheDocument();
+    expect(screen.getByText('ssh -p 40000 tenant@203.0.113.7')).toBeInTheDocument();
+  });
+
+  it('hides the SSH command and offers the HTTP port instead when no key was sent', async () => {
+    const base = card();
+    dashboard = dashboardOf({
+      ...base,
+      lease: { ...base.lease, sshOffered: false },
+      status: {
+        kind: 'read',
+        life: { phase: 'running' },
+        role: 'standalone',
+        expiresAt: 1_790_003_600,
+        access: {
+          host: '203.0.113.7',
+          ssh_port: 40000,
+          ports: [{ container_port: 80, host_port: 30080 }],
+        },
+        readAt: '2026-09-23T10:00:00.000Z',
+      },
+    });
+    await open();
+
+    await screen.findByText('running');
+    expect(screen.queryByText(/ssh -p 40000/u)).not.toBeInTheDocument();
+    expect(screen.getByText(/no SSH key/u)).toBeInTheDocument();
+    expect(screen.getByText('web')).toBeInTheDocument();
+    expect(screen.getByText('http://203.0.113.7:30080')).toBeInTheDocument();
   });
 });

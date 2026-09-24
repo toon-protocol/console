@@ -494,11 +494,23 @@ fn gallery_handle_key(state: &mut NewWorkloadViewState, key: KeyEvent) -> Option
 /* Form                                                                       */
 /* -------------------------------------------------------------------------- */
 
+/// Whether the Template open in the Form stage asks for an SSH key at all
+/// (TOON_Network#138) — `true` with no Template chosen yet, so nothing below
+/// hides a field before there is anything to judge it by.
+fn template_offers_ssh(state: &NewWorkloadViewState) -> bool {
+    state
+        .template
+        .as_ref()
+        .is_none_or(|template| template.ssh_offered)
+}
+
 fn form_targets(state: &NewWorkloadViewState) -> Vec<FormTarget> {
     let mut out: Vec<FormTarget> = (0..state.form.env_names.len())
         .map(FormTarget::Env)
         .collect();
-    out.push(FormTarget::Ssh);
+    if template_offers_ssh(state) {
+        out.push(FormTarget::Ssh);
+    }
     out.push(FormTarget::Volume);
     out.push(FormTarget::Preview);
     out
@@ -637,7 +649,12 @@ fn validate_form(
     state.form.errors.clear();
     let mut ok = true;
 
-    if state.form.ssh.is_empty() {
+    // Only a Template that offers SSH asks for a key at all (TOON_Network#138):
+    // §6.2 still requires ONE on the wire, but the daemon substitutes its own
+    // placeholder for a Template that says it has none — this form is not
+    // where that decision is made, and does not pretend otherwise by asking.
+    let offers_ssh = template_offers_ssh(state);
+    if offers_ssh && state.form.ssh.is_empty() {
         state.form.errors.push((
             FormTarget::Ssh,
             "Required — no password is ever issued for a workload (spec §6.2).".to_string(),
@@ -676,7 +693,12 @@ fn validate_form(
         }
     }
 
-    Some((env, state.form.ssh.value().to_string(), volume_gb))
+    let ssh_public_key = if offers_ssh {
+        state.form.ssh.value().to_string()
+    } else {
+        String::new()
+    };
+    Some((env, ssh_public_key, volume_gb))
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1388,9 +1410,19 @@ fn draw_form(frame: &mut Frame, area: Rect, state: &NewWorkloadViewState) {
         push_error(&mut lines, &state.form.errors, target);
     }
 
-    let ssh_focused = targets.get(state.form.cursor) == Some(&FormTarget::Ssh);
-    lines.push(state.form.ssh.line(ssh_focused && state.form.editing));
-    push_error(&mut lines, &state.form.errors, FormTarget::Ssh);
+    if template_offers_ssh(state) {
+        let ssh_focused = targets.get(state.form.cursor) == Some(&FormTarget::Ssh);
+        lines.push(state.form.ssh.line(ssh_focused && state.form.editing));
+        push_error(&mut lines, &state.form.errors, FormTarget::Ssh);
+    } else if let Some(template) = &state.template {
+        lines.push(Line::from(Span::styled(
+            format!(
+                "{} does not offer SSH, so no key is asked for.",
+                template.name
+            ),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
 
     let volume_focused = targets.get(state.form.cursor) == Some(&FormTarget::Volume);
     lines.push(state.form.volume.line(volume_focused && state.form.editing));
@@ -1656,6 +1688,7 @@ mod tests {
                 storage_gb: 5,
                 gpu: None,
             }),
+            ssh_offered: true,
             availability: TemplateAvailability::Available {
                 checked: "1 image entry".to_string(),
                 entry: None,
@@ -1775,6 +1808,7 @@ mod tests {
                 standby_set: None,
                 template: Some(template.address.clone()),
             },
+            ssh_offered: template.ssh_offered,
             warnings: Vec::new(),
         }
     }
@@ -1947,6 +1981,42 @@ mod tests {
         }
         assert!(state.expanding);
         assert!(state.form.errors.is_empty());
+    }
+
+    /* -------------------------------------------------------------------- */
+    /* A Template that does not offer SSH (TOON_Network#138)                 */
+    /* -------------------------------------------------------------------- */
+
+    fn no_ssh_template(name: &str) -> TemplateView {
+        let mut template = available_template(name);
+        template.ssh_offered = false;
+        template
+    }
+
+    #[test]
+    fn the_form_asks_for_no_ssh_key_when_the_template_does_not_offer_it() {
+        let mut state = NewWorkloadViewState::new();
+        state.template = Some(no_ssh_template("smoke-http"));
+        state.form = FormFields::new(state.template.as_ref().unwrap());
+        assert!(!form_targets(&state).contains(&FormTarget::Ssh));
+    }
+
+    #[test]
+    fn preview_sends_no_key_and_no_error_when_the_template_does_not_offer_ssh() {
+        let mut state = NewWorkloadViewState::new();
+        state.template = Some(no_ssh_template("smoke-http"));
+        state.form = FormFields::new(state.template.as_ref().unwrap());
+        // The last target is still "Preview" — SSH was never in the list.
+        state.form.cursor = form_targets(&state).len() - 1;
+        let command = form_handle_key(&mut state, key(KeyCode::Enter));
+        match command {
+            Some(Command::ExpandTemplate(request)) => {
+                assert_eq!(request.ssh_public_key, "");
+            }
+            other => panic!("expected ExpandTemplate, got {other:?}"),
+        }
+        assert!(state.form.errors.is_empty());
+        assert!(state.expanding);
     }
 
     #[test]
@@ -2756,6 +2826,15 @@ mod tests {
         state.form.cursor = form_targets(&state).len() - 1;
         state.stage = Stage::Form;
         form_handle_key(&mut state, key(KeyCode::Enter)); // no SSH key typed yet
+        insta::assert_snapshot!(render(&state));
+    }
+
+    #[test]
+    fn snapshot_form_for_a_template_that_offers_no_ssh() {
+        let mut state = NewWorkloadViewState::new();
+        state.template = Some(no_ssh_template("smoke-http"));
+        state.form = FormFields::new(state.template.as_ref().unwrap());
+        state.stage = Stage::Form;
         insta::assert_snapshot!(render(&state));
     }
 

@@ -30,6 +30,7 @@ import {
   DIGEST,
   ENV_NAME,
   HEX_32,
+  NO_SSH_PLACEHOLDER_KEY,
   SSH_PUBLIC_KEY,
   type SpawnContent,
   type SpawnImage,
@@ -575,6 +576,9 @@ export class LeaseStore {
       ...(first.ready.content.template === undefined
         ? {}
         : { template: first.ready.content.template }),
+      // A real key was sent unless it is the stand-in `expandTemplate` uses
+      // for a Template that does not offer SSH (TOON_Network#138).
+      ssh_offered: first.ready.content.ssh_public_key !== NO_SSH_PLACEHOLDER_KEY,
       ...(localOnly ? { local_only: true } : {}),
     };
 
@@ -876,6 +880,9 @@ export class LeaseStore {
       env_keys: Object.keys(ready.content.env),
       created_at: this.#at().toISOString(),
       ...(ready.content.template === undefined ? {} : { template: ready.content.template }),
+      // Same rule as `spawnSet`, above: a real key was sent unless it is the
+      // stand-in for a Template that does not offer SSH (TOON_Network#138).
+      ssh_offered: ready.content.ssh_public_key !== NO_SSH_PLACEHOLDER_KEY,
       ...(localOnly ? { local_only: true } : {}),
     };
 

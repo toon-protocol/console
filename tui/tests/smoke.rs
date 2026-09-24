@@ -1101,8 +1101,12 @@ async fn template(
         found.image.digest == published.digest,
         "the gallery names a different image digest from the one published",
     )?;
+    must(
+        !found.ssh_offered,
+        "this smoke's own Template must say plainly that it offers no SSH (TOON_Network#138)",
+    )?;
     facts.push(format!(
-        "the gallery reads {} back as available, image {}",
+        "the gallery reads {} back as available, image {}, with no SSH offered",
         found.name,
         short(&found.image.digest)
     ));
@@ -1122,17 +1126,28 @@ async fn spawn(
     cost: &mut Option<String>,
     facts: &mut Vec<String>,
 ) -> Outcome<String> {
-    // What the form's "Preview the spawn" sends, and keeps for the spawn.
+    // What the form's "Preview the spawn" sends, and keeps for the spawn —
+    // no key of this run's, since the Template offers none and
+    // `views::new_workload`'s Form stage would not have asked for one
+    // (TOON_Network#138).
     let settings = ExpandTemplateRequest {
         template: published.address.clone(),
         env: None,
-        ssh_public_key: keys.ssh_public_key.clone(),
+        ssh_public_key: String::new(),
         volume_gb: None,
     };
     let expansion = api::expand_template(client, &settings).await?;
     must(
         expansion.spawn.image.digest == published.digest,
         "the expansion names a different image from the Template",
+    )?;
+    must(
+        expansion.spawn.ssh_public_key != keys.ssh_public_key,
+        "the expansion sent this run's real SSH key to a Template that offers no SSH",
+    )?;
+    must(
+        !expansion.ssh_offered,
+        "the expansion reads `sshOffered: true` for a Template that offers no SSH",
     )?;
     let request = spawn_request_from_expansion(
         &expansion,
@@ -1226,9 +1241,14 @@ async fn spawn(
             running.lease.template, published.address
         ),
     )?;
+    must(
+        !running.lease.ssh_offered,
+        "the Lease Vault record reads `sshOffered: true` for a workload spawned with no key \
+         (TOON_Network#138)",
+    )?;
     facts.push(format!(
         "the card reads running until {}, the Root Secret on {}, and the record names the \
-         Template it came from",
+         Template it came from, with no SSH offered",
         expires_at(&running)
             .map(iso)
             .unwrap_or_else(|| "an unknown expiry".to_string()),

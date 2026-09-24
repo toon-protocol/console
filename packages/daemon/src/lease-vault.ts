@@ -272,6 +272,15 @@ export interface VaultedLease {
   readonly env_keys: readonly string[];
   /** The Template this spawn's values came from, when one did (§8.3, #94). */
   readonly template?: string | undefined;
+  /**
+   * Whether this spawn's `ssh_public_key` is the tenant's own, decided once at
+   * spawn time and kept — never re-derived from the Template later, which may
+   * by then have changed or left the relays this console reads (TOON_Network#138).
+   * Absent on a record written before this field existed, which reads as
+   * `true`: those records really did carry a real key, because asking for one
+   * was the only behaviour there ever was.
+   */
+  readonly ssh_offered?: boolean | undefined;
   readonly created_at: string;
   /**
    * Marked local only: this record was never published anywhere (ADR 0021).
@@ -363,6 +372,8 @@ export interface LeaseView {
   readonly ports: readonly LeasePort[];
   readonly envKeys: readonly string[];
   readonly template?: string | undefined;
+  /** `record.ssh_offered`, defaulted true: see `VaultedLease.ssh_offered`. */
+  readonly sshOffered: boolean;
   readonly createdAt: string;
   readonly localOnly: boolean;
   readonly role?: string | undefined;
@@ -1451,6 +1462,7 @@ function toView(held: OpenLease): LeaseView {
     ports: record.ports,
     envKeys: record.env_keys,
     ...(record.template === undefined ? {} : { template: record.template }),
+    sshOffered: record.ssh_offered !== false,
     createdAt: record.created_at,
     localOnly: record.local_only === true,
     ...(record.role === undefined ? {} : { role: record.role }),

@@ -39,6 +39,7 @@ const template: TemplateView = {
   envFixed: { MODE: 'production' },
   envTenant: ['SITE_TITLE'],
   minResources: { cpuMillicores: 500, memoryMb: 256, storageGb: 4 },
+  sshOffered: true,
   availability: {
     state: 'available',
     checked: 'Its Image Registry entry was read from a relay.',
@@ -98,6 +99,7 @@ const expansion: ExpandedTemplate = {
     ssh_public_key: SSH_KEY,
     template: ADDRESS,
   },
+  sshOffered: true,
   warnings: [],
 };
 
@@ -273,5 +275,54 @@ describe('the Template gallery', () => {
     await userEvent.click(within(region).getByRole('button', { name: 'Preview the spawn' }));
 
     expect(await within(region).findByRole('alert')).toHaveTextContent(/fixes `MODE`/u);
+  });
+
+  /* ---------------------------------------------------------------------- */
+  /* A Template that does not offer SSH (TOON_Network#138)                   */
+  /* ---------------------------------------------------------------------- */
+
+  it('asks for no SSH key when the Template does not offer it, and sends none', async () => {
+    const noSsh: TemplateView = {
+      ...template,
+      name: 'smoke-http',
+      address: `30436:${PUBLISHER}:smoke-http`,
+      envTenant: [],
+      sshOffered: false,
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((path: string, init?: RequestInit) => {
+        if (path.startsWith('/api/health')) return Promise.resolve(answer(health));
+        if (path.startsWith('/api/profiles')) {
+          return Promise.resolve(answer({ activeId: 'devnet', profiles: [health.profile] }));
+        }
+        if (path === '/api/account') {
+          return Promise.resolve(
+            answer({
+              signedIn: false,
+              signers: [],
+              keystore: { backend: 'file', location: '/k', needsPassphrase: false },
+            })
+          );
+        }
+        if (path === '/api/templates') return Promise.resolve(answer(gallery([noSsh])));
+        if (path === '/api/templates/expand') {
+          posted.push({ path, body: JSON.parse(String(init?.body)) as unknown });
+          return Promise.resolve(answer({ ...expansion, sshOffered: false }));
+        }
+        return Promise.resolve(answer({}, 404));
+      })
+    );
+
+    const region = await open();
+    await within(region).findByText('smoke-http');
+
+    expect(within(region).queryByLabelText('SSH public key')).not.toBeInTheDocument();
+    expect(within(region).getByText(/does not offer SSH/u)).toBeInTheDocument();
+
+    await userEvent.click(within(region).getByRole('button', { name: 'Preview the spawn' }));
+
+    await waitFor(() => expect(posted).toHaveLength(1));
+    expect(posted[0]?.body).toEqual({ template: `30436:${PUBLISHER}:smoke-http`, sshPublicKey: '' });
   });
 });
