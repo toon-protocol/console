@@ -8,14 +8,28 @@
 //! `<details>` — expanding it is left to a later ticket's `Enter` handling,
 //! not built here.
 
+use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
 
+use crate::app::Command;
 use crate::format::{format_time_of_day, format_uptime};
 use crate::types::{AnonTransportView, ConnectorHealth, Health, ProfileView};
+
+/// Health keeps no state of its own — no form, no selection, nothing to
+/// scroll — so this is the one view whose `handle_key` needs no `state`
+/// argument: `r`/`R` re-reads it (`use-console.ts` has no auto-poll for
+/// Health, matching `tui/README.md`'s own cadence rule), and every other key
+/// falls through to the global keymap.
+pub fn handle_key(key: KeyEvent) -> Option<Command> {
+    match key.code {
+        KeyCode::Char('r') | KeyCode::Char('R') => Some(Command::RefreshHealth),
+        _ => None,
+    }
+}
 
 pub fn draw(frame: &mut Frame, area: Rect, health: &Health) {
     let rows = if health.anon.is_some() {
@@ -216,9 +230,28 @@ mod tests {
         AnonTransportView, ConnectorHealth, DaemonInfo, ProfileRpc, ProfileView, RouteView,
         SettlementView, StorageView,
     };
+    use crossterm::event::KeyModifiers;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
     use std::fs;
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn r_and_capital_r_refresh_and_everything_else_falls_through() {
+        assert_eq!(
+            handle_key(key(KeyCode::Char('r'))),
+            Some(Command::RefreshHealth)
+        );
+        assert_eq!(
+            handle_key(key(KeyCode::Char('R'))),
+            Some(Command::RefreshHealth)
+        );
+        assert_eq!(handle_key(key(KeyCode::Char('q'))), None);
+        assert_eq!(handle_key(key(KeyCode::Tab)), None);
+    }
 
     /// A hand-built, DETERMINISTIC `Health`, for the snapshot below.
     ///

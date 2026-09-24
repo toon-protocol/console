@@ -9,19 +9,16 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
 use crate::types::{
-    ChainSeedStatus, DocsIndex, DocsPage, ExpandTemplateRequest, Health, LocalSignerRequest,
-    Profiles, SessionStatus, SpawnRequestBody, StandbySetRequestBody, TemplateSpawnRequestBody,
+    ChainSeedStatus, ExpandTemplateRequest, Health, LocalSignerRequest, Profiles, SessionStatus,
+    SpawnRequestBody, StandbySetRequestBody, TemplateSpawnRequestBody,
 };
 use crate::views::account::{self, AccountViewState};
-use crate::views::directory::{self, DirectoryCommand, DirectoryViewState};
-use crate::views::funds::FundsState;
+use crate::views::directory::{self, DirectoryViewState};
+use crate::views::docs;
+use crate::views::funds::{self, FundsState};
+use crate::views::health;
 use crate::views::new_workload::{self, NewWorkloadViewState};
 use crate::views::workloads::{self, WorkloadsViewState};
-
-/// How many lines `PageUp`/`PageDown` scroll the Docs article — arbitrary,
-/// but big enough that a page key visibly moves a full screen's worth on a
-/// typical terminal height.
-const DOCS_PAGE_SCROLL: u16 = 10;
 
 /// The seven views of the sidebar (ADR 0028), in the order `1`-`7` select
 /// them. `Health` is sixth, matching the spec's own numbering and the web
@@ -162,29 +159,11 @@ pub struct App {
     /// (`views::directory::liveness_now`) — every other view reads the
     /// daemon's own timestamps instead.
     pub now_ms: i64,
-    /// The Docs reading list (TOON_Network#148): `GET /api/docs`.
-    pub docs_index: Option<DocsIndex>,
-    /// The article open, if any: `GET /api/docs/<d>`. `Some` is what puts the
-    /// view into "reading an article" mode rather than "picking one".
-    pub docs_page: Option<DocsPage>,
-    pub loading_docs: bool,
-    /// `GET /api/docs` failed. Shown in the reading list.
-    pub docs_error: Option<String>,
-    /// Reused for two failures that never happen at once, since only one is
-    /// ever showable at a time: `GET /api/docs/<d>` failed (shown in the
-    /// reading list, mirroring `use-docs.ts`'s `openError`), or `xdg-open`
-    /// failed on a focused link (shown over the open article instead).
-    pub docs_open_error: Option<String>,
-    /// Which row of the reading list `j`/`k` has selected.
-    pub docs_selected: usize,
-    /// How far `j`/`k`/`PageUp`/`PageDown` have scrolled the open article.
-    pub docs_scroll: u16,
-    /// The open article's links, in reading order — just the hrefs, so `o`
-    /// can open one without re-parsing the Markdown on every keypress. Set
-    /// alongside `docs_page` and cleared when it closes.
-    pub docs_link_hrefs: Vec<String>,
-    /// Which of `docs_link_hrefs` `n`/`N` has focused; `o` opens this one.
-    pub docs_link_index: usize,
+    /// The Docs view's own state (TOON_Network#148): the reading list, an
+    /// open article, and where the cursor/scroll/focused-link is. Kept as
+    /// one field the same way every other view's state is — `handle_key`
+    /// only ever reaches into it through `views::docs::handle_key`.
+    pub docs: docs::DocsViewState,
     /// The Funds view's own state (TOON_Network#147) — deposits, channel
     /// balances, the gas station and its confirmations. Kept as one field
     /// rather than spread across `App` so `views::funds` owns its shape.
@@ -225,15 +204,7 @@ impl App {
             directory: DirectoryViewState::new(),
             loading_directory: false,
             now_ms: now_ms(),
-            docs_index: None,
-            docs_page: None,
-            loading_docs: false,
-            docs_error: None,
-            docs_open_error: None,
-            docs_selected: 0,
-            docs_scroll: 0,
-            docs_link_hrefs: Vec::new(),
-            docs_link_index: 0,
+            docs: docs::DocsViewState::new(),
             funds: FundsState::default(),
             workloads: WorkloadsViewState::new(),
             new_workload: NewWorkloadViewState::new(),
@@ -272,11 +243,12 @@ pub enum Command {
     None,
     Quit,
     RefreshHealth,
-    /// `views::directory::DirectoryCommand::Refresh`, translated: re-read
-    /// `GET /api/directory` with `app.directory.filters`.
+    /// `views::directory::handle_key`'s own `i`/`a`/`g`/`d`/`n`/`H`/`x`/`r`:
+    /// re-read `GET /api/directory` with `app.directory.filters`.
     RefreshDirectory,
     /// Re-read the Docs index, or the open article if one is open — the
-    /// runtime decides which by checking `App::docs_page`.
+    /// runtime decides which by checking `App::docs`'s
+    /// [`docs::DocsViewState::page`](crate::views::docs::DocsViewState::page).
     RefreshDocs,
     /// Fetch `GET /api/docs/<d>` for the article at this `d`.
     OpenDoc(String),
@@ -401,9 +373,15 @@ pub enum Command {
 
 /// The one place a keypress becomes a decision.
 ///
-/// `?` toggles the help overlay and swallows every other key while it is
-/// open, except the keys that close it again — a help screen a keypress
-/// falls through is a help screen that also does whatever it was covering.
+/// One mechanism (TOON_Network#138's code review): every view exposes its
+/// own `fn handle_key(&mut state, key) -> Option<Command>` — [`view_key`]
+/// below is the whole dispatch, one arm per [`View`] — and `None` means
+/// "not mine," falling through to the global keymap beneath it. A view with
+/// a modal to swallow keys for (a confirm dialog, a detail popup, a focused
+/// text field) does that inside its own `handle_key`, the same way
+/// [`app.help_open`](App::help_open) does here: checked first, and
+/// answering `Some` for literally every key while it is open, closers
+/// included, so nothing underneath ever sees one.
 pub fn handle_key(app: &mut App, key: KeyEvent) -> Command {
     if app.help_open {
         match key.code {
@@ -413,70 +391,39 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> Command {
         return Command::None;
     }
 
-    // Mirrors the help overlay just above: while the Directory view's detail
-    // popup covers the screen, only the keys that close it do anything, so
-    // Esc closes the popup rather than quitting the app underneath it.
-    if app.view == View::Directory && app.directory.detail_open {
-        return match directory::handle_key(&mut app.directory, key) {
-            DirectoryCommand::Refresh => Command::RefreshDirectory,
-            DirectoryCommand::None => Command::None,
-        };
+    if let Some(command) = view_key(app, key) {
+        return command;
     }
 
-    // A confirmation open on Funds swallows every key until it is answered
-    // (TOON_Network#147) — the same "help covers everything underneath it"
-    // rule as `help_open` above, so `Esc` cancels it and `q` merely disarms
-    // it, rather than either quitting the app.
-    if app.view == View::Funds {
-        if let Some(command) = crate::views::funds::handle_confirm_key(&mut app.funds, key) {
-            return command;
-        }
-    }
+    global_key(app, key)
+}
 
-    // The Account view has its own forms: while it is on screen, it gets
-    // first look at every key. It hands back `Some(command)` for a key it
-    // acted on (typing into a field, moving the highlighted row, submitting
-    // a form) and `None` for one it has no use for — a digit, `Tab`, `q` —
-    // so those still fall through to the global bindings below exactly as
-    // they do on every other view. The one exception is while a field is
-    // being typed into: then it claims everything, so a `q` in a passphrase
-    // does not quit the app.
-    if app.view == View::Account {
-        if let Some(command) = account::handle_key(
+/// Gives the current view first refusal on a key. `None` means it has no
+/// opinion — a digit, `Tab`, `q`, `?`, ... while nothing view-specific is
+/// open — and [`global_key`] gets it next.
+fn view_key(app: &mut App, key: KeyEvent) -> Option<Command> {
+    match app.view {
+        View::Workloads => workloads::handle_key(&mut app.workloads, key),
+        View::New => new_workload::handle_key(&mut app.new_workload, key),
+        View::Directory => directory::handle_key(&mut app.directory, key),
+        View::Funds => funds::handle_key(&mut app.funds, key),
+        View::Account => account::handle_key(
             &mut app.account_view,
             app.account.as_ref(),
             app.profiles.as_ref(),
             app.chain_seed.as_ref(),
             key,
-        ) {
-            return command;
-        }
+        ),
+        View::Health => health::handle_key(key),
+        View::Docs => docs::handle_key(&mut app.docs, key),
     }
+}
 
-    // Workloads gets first refusal too (TOON_Network#143), the same shape as
-    // Account just above: its own filter box and confirmation modal need to
-    // swallow keys (a digit, `Esc`, `q`) that would otherwise switch a view
-    // or quit, and only it knows when it is in one of those states. A key it
-    // has no opinion about (`None`) falls through to the ordinary keymap
-    // below, which is how `Tab`, `1`-`7` and `?` keep working while the
-    // Workloads view is merely showing its list.
-    if app.view == View::Workloads {
-        if let Some(command) = workloads::handle_key(&mut app.workloads, key) {
-            return command;
-        }
-    }
-
-    // New workload (TOON_Network#146) gets first refusal the same way: its
-    // own confirm modal, its Form stage's text fields, and its three
-    // pickers each need to swallow keys a global binding would otherwise
-    // claim (a digit while typing an env value, `Enter` while a listing is
-    // highlighted, ...).
-    if app.view == View::New {
-        if let Some(command) = new_workload::handle_key(&mut app.new_workload, key) {
-            return command;
-        }
-    }
-
+/// The keys every view shares: quit, help, view switching. Nothing here is
+/// conditioned on `app.view` any more — a key one view needs to treat
+/// differently belongs in that view's own `handle_key` ([`view_key`]),
+/// tried first.
+fn global_key(app: &mut App, key: KeyEvent) -> Command {
     match key.code {
         KeyCode::Char('q') | KeyCode::Esc => {
             app.should_quit = true;
@@ -512,104 +459,6 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> Command {
             }
             Command::None
         }
-        KeyCode::Char('r') | KeyCode::Char('R') if app.view == View::Health => {
-            Command::RefreshHealth
-        }
-        KeyCode::Char('r') | KeyCode::Char('R') if app.view == View::Account => {
-            Command::RefreshAccount
-        }
-        KeyCode::Char('r') | KeyCode::Char('R') if app.view == View::Docs => Command::RefreshDocs,
-        // Reading list (no article open): `j`/`k` move the selection, `Enter`
-        // opens it.
-        KeyCode::Char('j') | KeyCode::Down if app.view == View::Docs && app.docs_page.is_none() => {
-            if let Some(len) = app.docs_index.as_ref().map(|index| index.docs.len()) {
-                if len > 0 {
-                    app.docs_selected = (app.docs_selected + 1).min(len - 1);
-                }
-            }
-            Command::None
-        }
-        KeyCode::Char('k') | KeyCode::Up if app.view == View::Docs && app.docs_page.is_none() => {
-            app.docs_selected = app.docs_selected.saturating_sub(1);
-            Command::None
-        }
-        KeyCode::Enter if app.view == View::Docs && app.docs_page.is_none() => {
-            match app
-                .docs_index
-                .as_ref()
-                .and_then(|index| index.docs.get(app.docs_selected))
-            {
-                Some(doc) => Command::OpenDoc(doc.d.clone()),
-                None => Command::None,
-            }
-        }
-        // An open article: `j`/`k`/`PageUp`/`PageDown` scroll it, `n`/`N`
-        // cycle which link is focused, `o` opens the focused one, and
-        // `Backspace` goes back to the reading list.
-        KeyCode::Char('j') | KeyCode::Down if app.view == View::Docs && app.docs_page.is_some() => {
-            app.docs_scroll = app.docs_scroll.saturating_add(1);
-            Command::None
-        }
-        KeyCode::Char('k') | KeyCode::Up if app.view == View::Docs && app.docs_page.is_some() => {
-            app.docs_scroll = app.docs_scroll.saturating_sub(1);
-            Command::None
-        }
-        KeyCode::PageDown if app.view == View::Docs && app.docs_page.is_some() => {
-            app.docs_scroll = app.docs_scroll.saturating_add(DOCS_PAGE_SCROLL);
-            Command::None
-        }
-        KeyCode::PageUp if app.view == View::Docs && app.docs_page.is_some() => {
-            app.docs_scroll = app.docs_scroll.saturating_sub(DOCS_PAGE_SCROLL);
-            Command::None
-        }
-        KeyCode::Char('n') if app.view == View::Docs && app.docs_page.is_some() => {
-            let len = app.docs_link_hrefs.len();
-            if len > 0 {
-                app.docs_link_index = (app.docs_link_index + 1) % len;
-            }
-            Command::None
-        }
-        KeyCode::Char('N') if app.view == View::Docs && app.docs_page.is_some() => {
-            let len = app.docs_link_hrefs.len();
-            if len > 0 {
-                app.docs_link_index = (app.docs_link_index + len - 1) % len;
-            }
-            Command::None
-        }
-        KeyCode::Char('o') if app.view == View::Docs && app.docs_page.is_some() => {
-            match app.docs_link_hrefs.get(app.docs_link_index) {
-                Some(href) => Command::OpenDocsLink(href.clone()),
-                None => Command::None,
-            }
-        }
-        KeyCode::Backspace if app.view == View::Docs && app.docs_page.is_some() => {
-            app.docs_page = None;
-            app.docs_link_hrefs.clear();
-            app.docs_link_index = 0;
-            app.docs_scroll = 0;
-            app.docs_open_error = None;
-            Command::None
-        }
-        // Directory has no forms of its own — every key it does not want
-        // itself (its filter toggles, `j`/`k`/`Enter` in the picker) falls
-        // to this catch, placed last among the guarded arms so the global
-        // keys above (quit, help, view switching, digits) still win even
-        // while Directory is the current view.
-        _ if app.view == View::Directory => match directory::handle_key(&mut app.directory, key) {
-            DirectoryCommand::Refresh => Command::RefreshDirectory,
-            DirectoryCommand::None => Command::None,
-        },
-        // Everything Funds handles for itself (TOON_Network#147) — selecting
-        // a chain, `y`/`o`/`f`/`g`/`b`, and its own `r`. Placed last among
-        // the guarded arms so a global key (quit, help, view switching, a
-        // digit) still wins even while Funds is the current view.
-        _ if app.view == View::Funds => crate::views::funds::handle_key(&mut app.funds, key),
-        // TOON_Network#144 frees lowercase `r` for the Workloads view's own
-        // rotate action (`views::workloads::handle_key`, which gets first
-        // refusal on every key and already claims it there) — matching
-        // ADR 0028's Main area line, "j/k move, Enter opens, / filters and
-        // R refreshes". Only capital `R` refreshes here now.
-        KeyCode::Char('R') if app.view == View::Workloads => Command::RefreshWorkloads,
         _ => Command::None,
     }
 }
@@ -790,5 +639,55 @@ mod tests {
         let mut app = App::new();
         let ev = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
         assert_eq!(handle_key(&mut app, ev), Command::Quit);
+    }
+
+    /// TOON_Network#138's code review: since every view now gets first
+    /// refusal (`view_key`) before the global keymap (`global_key`), this
+    /// proves the one thing that refactor must not break — `1`-`7`, `Tab`
+    /// and `?` still work, and `q` still quits, on EVERY view, with no text
+    /// field focused. A view whose own `handle_key` swallowed one of these
+    /// instead of returning `None` would fail here.
+    #[test]
+    fn global_keys_work_on_every_view_while_nothing_is_focused() {
+        for view in View::ALL {
+            let mut app = App::new();
+            app.view = view;
+            handle_key(&mut app, key(KeyCode::Tab));
+            assert_eq!(
+                app.view,
+                view.next(),
+                "Tab should move off {view:?} to the next view"
+            );
+
+            let mut app = App::new();
+            app.view = view;
+            for (digit, target) in [
+                ('1', View::Workloads),
+                ('2', View::New),
+                ('3', View::Directory),
+                ('4', View::Funds),
+                ('5', View::Account),
+                ('6', View::Health),
+                ('7', View::Docs),
+            ] {
+                handle_key(&mut app, key(KeyCode::Char(digit)));
+                assert_eq!(app.view, target, "digit {digit} from {view:?}");
+            }
+
+            let mut app = App::new();
+            app.view = view;
+            assert!(!app.help_open);
+            handle_key(&mut app, key(KeyCode::Char('?')));
+            assert!(app.help_open, "? should open help from {view:?}");
+
+            let mut app = App::new();
+            app.view = view;
+            assert_eq!(
+                handle_key(&mut app, key(KeyCode::Char('q'))),
+                Command::Quit,
+                "q should quit from {view:?}"
+            );
+            assert!(app.should_quit);
+        }
     }
 }

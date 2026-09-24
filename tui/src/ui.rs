@@ -155,7 +155,7 @@ fn draw_content(frame: &mut Frame, area: Rect, app: &App) {
             app.now_ms,
             app.loading_directory,
         ),
-        (View::Docs, _) => views::docs::draw(frame, area, app),
+        (View::Docs, _) => views::docs::draw(frame, area, &app.docs),
         (View::Account, _) => match &app.account {
             Some(status) => {
                 // One line, not one per concern — the same rule
@@ -243,7 +243,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
         ));
     }
     if app.view == View::Docs {
-        spans.push(if app.docs_page.is_some() {
+        spans.push(if app.docs.page.is_some() {
             Span::raw(" j/k scroll  n/N link  o open  r refresh  Backspace back ")
         } else {
             Span::raw(" j/k select  Enter open  r refresh ")

@@ -7,27 +7,156 @@
 //! or the Markdown this console shipped with — `docs-view.tsx`'s own comment
 //! calls this "exactly the sort of thing a person needs told while they are
 //! following instructions about money") and, when the relays could not be
-//! read, **why** the bundle is showing instead. `App::docs_page` is what
-//! switches between the two modes: `None` is the list, `Some` is a page.
+//! read, **why** the bundle is showing instead. [`DocsViewState::page`] is
+//! what switches between the two modes: `None` is the list, `Some` is a
+//! page.
 //!
 //! A terminal has no mouse-hover link and no text cursor to be "near", so
 //! opening a link is a two-key gesture rather than a click: `n`/`N` cycle
 //! which of the article's links is focused (drawn inverted, distinctly from
-//! the rest), and `o` opens that one with `xdg-open`. `App::handle_key` owns
-//! the state; this module only draws it.
+//! the rest), and `o` opens that one with `xdg-open`. [`handle_key`] owns the
+//! state, tried by `app::handle_key` before the global keymap (TOON_Network#138's
+//! code review: "every view exposes `fn handle_key`, `None` falls through").
 
+use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
 
-use crate::app::App;
+use crate::app::Command;
 use crate::markdown;
-use crate::types::{DocSummary, DocsIndex};
+use crate::types::{DocSummary, DocsIndex, DocsPage};
 
-pub fn draw(frame: &mut Frame, area: Rect, app: &App) {
-    match &app.docs_page {
+/// How many lines `PageUp`/`PageDown` scroll an open article — arbitrary,
+/// but big enough that a page key visibly moves a full screen's worth on a
+/// typical terminal height.
+const DOCS_PAGE_SCROLL: u16 = 10;
+
+/// The Docs view's own state (TOON_Network#148): the reading list, an open
+/// article (`page.is_some()` is what puts the view into "reading" mode), and
+/// where the cursor/scroll/focused-link is in whichever mode is showing.
+/// Kept as one field on `App`, the same way every other view's state is.
+#[derive(Default)]
+pub struct DocsViewState {
+    pub index: Option<DocsIndex>,
+    pub page: Option<DocsPage>,
+    /// Set while a Docs fetch is in flight.
+    pub loading: bool,
+    /// `GET /api/docs` failed. Shown in the reading list.
+    pub error: Option<String>,
+    /// Reused for two failures that never happen at once, since only one is
+    /// ever showable at a time: `GET /api/docs/<d>` failed (shown in the
+    /// reading list, mirroring `use-docs.ts`'s `openError`), or `xdg-open`
+    /// failed on a focused link (shown over the open article instead).
+    pub open_error: Option<String>,
+    /// Which row of the reading list `j`/`k` has selected.
+    pub selected: usize,
+    /// How far `j`/`k`/`PageUp`/`PageDown` have scrolled the open article.
+    pub scroll: u16,
+    /// The open article's links, in reading order — just the hrefs, so `o`
+    /// can open one without re-parsing the Markdown on every keypress. Set
+    /// alongside `page` and cleared when it closes.
+    pub link_hrefs: Vec<String>,
+    /// Which of `link_hrefs` `n`/`N` has focused; `o` opens this one.
+    pub link_index: usize,
+}
+
+impl DocsViewState {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+/// Every key while the Docs view is active, tried before the global keymap
+/// (`app::handle_key`). `None` means this view has no opinion about the key
+/// — `1`-`7`, `Tab`, `?`, `q`, ... — and the global keymap gets it next.
+///
+/// The reading list (no article open) and an open article claim different
+/// keys for `j`/`k` (move the selection vs. scroll), which is why almost
+/// every arm here is guarded on [`DocsViewState::page`] rather than the two
+/// modes sharing one `j`/`k` arm.
+pub fn handle_key(state: &mut DocsViewState, key: KeyEvent) -> Option<Command> {
+    match key.code {
+        KeyCode::Char('r') | KeyCode::Char('R') => Some(Command::RefreshDocs),
+        // Reading list (no article open): `j`/`k` move the selection,
+        // `Enter` opens it.
+        KeyCode::Char('j') | KeyCode::Down if state.page.is_none() => {
+            if let Some(len) = state.index.as_ref().map(|index| index.docs.len()) {
+                if len > 0 {
+                    state.selected = (state.selected + 1).min(len - 1);
+                }
+            }
+            Some(Command::None)
+        }
+        KeyCode::Char('k') | KeyCode::Up if state.page.is_none() => {
+            state.selected = state.selected.saturating_sub(1);
+            Some(Command::None)
+        }
+        KeyCode::Enter if state.page.is_none() => Some(
+            match state
+                .index
+                .as_ref()
+                .and_then(|index| index.docs.get(state.selected))
+            {
+                Some(doc) => Command::OpenDoc(doc.d.clone()),
+                None => Command::None,
+            },
+        ),
+        // An open article: `j`/`k`/`PageUp`/`PageDown` scroll it, `n`/`N`
+        // cycle which link is focused, `o` opens the focused one, and
+        // `Backspace` goes back to the reading list.
+        KeyCode::Char('j') | KeyCode::Down if state.page.is_some() => {
+            state.scroll = state.scroll.saturating_add(1);
+            Some(Command::None)
+        }
+        KeyCode::Char('k') | KeyCode::Up if state.page.is_some() => {
+            state.scroll = state.scroll.saturating_sub(1);
+            Some(Command::None)
+        }
+        KeyCode::PageDown if state.page.is_some() => {
+            state.scroll = state.scroll.saturating_add(DOCS_PAGE_SCROLL);
+            Some(Command::None)
+        }
+        KeyCode::PageUp if state.page.is_some() => {
+            state.scroll = state.scroll.saturating_sub(DOCS_PAGE_SCROLL);
+            Some(Command::None)
+        }
+        KeyCode::Char('n') if state.page.is_some() => {
+            let len = state.link_hrefs.len();
+            if len > 0 {
+                state.link_index = (state.link_index + 1) % len;
+            }
+            Some(Command::None)
+        }
+        KeyCode::Char('N') if state.page.is_some() => {
+            let len = state.link_hrefs.len();
+            if len > 0 {
+                state.link_index = (state.link_index + len - 1) % len;
+            }
+            Some(Command::None)
+        }
+        KeyCode::Char('o') if state.page.is_some() => {
+            Some(match state.link_hrefs.get(state.link_index) {
+                Some(href) => Command::OpenDocsLink(href.clone()),
+                None => Command::None,
+            })
+        }
+        KeyCode::Backspace if state.page.is_some() => {
+            state.page = None;
+            state.link_hrefs.clear();
+            state.link_index = 0;
+            state.scroll = 0;
+            state.open_error = None;
+            Some(Command::None)
+        }
+        _ => None,
+    }
+}
+
+pub fn draw(frame: &mut Frame, area: Rect, state: &DocsViewState) {
+    match &state.page {
         Some(page) => draw_article(
             frame,
             area,
@@ -36,18 +165,18 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App) {
             page.doc.address.as_deref(),
             page.index.fallback.as_deref(),
             &page.doc.markdown,
-            app.docs_scroll,
-            app.docs_link_index,
-            app.docs_open_error.as_deref(),
+            state.scroll,
+            state.link_index,
+            state.open_error.as_deref(),
         ),
         None => draw_list(
             frame,
             area,
-            app.docs_index.as_ref(),
-            app.loading_docs,
-            app.docs_error.as_deref(),
-            app.docs_open_error.as_deref(),
-            app.docs_selected,
+            state.index.as_ref(),
+            state.loading,
+            state.error.as_deref(),
+            state.open_error.as_deref(),
+            state.selected,
         ),
     }
 }
@@ -245,17 +374,21 @@ fn draw_article(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::App;
     use crate::types::{DocArticle, DocSummary, DocsIndex, DocsPage};
+    use crossterm::event::{KeyEvent, KeyModifiers};
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
     use std::fs;
 
-    fn render(app: &App) -> String {
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn render(state: &DocsViewState) -> String {
         let backend = TestBackend::new(100, 30);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
-            .draw(|frame| draw(frame, frame.area(), app))
+            .draw(|frame| draw(frame, frame.area(), state))
             .unwrap();
         buffer_to_string(terminal.backend().buffer())
     }
@@ -347,10 +480,10 @@ mod tests {
 
     #[test]
     fn renders_the_sample_article() {
-        let mut app = App::new();
-        app.docs_page = Some(sample_page());
-        app.docs_link_hrefs = vec!["funding".to_string(), "gateways".to_string()];
-        insta::assert_snapshot!(render(&app));
+        let mut state = DocsViewState::new();
+        state.page = Some(sample_page());
+        state.link_hrefs = vec!["funding".to_string(), "gateways".to_string()];
+        insta::assert_snapshot!(render(&state));
     }
 
     /// The daemon's own real article — headings, lists, a fenced code block,
@@ -359,30 +492,129 @@ mod tests {
     /// regeneration.
     #[test]
     fn renders_the_real_daemon_fixture_without_panicking() {
-        let mut app = App::new();
-        app.docs_page = Some(real_daemon_fixture());
-        render(&app);
+        let mut state = DocsViewState::new();
+        state.page = Some(real_daemon_fixture());
+        render(&state);
     }
 
     #[test]
     fn renders_the_reading_list_without_panicking() {
-        let mut app = App::new();
-        app.docs_index = Some(sample_index());
-        render(&app);
+        let mut state = DocsViewState::new();
+        state.index = Some(sample_index());
+        render(&state);
     }
 
     #[test]
     fn renders_loading_and_error_states_without_panicking() {
-        let mut app = App::new();
-        app.loading_docs = true;
-        render(&app);
+        let mut state = DocsViewState::new();
+        state.loading = true;
+        render(&state);
 
-        app.loading_docs = false;
-        app.docs_error = Some("the relays could not be reached".to_string());
-        render(&app);
+        state.loading = false;
+        state.error = Some("the relays could not be reached".to_string());
+        render(&state);
 
-        app.docs_index = Some(sample_index());
-        app.docs_open_error = Some("that page could not be opened".to_string());
-        render(&app);
+        state.index = Some(sample_index());
+        state.open_error = Some("that page could not be opened".to_string());
+        render(&state);
+    }
+
+    // -- handle_key: matches the old inline arms in app::handle_key ---------
+
+    #[test]
+    fn j_and_k_move_the_reading_list_selection_and_enter_opens_it() {
+        let mut state = DocsViewState::new();
+        state.index = Some(sample_index());
+        assert_eq!(
+            handle_key(&mut state, key(KeyCode::Char('j'))),
+            Some(Command::None)
+        );
+        assert_eq!(state.selected, 1);
+        assert_eq!(
+            handle_key(&mut state, key(KeyCode::Enter)),
+            Some(Command::OpenDoc("funding".to_string()))
+        );
+        assert_eq!(
+            handle_key(&mut state, key(KeyCode::Char('k'))),
+            Some(Command::None)
+        );
+        assert_eq!(state.selected, 0);
+    }
+
+    #[test]
+    fn r_refreshes_regardless_of_which_mode_is_showing() {
+        let mut state = DocsViewState::new();
+        assert_eq!(
+            handle_key(&mut state, key(KeyCode::Char('r'))),
+            Some(Command::RefreshDocs)
+        );
+        state.page = Some(sample_page());
+        assert_eq!(
+            handle_key(&mut state, key(KeyCode::Char('R'))),
+            Some(Command::RefreshDocs)
+        );
+    }
+
+    #[test]
+    fn an_open_article_scrolls_with_j_k_and_page_keys_and_backspace_closes_it() {
+        let mut state = DocsViewState::new();
+        state.page = Some(sample_page());
+        handle_key(&mut state, key(KeyCode::Char('j')));
+        assert_eq!(state.scroll, 1);
+        handle_key(&mut state, key(KeyCode::PageDown));
+        assert_eq!(state.scroll, 1 + DOCS_PAGE_SCROLL);
+        handle_key(&mut state, key(KeyCode::Char('k')));
+        assert_eq!(state.scroll, DOCS_PAGE_SCROLL);
+        assert_eq!(
+            handle_key(&mut state, key(KeyCode::Backspace)),
+            Some(Command::None)
+        );
+        assert!(state.page.is_none());
+        assert_eq!(state.scroll, 0);
+    }
+
+    #[test]
+    fn n_and_capital_n_cycle_the_focused_link_and_o_opens_it() {
+        let mut state = DocsViewState::new();
+        state.page = Some(sample_page());
+        state.link_hrefs = vec!["funding".to_string(), "gateways".to_string()];
+        handle_key(&mut state, key(KeyCode::Char('n')));
+        assert_eq!(state.link_index, 1);
+        assert_eq!(
+            handle_key(&mut state, key(KeyCode::Char('o'))),
+            Some(Command::OpenDocsLink("gateways".to_string()))
+        );
+        handle_key(&mut state, key(KeyCode::Char('N')));
+        assert_eq!(state.link_index, 0);
+    }
+
+    #[test]
+    fn keys_this_view_has_no_opinion_about_fall_through() {
+        let mut state = DocsViewState::new();
+        for code in [
+            KeyCode::Char('q'),
+            KeyCode::Char('1'),
+            KeyCode::Tab,
+            KeyCode::Char('?'),
+        ] {
+            assert_eq!(
+                handle_key(&mut state, key(code)),
+                None,
+                "{code:?} should fall through while showing the reading list"
+            );
+        }
+        state.page = Some(sample_page());
+        for code in [
+            KeyCode::Char('q'),
+            KeyCode::Char('1'),
+            KeyCode::Tab,
+            KeyCode::Char('?'),
+        ] {
+            assert_eq!(
+                handle_key(&mut state, key(code)),
+                None,
+                "{code:?} should fall through while an article is open"
+            );
+        }
     }
 }

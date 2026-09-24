@@ -396,10 +396,11 @@ fn standby_count(card: &WorkloadCard) -> i64 {
     }
 }
 
-/// Every key while this view is active, tried before the app-level keymap
+/// Every key while this view is active, tried before the global keymap
 /// (`app::handle_key`). `None` means this view has no opinion about the key —
-/// the app-level keymap (view switching, `?`, quit, the `Workloads`-only `r`
-/// refresh) gets it next. A confirm modal or an open filter, by contrast,
+/// the global keymap (view switching, `?`, quit — none of it view-specific
+/// any more, TOON_Network#138's code review) gets it next. A confirm modal
+/// or an open filter, by contrast,
 /// answers `Some` for literally every key: nothing leaks through either one.
 pub fn handle_key(state: &mut WorkloadsViewState, key: KeyEvent) -> Option<Command> {
     if let Some(confirm) = &mut state.confirm {
@@ -747,6 +748,13 @@ pub fn handle_key(state: &mut WorkloadsViewState, key: KeyEvent) -> Option<Comma
             }
             Some(Command::None)
         }
+        // Used to live as a `view == View::Workloads` arm in the global
+        // keymap (ADR 0028's "R refreshes"; lowercase `r` is this view's own
+        // rotate action, matched above) — moved here so the global keymap
+        // has no per-view conditionals left (TOON_Network#138's code
+        // review). Reached only once the list/confirm/budget-entry swallows
+        // above have already had first refusal, same as before.
+        KeyCode::Char('R') => Some(Command::RefreshWorkloads),
         _ => None,
     }
 }

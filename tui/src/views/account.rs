@@ -259,6 +259,22 @@ pub fn handle_key(
         state.local_mode,
         state.chain_seed.show_import,
     );
+
+    // `r`/`R` re-reads `GET /api/account` (used to live as a
+    // `view == View::Account` arm in the global keymap; moved here so that
+    // keymap has no per-view conditionals left — TOON_Network#138's code
+    // review). Checked before `state.editing` swallows every other key, but
+    // ahead of the empty-list check too: right at startup, before the first
+    // `AccountLoaded` lands, `targets` is empty and there is nothing to move
+    // a cursor through, but asking for a refresh must still work, exactly as
+    // it did as a global binding — `state.editing` cannot be true in that
+    // window (it is only ever set from `Enter` on a target IN the list).
+    if !state.editing {
+        if let KeyCode::Char('r') | KeyCode::Char('R') = key.code {
+            return Some(Command::RefreshAccount);
+        }
+    }
+
     if list.is_empty() {
         return None;
     }

@@ -215,19 +215,19 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()
                             }
                             Command::RefreshDocs => {
                                 if let Some(client) = &client {
-                                    match app.docs_page.as_ref().map(|page| page.doc.d.clone()) {
+                                    match app.docs.page.as_ref().map(|page| page.doc.d.clone()) {
                                         Some(d) => {
                                             spawn_docs_page_fetch(client.clone(), tx.clone(), d, true)
                                         }
                                         None => spawn_docs_index_fetch(client.clone(), tx.clone(), true),
                                     }
-                                    app.loading_docs = true;
+                                    app.docs.loading = true;
                                 }
                             }
                             Command::OpenDoc(d) => {
                                 if let Some(client) = &client {
                                     spawn_docs_page_fetch(client.clone(), tx.clone(), d, false);
-                                    app.loading_docs = true;
+                                    app.docs.loading = true;
                                 }
                             }
                             Command::OpenDocsLink(href) => {
@@ -465,7 +465,7 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()
                         spawn_directory_fetch(connected.clone(), tx.clone(), DirectoryFilters::default());
                         app.loading_directory = true;
                         spawn_docs_index_fetch(connected.clone(), tx.clone(), false);
-                        app.loading_docs = true;
+                        app.docs.loading = true;
                         // The header shows the signed-in account and the
                         // active profile on every view (TOON_Network#141), so
                         // both are read once here — the same "on connect"
@@ -582,7 +582,7 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()
                             );
                             app.loading_directory = true;
                             spawn_docs_index_fetch(client.clone(), tx.clone(), false);
-                            app.loading_docs = true;
+                            app.docs.loading = true;
                             spawn_funding_fetch(client.clone(), tx.clone(), false);
                             app.funds.funding_loading = true;
                             app.funds.funding_busy = true;
@@ -626,38 +626,39 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()
                     },
                     RuntimeEvent::DocsIndexLoaded(result) => match *result {
                         Ok(index) => {
-                            app.docs_selected = app
-                                .docs_selected
+                            app.docs.selected = app
+                                .docs
+                                .selected
                                 .min(index.docs.len().saturating_sub(1));
-                            app.docs_index = Some(index);
-                            app.loading_docs = false;
-                            app.docs_error = None;
+                            app.docs.index = Some(index);
+                            app.docs.loading = false;
+                            app.docs.error = None;
                         }
                         Err(message) => {
-                            app.loading_docs = false;
-                            app.docs_error = Some(message);
+                            app.docs.loading = false;
+                            app.docs.error = Some(message);
                         }
                     },
                     RuntimeEvent::DocsPageLoaded(result) => match *result {
                         Ok(page) => {
-                            app.docs_link_hrefs = markdown::render(&page.doc.markdown, None)
+                            app.docs.link_hrefs = markdown::render(&page.doc.markdown, None)
                                 .links
                                 .into_iter()
                                 .map(|link| link.href)
                                 .collect();
-                            app.docs_link_index = 0;
-                            app.docs_scroll = 0;
-                            app.docs_page = Some(page);
-                            app.loading_docs = false;
-                            app.docs_open_error = None;
+                            app.docs.link_index = 0;
+                            app.docs.scroll = 0;
+                            app.docs.page = Some(page);
+                            app.docs.loading = false;
+                            app.docs.open_error = None;
                         }
                         Err(message) => {
-                            app.loading_docs = false;
-                            app.docs_open_error = Some(message);
+                            app.docs.loading = false;
+                            app.docs.open_error = Some(message);
                         }
                     },
                     RuntimeEvent::DocsLinkOpenFailed(message) => {
-                        app.docs_open_error = Some(message);
+                        app.docs.open_error = Some(message);
                     }
                     // -- Funds (TOON_Network#147) --
                     RuntimeEvent::FundingLoaded(result) => app.funds.apply_funding(*result),

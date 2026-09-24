@@ -161,58 +161,68 @@ impl FundsState {
     }
 }
 
-/// Every key Funds handles for itself, once the shell has already ruled out
-/// the global bindings (quit, help, view switching) and confirmed no
-/// confirmation is open (`app::handle_key` calls `handle_confirm_key`
-/// first). Anything not recognised here is `Command::None` — a key that does
-/// nothing is safer than one that does the wrong thing.
-pub fn handle_key(state: &mut FundsState, key: KeyEvent) -> Command {
+/// Every key while the Funds view is active, tried before the global keymap
+/// (`app::handle_key`). `None` means this view has no opinion about the key
+/// — `1`-`7`, `Tab`, `?`, `q`, ... — and the global keymap gets it next.
+///
+/// An open confirmation swallows every key (checked first, via
+/// [`handle_confirm_key`] — TOON_Network#138's code review folded that
+/// pre-check in here rather than leaving it a separate call in
+/// `app::handle_key`). Past that, a key this view does not recognise, or one
+/// it recognises but funding is not `ready` for, falls through rather than
+/// being swallowed as a no-op — that is what keeps quitting, view-switching
+/// and the digits working while Funds has nothing loaded yet.
+pub fn handle_key(state: &mut FundsState, key: KeyEvent) -> Option<Command> {
+    if let Some(command) = handle_confirm_key(state, key) {
+        return Some(command);
+    }
+
     if let KeyCode::Char('r') = key.code {
-        return Command::FetchFunding { refresh: true };
+        return Some(Command::FetchFunding { refresh: true });
     }
 
     let Some(funding) = &state.funding else {
-        return Command::None;
+        return None;
     };
     if funding.state != "ready" || funding.chains.is_empty() {
-        return Command::None;
+        return None;
     }
     let chain_count = funding.chains.len();
 
     match key.code {
         KeyCode::Down | KeyCode::Char('j') => {
             state.selected = (state.selected + 1) % chain_count;
-            Command::None
+            Some(Command::None)
         }
         KeyCode::Up | KeyCode::Char('k') => {
             state.selected = (state.selected + chain_count - 1) % chain_count;
-            Command::None
+            Some(Command::None)
         }
-        KeyCode::Char('y') => match state.selected_chain() {
+        KeyCode::Char('y') => Some(match state.selected_chain() {
             Some(chain) => Command::CopyToClipboard(chain.deposit.address.clone()),
             None => Command::None,
-        },
+        }),
         KeyCode::Char('o') => {
             open_channel_confirm(state);
-            Command::None
+            Some(Command::None)
         }
-        KeyCode::Char('f') => match state.selected_chain() {
+        KeyCode::Char('f') => Some(match state.selected_chain() {
             Some(chain) if faucet_ready_for(funding.faucet.as_ref(), chain) => Command::Drip {
                 chain: chain.chain.clone(),
             },
             _ => Command::None,
-        },
-        KeyCode::Char('g') => match gas_plan_for(state, funding) {
+        }),
+        KeyCode::Char('g') => Some(match gas_plan_for(state, funding) {
             Some(plan) if plan.verdict == "buyable" => Command::QuoteGas {
                 chain: plan.chain.clone(),
             },
             _ => Command::None,
-        },
+        }),
         KeyCode::Char('b') => {
             buy_gas_confirm(state);
-            Command::None
+            Some(Command::None)
         }
-        _ => Command::None,
+        _ => None,
     }
 }
 
@@ -1191,12 +1201,37 @@ mod tests {
     }
 
     #[test]
+    fn keys_this_view_has_no_opinion_about_fall_through() {
+        let mut state = FundsState::default();
+        state.funding = None;
+        for code in [KeyCode::Char('q'), KeyCode::Char('1'), KeyCode::Tab] {
+            assert_eq!(
+                handle_key(&mut state, key(code)),
+                None,
+                "{code:?} should fall through with no funding loaded"
+            );
+        }
+
+        state.funding = Some(sample_funding(
+            "ready",
+            vec![sample_chain("evm:84532", true, "present", "none")],
+        ));
+        for code in [KeyCode::Char('q'), KeyCode::Char('1'), KeyCode::Tab] {
+            assert_eq!(
+                handle_key(&mut state, key(code)),
+                None,
+                "{code:?} should fall through with funding ready"
+            );
+        }
+    }
+
+    #[test]
     fn r_refreshes_funding_even_with_no_data_loaded_yet() {
         let mut state = FundsState::default();
         state.funding = None;
         assert_eq!(
             handle_key(&mut state, key(KeyCode::Char('r'))),
-            Command::FetchFunding { refresh: true }
+            Some(Command::FetchFunding { refresh: true })
         );
     }
 
@@ -1228,7 +1263,7 @@ mod tests {
         ));
         assert_eq!(
             handle_key(&mut state, key(KeyCode::Char('y'))),
-            Command::CopyToClipboard("addr-evm:84532".to_string())
+            Some(Command::CopyToClipboard("addr-evm:84532".to_string()))
         );
     }
 
@@ -1242,7 +1277,7 @@ mod tests {
         let command = handle_key(&mut state, key(KeyCode::Char('o')));
         assert_eq!(
             command,
-            Command::None,
+            Some(Command::None),
             "one keypress must not open anything"
         );
         assert!(state.confirm.is_some());
@@ -1330,9 +1365,9 @@ mod tests {
         ));
         assert_eq!(
             handle_key(&mut state, key(KeyCode::Char('f'))),
-            Command::Drip {
+            Some(Command::Drip {
                 chain: "evm:84532".to_string()
-            }
+            })
         );
 
         // Solana is not in the faucet's `chains` in this fixture.
@@ -1340,7 +1375,7 @@ mod tests {
             vec![sample_chain("solana", true, "present", "none")];
         assert_eq!(
             handle_key(&mut state, key(KeyCode::Char('f'))),
-            Command::None
+            Some(Command::None)
         );
     }
 
@@ -1354,7 +1389,7 @@ mod tests {
         // No gas station data loaded yet: nothing to do.
         assert_eq!(
             handle_key(&mut state, key(KeyCode::Char('g'))),
-            Command::None
+            Some(Command::None)
         );
 
         state.gas = Some(GasStationStatus {
@@ -1378,9 +1413,9 @@ mod tests {
         });
         assert_eq!(
             handle_key(&mut state, key(KeyCode::Char('g'))),
-            Command::QuoteGas {
+            Some(Command::QuoteGas {
                 chain: "solana".to_string()
-            }
+            })
         );
     }
 

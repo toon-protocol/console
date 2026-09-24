@@ -27,6 +27,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
 
+use crate::app::Command;
 use crate::format::{format_interval, format_seconds, format_thousands, parse_iso8601_utc_ms};
 use crate::types::{Directory, DirectoryFilters, ListingView, LivenessView, ProviderView};
 
@@ -43,15 +44,6 @@ const CAPABILITIES: &[&str] = &["docker", "nesting"];
 /// The GPU filter's constant option, meaning "has a GPU, any model" —
 /// `ANY_GPU` in `packages/daemon/src/directory.ts`.
 const ANY_GPU: &str = "any";
-
-/// What a keypress this view handled asks the runtime to do.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DirectoryCommand {
-    None,
-    /// A filter changed, or `r` was pressed: re-read `GET /api/directory`
-    /// with the state's current `filters`.
-    Refresh,
-}
 
 /// One (provider, listing) choice, and nothing else — what a picker hands
 /// back once something is chosen.
@@ -505,60 +497,72 @@ fn toggle_capability(capabilities: &mut Vec<String>, name: &str) {
     }
 }
 
-/// The one place a keypress becomes a decision for the whole Directory view.
-/// Filter and refresh keys are handled here; everything else (`j`/`k`,
-/// `Enter`) falls through to the picker.
-pub fn handle_key(state: &mut DirectoryViewState, key: KeyEvent) -> DirectoryCommand {
+/// Every key while the Directory view is active, tried before the global
+/// keymap (`app::handle_key`). `None` means this view has no opinion about
+/// the key — `1`-`7`, `Tab`, `?`, `q`, ... — and the global keymap gets it
+/// next.
+///
+/// The detail popup swallows every key (the same "help covers everything
+/// underneath it" rule `app::handle_key`'s own `help_open` follows) — folded
+/// in here, rather than a separate pre-check in `app::handle_key`, is what
+/// TOON_Network#138's code review calls "modal swallowing... inside that
+/// view's handler." Filter and refresh keys are handled next; `j`/`k`/`Enter`
+/// fall through to the picker, and everything the picker does not recognise
+/// either falls through to the global keymap in turn.
+pub fn handle_key(state: &mut DirectoryViewState, key: KeyEvent) -> Option<Command> {
     if state.detail_open {
-        // Mirrors `app::handle_key`'s help overlay: while the detail popup
-        // covers the screen, only the keys that close it do anything.
         match key.code {
             KeyCode::Enter | KeyCode::Esc | KeyCode::Char('q') => state.detail_open = false,
             _ => {}
         }
-        return DirectoryCommand::None;
+        return Some(Command::None);
     }
 
     match key.code {
         KeyCode::Char('i') => {
             state.filters.isolation = cycle_option(ISOLATIONS, &state.filters.isolation);
-            DirectoryCommand::Refresh
+            Some(Command::RefreshDirectory)
         }
         KeyCode::Char('a') => {
             state.filters.arch = cycle_option(ARCHITECTURES, &state.filters.arch);
-            DirectoryCommand::Refresh
+            Some(Command::RefreshDirectory)
         }
         KeyCode::Char('g') => {
             state.filters.gpu = cycle_gpu(&state.gpu_models, &state.filters.gpu);
-            DirectoryCommand::Refresh
+            Some(Command::RefreshDirectory)
         }
         KeyCode::Char('d') => {
             toggle_capability(&mut state.filters.capabilities, CAPABILITIES[0]);
-            DirectoryCommand::Refresh
+            Some(Command::RefreshDirectory)
         }
         KeyCode::Char('n') => {
             toggle_capability(&mut state.filters.capabilities, CAPABILITIES[1]);
-            DirectoryCommand::Refresh
+            Some(Command::RefreshDirectory)
         }
         KeyCode::Char('H') => {
             state.filters.hidden = cycle_hidden(state.filters.hidden);
-            DirectoryCommand::Refresh
+            Some(Command::RefreshDirectory)
         }
         KeyCode::Char('x') => {
             if state.active_filter_count() == 0 {
-                DirectoryCommand::None
+                Some(Command::None)
             } else {
                 state.filters = DirectoryFilters::default();
-                DirectoryCommand::Refresh
+                Some(Command::RefreshDirectory)
             }
         }
-        KeyCode::Char('r') | KeyCode::Char('R') => DirectoryCommand::Refresh,
-        _ => {
+        KeyCode::Char('r') | KeyCode::Char('R') => Some(Command::RefreshDirectory),
+        // The picker's own keys — anything else (`q`, `Tab`, a digit, ...)
+        // is not one of them, so `PickerEvent::None` here means "not mine",
+        // not "handled, do nothing": falling through is what keeps quitting,
+        // view-switching and the digits working while Directory is current.
+        KeyCode::Char('j') | KeyCode::Down | KeyCode::Char('k') | KeyCode::Up | KeyCode::Enter => {
             if state.picker.handle_key(key) == PickerEvent::Chosen {
                 state.detail_open = true;
             }
-            DirectoryCommand::None
+            Some(Command::None)
         }
+        _ => None,
     }
 }
 
@@ -1169,7 +1173,7 @@ mod tests {
         let mut state = DirectoryViewState::new();
         assert_eq!(
             handle_key(&mut state, key_char('i')),
-            DirectoryCommand::Refresh
+            Some(Command::RefreshDirectory)
         );
         assert_eq!(state.filters.isolation.as_deref(), Some("shared-kernel"));
         handle_key(&mut state, key_char('i'));
@@ -1221,17 +1225,14 @@ mod tests {
     #[test]
     fn x_clears_every_filter_at_once_and_does_nothing_when_none_are_set() {
         let mut state = DirectoryViewState::new();
-        assert_eq!(
-            handle_key(&mut state, key_char('x')),
-            DirectoryCommand::None
-        );
+        assert_eq!(handle_key(&mut state, key_char('x')), Some(Command::None));
 
         handle_key(&mut state, key_char('i'));
         handle_key(&mut state, key_char('d'));
         assert_eq!(state.active_filter_count(), 2);
         assert_eq!(
             handle_key(&mut state, key_char('x')),
-            DirectoryCommand::Refresh
+            Some(Command::RefreshDirectory)
         );
         assert_eq!(state.active_filter_count(), 0);
     }
@@ -1241,7 +1242,7 @@ mod tests {
         let mut state = DirectoryViewState::new();
         assert_eq!(
             handle_key(&mut state, key_char('r')),
-            DirectoryCommand::Refresh
+            Some(Command::RefreshDirectory)
         );
     }
 
@@ -1249,10 +1250,7 @@ mod tests {
     fn j_and_k_move_the_picker_without_asking_for_a_refresh() {
         let mut state = DirectoryViewState::new();
         state.apply(ok_directory());
-        assert_eq!(
-            handle_key(&mut state, key_char('j')),
-            DirectoryCommand::None
-        );
+        assert_eq!(handle_key(&mut state, key_char('j')), Some(Command::None));
         assert_eq!(
             state.picker.selected_listing().unwrap().1.name,
             "ci",
@@ -1274,6 +1272,19 @@ mod tests {
 
         handle_key(&mut state, key(KeyCode::Esc));
         assert!(!state.detail_open);
+    }
+
+    #[test]
+    fn keys_this_view_has_no_opinion_about_fall_through() {
+        let mut state = DirectoryViewState::new();
+        state.apply(ok_directory());
+        for code in [KeyCode::Char('q'), KeyCode::Char('1'), KeyCode::Tab] {
+            assert_eq!(
+                handle_key(&mut state, key(code)),
+                None,
+                "{code:?} should fall through to the global keymap"
+            );
+        }
     }
 
     #[test]
