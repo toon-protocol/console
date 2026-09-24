@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { handleApi, type ApiDeps, type ApiResponse } from './api.js';
+import { writeApiFixture } from './api-fixtures.testkit.js';
 import { ChainSeedStore } from './chain-seed.js';
 import { InMemoryChainSeedCache } from './chain-seed-cache.js';
 import {
@@ -100,6 +101,12 @@ describe('the funding routes', () => {
     expect(answer.status).toBe(200);
     expect(status(answer).state).toBe('ready');
     expect(status(answer).chains.map((chain) => chain.chain)).toEqual(['evm:31337', 'solana']);
+
+    // The TUI's fixture contract (TOON_Network#139, ADR 0028; console TUI
+    // Funds, TOON_Network#147): the REAL response this assertion just
+    // checked, committed so `tui/`'s hand-kept Rust types are checked
+    // against it without running this daemon.
+    writeApiFixture('funding', status(answer));
   });
 
   it('carries no key material, in any answer, ever', async () => {

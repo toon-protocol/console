@@ -133,3 +133,22 @@ async fn a_401_that_survives_a_reread_is_reported_as_unauthorized_not_retried_fo
         other => panic!("expected Unauthorized, got {other:?}"),
     }
 }
+
+/// The same 401-then-reread contract, for `post` — a spending route (opening
+/// a channel, buying gas) still gets this retry rather than a bespoke path.
+#[tokio::test]
+async fn a_401_on_post_re_reads_the_record_and_succeeds_on_the_daemons_new_token() {
+    let (url, _server) = spawn_stub_daemon("new-token");
+    let dir = tempfile::tempdir().unwrap();
+    let path: PathBuf = dir.path().join("launch.json");
+
+    write_record(&path, &url, "old-token");
+    let client = DaemonClient::connect(path.clone()).await.unwrap();
+    write_record(&path, &url, "new-token");
+
+    let pong: Pong = client
+        .post("/pong", &serde_json::json!({"chain": "solana"}))
+        .await
+        .unwrap();
+    assert_eq!(pong, Pong { ok: true });
+}

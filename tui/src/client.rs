@@ -17,6 +17,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::de::DeserializeOwned;
+use serde::Serialize;
 use tokio::sync::RwLock;
 
 use crate::launch::{read_launch_record, LaunchError, LaunchRecord};
@@ -111,6 +112,69 @@ impl DaemonClient {
                 url,
                 status: status.as_u16(),
                 body: truncate(&body),
+            });
+        }
+        response
+            .json::<T>()
+            .await
+            .map_err(|err| ClientError::Decode(err.to_string()))
+    }
+
+    /// `POST <path>` with a JSON body, decoded as `T`. Same 401-then-reread
+    /// retry as `get` — a route that spends money (opening a channel, buying
+    /// gas) still answers 401 rather than doing anything the FIRST time a
+    /// window holds a stale token, exactly like a read would.
+    pub async fn post<T: DeserializeOwned, B: Serialize + ?Sized>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<T, ClientError> {
+        let first = self.try_post(path, body).await;
+        match first {
+            Err(ClientError::Status { status: 401, .. }) => {
+                let reread = read_launch_record(&self.launch_file)?;
+                let changed = reread.token != self.record.read().await.token;
+                *self.record.write().await = reread;
+                if changed {
+                    self.try_post(path, body).await.map_err(|err| match err {
+                        ClientError::Status { status: 401, .. } => ClientError::Unauthorized,
+                        other => other,
+                    })
+                } else {
+                    Err(ClientError::Unauthorized)
+                }
+            }
+            other => other,
+        }
+    }
+
+    async fn try_post<T: DeserializeOwned, B: Serialize + ?Sized>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<T, ClientError> {
+        let (url, token) = {
+            let record = self.record.read().await;
+            (join_url(&record.url, path), record.token.clone())
+        };
+        let response = self
+            .http
+            .post(&url)
+            .bearer_auth(&token)
+            .json(body)
+            .send()
+            .await
+            .map_err(|err| ClientError::Unreachable {
+                url: url.clone(),
+                reason: err.to_string(),
+            })?;
+        let status = response.status();
+        if !status.is_success() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(ClientError::Status {
+                url,
+                status: status.as_u16(),
+                body: truncate(&text),
             });
         }
         response

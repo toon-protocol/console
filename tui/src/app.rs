@@ -9,6 +9,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
 use crate::types::Health;
+use crate::views::funds::FundsState;
 
 /// The seven views of the sidebar (ADR 0028), in the order `1`-`7` select
 /// them. `Health` is sixth, matching the spec's own numbering and the web
@@ -102,6 +103,10 @@ pub struct App {
     /// Set while a Health fetch is in flight, so the footer can say so
     /// instead of looking stuck.
     pub loading_health: bool,
+    /// The Funds view's own state (TOON_Network#147) — deposits, channel
+    /// balances, the gas station and its confirmations. Kept as one field
+    /// rather than spread across `App` so `views::funds` owns its shape.
+    pub funds: FundsState,
 }
 
 impl App {
@@ -113,6 +118,7 @@ impl App {
             daemon_status: DaemonStatus::Connecting,
             health: None,
             loading_health: false,
+            funds: FundsState::default(),
         }
     }
 }
@@ -126,11 +132,42 @@ impl Default for App {
 /// What a keypress asks the runtime to do, once `handle_key` has already
 /// applied the parts of it that are pure state (switching views, opening
 /// help). The runtime owns quitting, redrawing and network calls.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// No longer `Copy` as of TOON_Network#147: the Funds variants below carry
+/// owned `String`s (a chain id, a quote id, ...), which a `Copy` type cannot
+/// hold. Every existing call site already matched on this by value, so
+/// dropping `Copy` changes nothing at those sites.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     None,
     Quit,
     RefreshHealth,
+    // -- Funds (TOON_Network#147) --
+    FetchFunding {
+        refresh: bool,
+    },
+    FetchGasStation,
+    /// Issued only after a confirmation has been shown and accepted
+    /// (`views::funds::handle_confirm_key`) — never straight from a
+    /// keypress.
+    OpenChannel {
+        chain: String,
+        deposit: Option<String>,
+        connector: Option<String>,
+    },
+    Drip {
+        chain: String,
+    },
+    QuoteGas {
+        chain: String,
+    },
+    /// Issued only after a confirmation has been shown and accepted, same as
+    /// `OpenChannel`.
+    BuyGas {
+        chain: String,
+        quote_id: String,
+    },
+    CopyToClipboard(String),
 }
 
 /// The one place a keypress becomes a decision.
@@ -145,6 +182,16 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> Command {
             _ => {}
         }
         return Command::None;
+    }
+
+    // A confirmation open on Funds swallows every key until it is answered
+    // (TOON_Network#147) — the same "help covers everything underneath it"
+    // rule as `help_open` above, so `Esc` cancels it and `q` merely disarms
+    // it, rather than either quitting the app.
+    if app.view == View::Funds {
+        if let Some(command) = crate::views::funds::handle_confirm_key(&mut app.funds, key) {
+            return command;
+        }
     }
 
     match key.code {
@@ -185,6 +232,11 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> Command {
         KeyCode::Char('r') | KeyCode::Char('R') if app.view == View::Health => {
             Command::RefreshHealth
         }
+        // Everything Funds handles for itself (TOON_Network#147) — selecting
+        // a chain, `y`/`o`/`f`/`g`/`b`, and its own `r`. Placed last among
+        // the guarded arms so a global key (quit, help, view switching, a
+        // digit) still wins even while Funds is the current view.
+        _ if app.view == View::Funds => crate::views::funds::handle_key(&mut app.funds, key),
         _ => Command::None,
     }
 }

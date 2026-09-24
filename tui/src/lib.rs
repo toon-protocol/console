@@ -10,9 +10,13 @@
 //! - `ui`        — the shell (header, sidebar, footer, help overlay).
 //! - `views::*`  — one module per sidebar view.
 //! - `format`    — small display formatters shared by views.
+//! - `clipboard` — `wl-copy`, or a message saying it is not there.
+//! - `confirm`   — a minimal confirm-before-spending modal (TOON_Network#147).
 
 pub mod app;
 pub mod client;
+pub mod clipboard;
+pub mod confirm;
 pub mod desktop;
 pub mod format;
 pub mod launch;
