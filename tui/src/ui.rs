@@ -63,6 +63,10 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
         .map(|h| h.profile.label.clone())
         .unwrap_or_else(|| "…".to_string());
     let account = account_label(app);
+    // TOON_Network#147: the total channel balance, shown on every view (not
+    // only Funds) — a small additive read of `app.funds.funding`, which is
+    // fetched eagerly on connect for exactly this reason.
+    let channels = crate::format::total_channel_balance(app.funds.funding.as_ref());
 
     let line = Line::from(vec![
         Span::styled(
@@ -73,6 +77,8 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
         Span::raw(profile),
         Span::raw(" ── "),
         Span::raw(account),
+        Span::raw(" ── "),
+        Span::raw(format!("channels: {channels}")),
         Span::raw(" ── "),
         status_span(&app.daemon_status),
         Span::raw(" "),
@@ -154,6 +160,11 @@ fn draw_content(frame: &mut Frame, area: Rect, app: &App) {
             ),
             None => draw_loading(frame, area, "Account"),
         },
+        // Funds (TOON_Network#147) draws its own loading/not-yet/ready
+        // states from `app.funds` — unlike Health there is no separate
+        // `draw_loading` arm here, since the view's own first line already
+        // says "Reading your funds…".
+        (View::Funds, _) => views::funds::draw(frame, area, &app.funds),
         (view, _) => views::placeholder::draw(frame, area, view.title()),
     }
 }
@@ -207,6 +218,11 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
             " j/k move  Enter edit/act  Esc stop editing  r refresh ",
         ));
     }
+    if app.view == View::Funds {
+        spans.push(Span::raw(
+            " j/k chain  y copy  o open  f faucet  g quote  b buy  r refresh ",
+        ));
+    }
     spans.push(Span::raw(" ? help  q quit "));
     let block = Block::default().borders(Borders::ALL);
     frame.render_widget(Paragraph::new(Line::from(spans)).block(block), area);
@@ -217,7 +233,7 @@ const HELP_LINES: &[&str] = &[
     "Tab        next view",
     "Shift+Tab  previous view",
     "h / l      previous / next view",
-    "r          refresh Health, the open Docs page/list, or Account",
+    "r          refresh Health, the open Docs page/list, Account, or Funds",
     "j / k      Docs: select a page, or scroll an open one",
     "Enter      Docs: open the selected page",
     "n / N      Docs: focus the next / previous link",
@@ -229,6 +245,13 @@ const HELP_LINES: &[&str] = &[
     "mouse      click a sidebar row to select it",
     "?          toggle this help",
     "q / Esc    quit",
+    "-- Funds --",
+    "j / k      select a chain",
+    "y          copy the selected chain's deposit address",
+    "o          open a payment channel (asks for confirmation)",
+    "f          ask the faucet",
+    "g          get a gas quote",
+    "b          buy the shown gas quote (asks for confirmation)",
 ];
 
 fn draw_help(frame: &mut Frame, area: Rect) {

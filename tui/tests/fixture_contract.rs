@@ -19,7 +19,10 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use toon_console_tui::types::{Directory, DocsIndex, DocsPage, Health, Profiles, SessionStatus};
+use toon_console_tui::types::{
+    Directory, DocsIndex, DocsPage, FundingStatus, GasPurchase, GasQuote, GasStationStatus,
+    Health, Profiles, SessionStatus,
+};
 
 type Check = fn(&str) -> Result<(), String>;
 
@@ -44,6 +47,13 @@ fn registry() -> BTreeMap<&'static str, Check> {
     map.insert("account-signed-out", check::<SessionStatus> as Check);
     map.insert("account-signed-in", check::<SessionStatus> as Check);
     map.insert("profiles", check::<Profiles> as Check);
+    // Funds (TOON_Network#147): GET /api/funding, GET /api/funding/gas,
+    // POST /api/funding/gas/quote and POST /api/funding/gas/buy all answer
+    // with one of these four shapes.
+    map.insert("funding", check::<FundingStatus> as Check);
+    map.insert("gas-station", check::<GasStationStatus> as Check);
+    map.insert("gas-quote", check::<GasQuote> as Check);
+    map.insert("gas-purchase", check::<GasPurchase> as Check);
     map
 }
 

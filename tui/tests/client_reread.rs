@@ -136,9 +136,10 @@ async fn a_401_that_survives_a_reread_is_reported_as_unauthorized_not_retried_fo
 
 /// The same 401-then-reread contract, exercised through `post` — added for
 /// TOON_Network#141, which is the first ticket to post a body (sign-in,
-/// sign-out, a profile switch) rather than only ever reading. `send` in
-/// `client.rs` is the one place this retry lives; this proves it applies to
-/// every verb, not only `get`.
+/// sign-out, a profile switch) rather than only ever reading, and confirmed
+/// again by TOON_Network#147's spending routes (opening a channel, buying
+/// gas). `send` in `client.rs` is the one place this retry lives; this
+/// proves it applies to every verb, not only `get`.
 #[tokio::test]
 async fn a_401_re_reads_the_record_and_retries_a_post_on_the_daemons_new_token() {
     let (url, _server) = spawn_stub_daemon("new-token");

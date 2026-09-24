@@ -148,6 +148,120 @@ pub fn account_display_name(view: &crate::types::AccountView) -> String {
         .unwrap_or_else(|| short_npub(&view.npub))
 }
 
+/// Base units, scaled for READING only — mirrors `formatAmount`/`scale` in
+/// `packages/ui/src/app/funding-view.tsx` exactly, including its reason for
+/// existing: a balance can be larger than an `f64` holds exactly, so this is
+/// string arithmetic on the decimal digits, never a float division. Nothing
+/// built here is fed back into a request; what goes to the daemon is always
+/// the integer base-unit string the chain reported.
+pub fn format_amount(amount: Option<&crate::types::Amount>) -> String {
+    let Some(amount) = amount else {
+        return "unknown".to_string();
+    };
+    let text = match amount.decimals {
+        Some(decimals) => scale(&amount.amount, decimals),
+        None => amount.amount.clone(),
+    };
+    match &amount.symbol {
+        Some(symbol) => format!("{text} {symbol}"),
+        None => text,
+    }
+}
+
+fn scale(amount: &str, decimals: i64) -> String {
+    if decimals <= 0 || amount.is_empty() || !amount.bytes().all(|b| b.is_ascii_digit()) {
+        return amount.to_string();
+    }
+    let decimals = decimals as usize;
+    let padded = format!("{amount:0>width$}", width = decimals + 1);
+    let split_at = padded.len() - decimals;
+    let whole = &padded[..split_at];
+    let fraction = padded[split_at..].trim_end_matches('0');
+    if fraction.is_empty() {
+        whole.to_string()
+    } else {
+        format!("{whole}.{fraction}")
+    }
+}
+
+/// Schoolbook addition on two non-negative base-10, base-unit strings — no
+/// sign, no dependency on a bignum crate, and (unlike `f64`) exact at any
+/// length, which is the same reason `scale` above does not divide with one.
+fn add_decimal(a: &str, b: &str) -> String {
+    let a = a.as_bytes();
+    let b = b.as_bytes();
+    let mut out = Vec::with_capacity(a.len().max(b.len()) + 1);
+    let mut carry = 0u32;
+    let mut i = 0usize;
+    loop {
+        let da = a.len().checked_sub(1 + i).map(|at| u32::from(a[at] - b'0'));
+        let db = b.len().checked_sub(1 + i).map(|at| u32::from(b[at] - b'0'));
+        if da.is_none() && db.is_none() && carry == 0 {
+            break;
+        }
+        let sum = da.unwrap_or(0) + db.unwrap_or(0) + carry;
+        out.push(b'0' + (sum % 10) as u8);
+        carry = sum / 10;
+        i += 1;
+    }
+    if out.is_empty() {
+        out.push(b'0');
+    }
+    out.reverse();
+    String::from_utf8(out).expect("only ASCII digits were pushed")
+}
+
+/// The header's "total channel balance" (ADR 0028's Funds view): every OPEN
+/// channel's `available`, scaled by its own chain's token decimals and
+/// summed per distinct symbol. Two chains rarely share a token, so two
+/// symbols show as two terms rather than one figure that quietly added a
+/// wei amount to a lamport amount. `None` (funding not read yet) reads as
+/// `…`; loaded with no open channel reads as `none`.
+pub fn total_channel_balance(funding: Option<&crate::types::FundingStatus>) -> String {
+    let Some(funding) = funding else {
+        return "…".to_string();
+    };
+    let mut totals: std::collections::BTreeMap<String, (String, i64)> =
+        std::collections::BTreeMap::new();
+    for chain in &funding.chains {
+        if chain.channel.phase != "open" {
+            continue;
+        }
+        let Some(available) = &chain.channel.available else {
+            continue;
+        };
+        if available.is_empty() || !available.bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        let symbol = chain
+            .balances
+            .token
+            .as_ref()
+            .and_then(|token| token.symbol.clone())
+            .unwrap_or_default();
+        let decimals = chain.token.decimals;
+        let entry = totals
+            .entry(symbol)
+            .or_insert_with(|| ("0".to_string(), decimals));
+        entry.0 = add_decimal(&entry.0, available);
+    }
+    if totals.is_empty() {
+        return "none".to_string();
+    }
+    totals
+        .into_iter()
+        .map(|(symbol, (sum, decimals))| {
+            let scaled = scale(&sum, decimals);
+            if symbol.is_empty() {
+                scaled
+            } else {
+                format!("{scaled} {symbol}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -247,5 +361,213 @@ mod tests {
     fn a_full_length_npub_is_shortened_to_its_ends() {
         let npub = "npub1exampleexampleexampleexampleexampleexampleexampleexamplex";
         assert_eq!(short_npub(npub), "npub1examp…plex");
+    }
+
+    fn amount(value: &str, decimals: Option<i64>, symbol: Option<&str>) -> crate::types::Amount {
+        crate::types::Amount {
+            amount: value.to_string(),
+            decimals,
+            symbol: symbol.map(str::to_string),
+            address: None,
+        }
+    }
+
+    #[test]
+    fn format_amount_is_unknown_for_none() {
+        assert_eq!(format_amount(None), "unknown");
+    }
+
+    #[test]
+    fn format_amount_scales_by_decimals_and_appends_the_symbol() {
+        let a = amount("5000000", Some(6), Some("USDC"));
+        assert_eq!(format_amount(Some(&a)), "5 USDC");
+
+        let b = amount("1500000", Some(6), Some("USDC"));
+        assert_eq!(format_amount(Some(&b)), "1.5 USDC");
+    }
+
+    #[test]
+    fn format_amount_with_no_decimals_field_is_shown_raw() {
+        let a = amount("42", None, Some("wei"));
+        assert_eq!(format_amount(Some(&a)), "42 wei");
+    }
+
+    #[test]
+    fn format_amount_with_no_symbol_omits_it() {
+        let a = amount("5000000", Some(6), None);
+        assert_eq!(format_amount(Some(&a)), "5");
+    }
+
+    #[test]
+    fn scale_leaves_a_non_digit_amount_untouched() {
+        // Exercised through `format_amount`, since `scale` is private: a
+        // malformed base-unit string must render as itself, never panic.
+        let a = amount("not-a-number", Some(6), None);
+        assert_eq!(format_amount(Some(&a)), "not-a-number");
+    }
+
+    fn chain_with_channel(
+        phase: &str,
+        available: Option<&str>,
+        symbol: Option<&str>,
+        decimals: i64,
+    ) -> crate::types::ChainFundingView {
+        use crate::types::*;
+        ChainFundingView {
+            chain: "evm:84532".to_string(),
+            kind: "evm".to_string(),
+            counterparty: "https://connector.example".to_string(),
+            token: TokenRef {
+                address: "0xusdc".to_string(),
+                decimals,
+            },
+            deposit: ChainAddress {
+                address: "0xdead".to_string(),
+                path: "m/44'/60'/0'/0/0".to_string(),
+            },
+            rpc: RpcRef {
+                url: "https://rpc.example".to_string(),
+                source: "profile".to_string(),
+            },
+            balances: BalanceView {
+                state: "read".to_string(),
+                native: None,
+                token: Some(Amount {
+                    amount: "0".to_string(),
+                    decimals: Some(decimals),
+                    symbol: symbol.map(str::to_string),
+                    address: None,
+                }),
+                reason: None,
+                read_at: None,
+            },
+            gas: GasView {
+                verdict: "present".to_string(),
+                symbol: None,
+                headline: String::new(),
+                detail: String::new(),
+                command: None,
+                faucet_gives_gas: false,
+            },
+            channel: ChannelView {
+                phase: phase.to_string(),
+                channel_id: None,
+                deposit: None,
+                spent: None,
+                available: available.map(str::to_string),
+                nonce: None,
+                opened_at: None,
+                started_at: None,
+                tx_hash: None,
+                reason: None,
+                out_of_gas: None,
+                watermark_uncertain: None,
+            },
+            can_open: true,
+            blocked_by: None,
+            suggested_deposit: None,
+        }
+    }
+
+    fn funding_with(chains: Vec<crate::types::ChainFundingView>) -> crate::types::FundingStatus {
+        use crate::types::*;
+        FundingStatus {
+            state: "ready".to_string(),
+            profile: FundingProfileRef {
+                id: "devnet".to_string(),
+                label: "Devnet".to_string(),
+            },
+            pubkey: None,
+            custody: CustodyView {
+                text: String::new(),
+                acknowledged_at: None,
+            },
+            superseded_seeds: 0,
+            held_seed: None,
+            chains,
+            quote: None,
+            faucet: None,
+            channel_store_path: None,
+            reason: None,
+            checked_at: "2026-09-24T00:00:00.000Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn total_channel_balance_is_an_ellipsis_before_funding_loads() {
+        assert_eq!(total_channel_balance(None), "…");
+    }
+
+    #[test]
+    fn total_channel_balance_is_none_with_no_open_channel() {
+        let funding = funding_with(vec![chain_with_channel("none", None, None, 6)]);
+        assert_eq!(total_channel_balance(Some(&funding)), "none");
+    }
+
+    #[test]
+    fn total_channel_balance_ignores_a_channel_that_is_only_opening() {
+        let funding = funding_with(vec![chain_with_channel(
+            "opening",
+            Some("1000000"),
+            Some("USDC"),
+            6,
+        )]);
+        assert_eq!(total_channel_balance(Some(&funding)), "none");
+    }
+
+    #[test]
+    fn total_channel_balance_scales_and_sums_one_open_channel() {
+        let funding = funding_with(vec![chain_with_channel(
+            "open",
+            Some("1500000"),
+            Some("USDC"),
+            6,
+        )]);
+        assert_eq!(total_channel_balance(Some(&funding)), "1.5 USDC");
+    }
+
+    #[test]
+    fn total_channel_balance_sums_two_open_channels_with_the_same_symbol() {
+        let mut a = chain_with_channel("open", Some("1000000"), Some("USDC"), 6);
+        a.chain = "evm:84532".to_string();
+        let mut b = chain_with_channel("open", Some("2500000"), Some("USDC"), 6);
+        b.chain = "evm:8453".to_string();
+        let funding = funding_with(vec![a, b]);
+        assert_eq!(total_channel_balance(Some(&funding)), "3.5 USDC");
+    }
+
+    #[test]
+    fn total_channel_balance_keeps_distinct_symbols_as_separate_terms() {
+        let mut a = chain_with_channel("open", Some("1000000"), Some("USDC"), 6);
+        a.chain = "evm:84532".to_string();
+        let mut b = chain_with_channel("open", Some("2000000000"), Some("SOL-USDC"), 6);
+        b.chain = "solana".to_string();
+        let funding = funding_with(vec![a, b]);
+        // Sorted by symbol (a `BTreeMap` key), not by insertion order.
+        assert_eq!(
+            total_channel_balance(Some(&funding)),
+            "2000 SOL-USDC, 1 USDC"
+        );
+    }
+
+    #[test]
+    fn total_channel_balance_carries_a_sum_larger_than_a_u64() {
+        // The whole reason this is string addition and not `u128`: a
+        // balance can be bigger than that too, and this proves it does not
+        // quietly wrap.
+        let mut a = chain_with_channel(
+            "open",
+            Some("340282366920938463463374607431768211455"),
+            Some("WEI"),
+            0,
+        );
+        a.chain = "evm:1".to_string();
+        let mut b = chain_with_channel("open", Some("1"), Some("WEI"), 0);
+        b.chain = "evm:2".to_string();
+        let funding = funding_with(vec![a, b]);
+        assert_eq!(
+            total_channel_balance(Some(&funding)),
+            "340282366920938463463374607431768211456 WEI"
+        );
     }
 }

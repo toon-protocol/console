@@ -4,5 +4,6 @@
 pub mod account;
 pub mod directory;
 pub mod docs;
+pub mod funds;
 pub mod health;
 pub mod placeholder;

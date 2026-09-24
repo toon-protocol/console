@@ -11,6 +11,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 use crate::types::{DocsIndex, DocsPage, Health, LocalSignerRequest, Profiles, SessionStatus};
 use crate::views::account::{self, AccountViewState};
 use crate::views::directory::{self, DirectoryCommand, DirectoryViewState};
+use crate::views::funds::FundsState;
 
 /// How many lines `PageUp`/`PageDown` scroll the Docs article — arbitrary,
 /// but big enough that a page key visibly moves a full screen's worth on a
@@ -163,6 +164,10 @@ pub struct App {
     pub docs_link_hrefs: Vec<String>,
     /// Which of `docs_link_hrefs` `n`/`N` has focused; `o` opens this one.
     pub docs_link_index: usize,
+    /// The Funds view's own state (TOON_Network#147) — deposits, channel
+    /// balances, the gas station and its confirmations. Kept as one field
+    /// rather than spread across `App` so `views::funds` owns its shape.
+    pub funds: FundsState,
 }
 
 impl App {
@@ -192,6 +197,7 @@ impl App {
             docs_scroll: 0,
             docs_link_hrefs: Vec::new(),
             docs_link_index: 0,
+            funds: FundsState::default(),
         }
     }
 }
@@ -216,10 +222,11 @@ impl Default for App {
 /// applied the parts of it that are pure state (switching views, opening
 /// help). The runtime owns quitting, redrawing and network calls.
 ///
-/// Not `Copy`: `OpenDoc`/`OpenDocsLink`/`AddLocalSigner`/... carry owned data
-/// (a `d`, an `href`, a `LocalSignerRequest`, ...), which a `Copy` type
-/// cannot hold. Not `Eq` either: `LocalSignerRequest` (from `types.rs`,
-/// mirroring the daemon's request body) derives only `PartialEq`.
+/// Not `Copy`: `OpenDoc`/`OpenDocsLink`/`AddLocalSigner`/the Funds variants/...
+/// carry owned data (a `d`, an `href`, a `LocalSignerRequest`, a chain id, a
+/// quote id, ...), which a `Copy` type cannot hold. Not `Eq` either:
+/// `LocalSignerRequest` (from `types.rs`, mirroring the daemon's request
+/// body) derives only `PartialEq`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     None,
@@ -252,6 +259,32 @@ pub enum Command {
     /// re-fetches once this lands (ADR 0028's "the new profile's connector
     /// is a different machine with different terms").
     SwitchProfile(String),
+    // -- Funds (TOON_Network#147) --
+    FetchFunding {
+        refresh: bool,
+    },
+    FetchGasStation,
+    /// Issued only after a confirmation has been shown and accepted
+    /// (`views::funds::handle_confirm_key`) — never straight from a
+    /// keypress.
+    OpenChannel {
+        chain: String,
+        deposit: Option<String>,
+        connector: Option<String>,
+    },
+    Drip {
+        chain: String,
+    },
+    QuoteGas {
+        chain: String,
+    },
+    /// Issued only after a confirmation has been shown and accepted, same as
+    /// `OpenChannel`.
+    BuyGas {
+        chain: String,
+        quote_id: String,
+    },
+    CopyToClipboard(String),
 }
 
 /// The one place a keypress becomes a decision.
@@ -276,6 +309,16 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> Command {
             DirectoryCommand::Refresh => Command::RefreshDirectory,
             DirectoryCommand::None => Command::None,
         };
+    }
+
+    // A confirmation open on Funds swallows every key until it is answered
+    // (TOON_Network#147) — the same "help covers everything underneath it"
+    // rule as `help_open` above, so `Esc` cancels it and `q` merely disarms
+    // it, rather than either quitting the app.
+    if app.view == View::Funds {
+        if let Some(command) = crate::views::funds::handle_confirm_key(&mut app.funds, key) {
+            return command;
+        }
     }
 
     // The Account view has its own forms: while it is on screen, it gets
@@ -419,6 +462,11 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> Command {
             DirectoryCommand::Refresh => Command::RefreshDirectory,
             DirectoryCommand::None => Command::None,
         },
+        // Everything Funds handles for itself (TOON_Network#147) — selecting
+        // a chain, `y`/`o`/`f`/`g`/`b`, and its own `r`. Placed last among
+        // the guarded arms so a global key (quit, help, view switching, a
+        // digit) still wins even while Funds is the current view.
+        _ if app.view == View::Funds => crate::views::funds::handle_key(&mut app.funds, key),
         _ => Command::None,
     }
 }

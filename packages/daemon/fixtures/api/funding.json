@@ -1,0 +1,112 @@
+{
+  "profile": {
+    "id": "sandbox",
+    "label": "Local sandbox",
+    "connectorUrl": "http://localhost:3200/ilp"
+  },
+  "custody": {
+    "text": "Whoever holds this account’s Nostr key holds its funds. The Chain Seed is sealed to that key, so anyone who can sign as this account can unseal it, derive these addresses and spend what they hold. Losing the Nostr key loses the funds with it: nothing in TOON Network, and no one running it, can recover them for you.",
+    "acknowledgedAt": "2026-09-24T11:51:55.797Z"
+  },
+  "supersededSeeds": 0,
+  "heldSeed": {
+    "since": "2026-09-24T11:51:55.804Z",
+    "origin": "minted",
+    "text": "This Chain Seed is NOT YET RECOVERABLE. It is sealed on this machine and on nothing else: no relay holds it, so if this disk is lost before the record is published, everything these addresses hold is lost with it — including anything deposited in the meantime. Publishing the record is a paid TOON packet, and a seed cannot pay for its own publication, because the payer key that pays is derived from the seed itself.",
+    "steps": [
+      "Send the chain’s own coin — ETH, SOL — to the payer address below, so a transaction can be paid for.",
+      "Fund that address with the settlement token, from this network’s faucet on devnet.",
+      "Open a payment channel with this network’s connector, on the Funds tab.",
+      "Publish the Chain Seed record. It is one paid write, at the price the connector quotes."
+    ]
+  },
+  "checkedAt": "2026-09-24T11:51:56.133Z",
+  "state": "ready",
+  "pubkey": "e518b2e56e0611b81855d937d4a65a3e8f4da9406be0d5961b20e140b5db3217",
+  "chains": [
+    {
+      "chain": "evm:31337",
+      "kind": "evm",
+      "counterparty": "0xc0ffee0000000000000000000000000000000001",
+      "token": {
+        "address": "0xc0ffee0000000000000000000000000000000002",
+        "decimals": 18
+      },
+      "deposit": {
+        "address": "0x6EB5C0BD1c338aD65c346d0B6688ADfc6f967685",
+        "path": "m/44'/60'/0'/0/0"
+      },
+      "rpc": {
+        "url": "http://localhost:8545",
+        "source": "profile"
+      },
+      "balances": {
+        "state": "read",
+        "native": {
+          "amount": "1000000000000000",
+          "symbol": "ETH",
+          "decimals": 18
+        },
+        "token": {
+          "amount": "5000000",
+          "symbol": "USDC",
+          "decimals": 6
+        },
+        "readAt": "2026-09-24T11:51:56.134Z"
+      },
+      "gas": {
+        "verdict": "present",
+        "symbol": "ETH",
+        "headline": "Opening a payment channel is a transaction on evm:31337, so it costs ETH — the chain's own coin, which is not the token this network is priced in and which no part of TOON Network can give you.",
+        "detail": "This address holds 1000000000000000 ETH in base units. That is what an open will be paid for with; the chain decides whether it is enough, and a refused transaction costs nothing.",
+        "faucetGivesGas": false
+      },
+      "channel": {
+        "phase": "none",
+        "reason": "This console holds no channel with this connector on this chain. That is not the same as there being none on chain: opening adopts a channel this address already holds with this counterparty rather than opening a second one."
+      },
+      "canOpen": true
+    },
+    {
+      "chain": "solana",
+      "kind": "solana",
+      "counterparty": "Ho1dEr1111111111111111111111111111111111111",
+      "token": {
+        "address": "M1nt111111111111111111111111111111111111111",
+        "decimals": 6
+      },
+      "deposit": {
+        "address": "6qMfTogWZgKL861DFLgVoEGsEqJHyFXYT1ZpJRHC4gpL",
+        "path": "m/44'/501'/0'/0'"
+      },
+      "rpc": {
+        "url": "http://localhost:8899",
+        "source": "profile"
+      },
+      "balances": {
+        "state": "read",
+        "native": {
+          "amount": "0",
+          "symbol": "SOL",
+          "decimals": 9
+        },
+        "readAt": "2026-09-24T11:51:56.134Z"
+      },
+      "gas": {
+        "verdict": "none",
+        "symbol": "SOL",
+        "headline": "Opening a payment channel is a transaction on solana, so it costs SOL — the chain's own coin, which is not the token this network is priced in and which no part of TOON Network can give you.",
+        "detail": "This address holds no SOL, so an open would be refused by the chain before it cost anything. This network has no faucet. Ask the cluster itself: `solana airdrop 1 6qMfTogWZgKL861DFLgVoEGsEqJHyFXYT1ZpJRHC4gpL --url http://localhost:8899`. A public devnet caps that per day and answers 429 Too Many Requests once the cap is reached, and there is nothing to do about a 429 but wait or bring SOL from elsewhere. A local validator has no cap.",
+        "command": "solana airdrop 1 6qMfTogWZgKL861DFLgVoEGsEqJHyFXYT1ZpJRHC4gpL --url http://localhost:8899",
+        "faucetGivesGas": false
+      },
+      "channel": {
+        "phase": "none",
+        "reason": "This console holds no channel with this connector on this chain. That is not the same as there being none on chain: opening adopts a channel this address already holds with this counterparty rather than opening a second one."
+      },
+      "canOpen": false,
+      "blockedBy": "No SOL at this address: the transaction cannot be paid for."
+    }
+  ],
+  "channelStorePath": "/tmp/toon-console-funding-api-jmEFj7/.local/share/toon-console/profiles/sandbox/channels/channels.json"
+}

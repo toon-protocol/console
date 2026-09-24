@@ -12,9 +12,13 @@
 //! - `widgets::*`— small reusable UI pieces shared by more than one view.
 //! - `format`    — small display formatters shared by views.
 //! - `markdown`  — Markdown -> ratatui `Text`, for the Docs view.
+//! - `clipboard` — `wl-copy`, or a message saying it is not there.
+//! - `confirm`   — a minimal confirm-before-spending modal (TOON_Network#147).
 
 pub mod app;
 pub mod client;
+pub mod clipboard;
+pub mod confirm;
 pub mod desktop;
 pub mod format;
 pub mod launch;

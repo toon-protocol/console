@@ -72,7 +72,11 @@ impl DaemonClient {
         self.send(Method::GET, path, None).await
     }
 
-    /// `POST <path>` with a JSON body, decoded as `T`.
+    /// `POST <path>` with a JSON body, decoded as `T`. Same 401-then-reread
+    /// retry as `get` (via `send`) — a route that spends money (opening a
+    /// channel, buying gas, TOON_Network#147) still answers 401 rather than
+    /// doing anything the FIRST time a window holds a stale token, exactly
+    /// like a read would.
     pub async fn post<B: Serialize, T: DeserializeOwned>(
         &self,
         path: &str,
