@@ -33,9 +33,8 @@ use toon_console_tui::markdown;
 use toon_console_tui::types::{
     BunkerSignerRequest, ChainSeedStatus, Dashboard, Directory, DirectoryFilters, DocsIndex,
     DocsPage, ExtendResult, FundingStatus, GasPurchase, GasQuote, GasStationStatus, GatewayView,
-    HandoverResult, Health, ImportChainSeedRequest, ProfileSwitchRequest, Profiles,
-    RotationResult, RotationView, SessionStatus, SignInRequest, TerminateResult, WithdrawalResult,
-    WorkloadCard,
+    HandoverResult, Health, ImportChainSeedRequest, ProfileSwitchRequest, Profiles, RotationResult,
+    RotationView, SessionStatus, SignInRequest, TerminateResult, WithdrawalResult, WorkloadCard,
 };
 use toon_console_tui::ui;
 use toon_console_tui::views::directory::directory_query;
@@ -1286,10 +1285,7 @@ fn spawn_disarm_auto_extend(
 /// Free at the providers; only ever reached after a typed `yes`.
 fn spawn_rotate(client: Arc<DaemonClient>, tx: UnboundedSender<RuntimeEvent>, workload_id: String) {
     tokio::spawn(async move {
-        let path = format!(
-            "/api/workloads/{}/rotate",
-            workload_urlencode(&workload_id)
-        );
+        let path = format!("/api/workloads/{}/rotate", workload_urlencode(&workload_id));
         let result = client
             .post::<_, RotationResult>(&path, &serde_json::json!({}))
             .await

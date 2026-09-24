@@ -836,7 +836,11 @@ mod tests {
         let mut state = ChainSeedViewState::new();
         activate(&mut state, Some(&held_status()), Target::Publish);
         assert!(state.confirm.is_some());
-        let outcome = state.confirm.as_mut().unwrap().handle_key(key(KeyCode::Enter));
+        let outcome = state
+            .confirm
+            .as_mut()
+            .unwrap()
+            .handle_key(key(KeyCode::Enter));
         assert_eq!(outcome, crate::widgets::confirm::ConfirmOutcome::Pending);
         assert!(
             state.confirm.is_some(),

@@ -1217,8 +1217,8 @@ mod tests {
     }
 
     #[test]
-    fn confirming_an_open_channel_by_typing_yes_then_enter_issues_the_command_and_closes_the_modal(
-    ) {
+    fn confirming_an_open_channel_by_typing_yes_then_enter_issues_the_command_and_closes_the_modal()
+    {
         let mut state = FundsState::default();
         state.funding = Some(sample_funding(
             "ready",
