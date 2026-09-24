@@ -1,0 +1,12 @@
+{
+  "name": "ssh-box",
+  "title": "SSH box (Alpine)",
+  "summary": "An SSH shell into the workload you rented, with your own key and nothing else: no other listening port, no fixed service, no password ever issued. Root, by key only.",
+  "ports": [{ "container_port": 22, "protocol": "tcp" }],
+  "env_fixed": {},
+  "env_tenant": [],
+  "ssh_key": {
+    "required": true,
+    "note": "Your own OpenSSH public key line (ssh-ed25519, ssh-rsa, or ecdsa-*). Installed as authorized_keys for root; no password is ever issued."
+  }
+}
