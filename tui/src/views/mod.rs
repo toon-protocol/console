@@ -2,5 +2,6 @@
 //! distinct files. `tui/README.md` says how to add one.
 
 pub mod account;
+pub mod chain_seed;
 pub mod health;
 pub mod placeholder;

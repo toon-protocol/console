@@ -8,7 +8,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
-use crate::types::{Health, LocalSignerRequest, Profiles, SessionStatus};
+use crate::types::{ChainSeedStatus, Health, LocalSignerRequest, Profiles, SessionStatus};
 use crate::views::account::{self, AccountViewState};
 
 /// The seven views of the sidebar (ADR 0028), in the order `1`-`7` select
@@ -118,10 +118,26 @@ pub struct App {
     /// The id being switched to while a profile switch is in flight, so the
     /// switcher can show which one and disable the rest.
     pub switching_profile: Option<String>,
-    /// The Account view's own form state (focus, typed fields). Kept out of
-    /// this struct's own fields, the way a view with no forms (Health) needs
-    /// none of its own — a later view ticket with a form follows this same
-    /// shape rather than growing `App` per field.
+    /// The signed-in account's Chain Seed (TOON_Network#142) — read once the
+    /// account is known signed in, the way `health` and `account` are read
+    /// once at connect, and again on `r` or a network-profile switch (a
+    /// different profile is a different connector, and `writes` is quoted by
+    /// the profile's connector).
+    pub chain_seed: Option<ChainSeedStatus>,
+    pub loading_chain_seed: bool,
+    /// The pubkey `chain_seed` was last read for, so a newly signed-in
+    /// account (or a different one) triggers a fresh read rather than
+    /// showing the previous account's Chain Seed for one frame.
+    pub chain_seed_for_pubkey: Option<String>,
+    /// The last Chain Seed action's failure, if any — shown next to the
+    /// section the same way `account_error` is, and cleared the moment a
+    /// fresh `ChainSeedStatus` arrives.
+    pub chain_seed_error: Option<String>,
+    /// The Account view's own form state (focus, typed fields — including
+    /// the Chain Seed section's, see `views::chain_seed`). Kept out of this
+    /// struct's own fields, the way a view with no forms (Health) needs none
+    /// of its own — a later view ticket with a form follows this same shape
+    /// rather than growing `App` per field.
     pub account_view: AccountViewState,
 }
 
@@ -139,6 +155,10 @@ impl App {
             account_error: None,
             profiles: None,
             switching_profile: None,
+            chain_seed: None,
+            loading_chain_seed: false,
+            chain_seed_for_pubkey: None,
+            chain_seed_error: None,
             account_view: AccountViewState::new(),
         }
     }
@@ -175,6 +195,24 @@ pub enum Command {
     /// re-fetches once this lands (ADR 0028's "the new profile's connector
     /// is a different machine with different terms").
     SwitchProfile(String),
+    /// `POST /api/chain-seed/acknowledge` (TOON_Network#142) — the custody
+    /// warning, read once.
+    AcknowledgeChainSeedWarning,
+    /// `POST /api/chain-seed/mint`. Answers `not_yet_recoverable`: minting
+    /// never publishes on its own (#120).
+    MintChainSeed,
+    /// `POST /api/chain-seed/import`, carrying the typed mnemonic for
+    /// exactly as long as it takes to reach `main.rs`'s request — see
+    /// `widgets::input::TextField::take`.
+    ImportChainSeed(String),
+    /// `POST /api/chain-seed/publish` — **spends money**: one paid relay
+    /// write. Only reachable through `widgets::confirm::ConfirmState`'s own
+    /// two-key dance (see `views::chain_seed`); nothing in this module's
+    /// keymap can produce it from a single keypress.
+    PublishChainSeed,
+    /// `POST /api/chain-seed/refresh` — free; looks again without
+    /// publishing anything.
+    RefreshChainSeed,
 }
 
 /// The one place a keypress becomes a decision.
@@ -204,6 +242,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> Command {
             &mut app.account_view,
             app.account.as_ref(),
             app.profiles.as_ref(),
+            app.chain_seed.as_ref(),
             key,
         ) {
             return command;

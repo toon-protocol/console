@@ -136,17 +136,36 @@ fn draw_content(frame: &mut Frame, area: Rect, app: &App) {
             None => draw_loading(frame, area, "Health"),
         },
         (View::Account, _) => match &app.account {
-            Some(status) => views::account::draw(
-                frame,
-                area,
-                &app.account_view,
-                status,
-                app.profiles.as_ref(),
-                app.account_error.as_deref(),
-            ),
+            Some(status) => {
+                // One line, not one per concern — the same rule
+                // `console-app.tsx` follows for its error banner: an
+                // account error and a Chain Seed error shown separately
+                // would say the same kind of thing twice.
+                let error = account_and_chain_seed_error(app);
+                views::account::draw(
+                    frame,
+                    area,
+                    &app.account_view,
+                    status,
+                    app.profiles.as_ref(),
+                    app.chain_seed.as_ref(),
+                    error.as_deref(),
+                )
+            }
             None => draw_loading(frame, area, "Account"),
         },
         (view, _) => views::placeholder::draw(frame, area, view.title()),
+    }
+}
+
+fn account_and_chain_seed_error(app: &App) -> Option<String> {
+    match (&app.account_error, &app.chain_seed_error) {
+        (Some(account), Some(chain_seed)) if account != chain_seed => {
+            Some(format!("{account}\n{chain_seed}"))
+        }
+        (Some(account), _) => Some(account.clone()),
+        (None, Some(chain_seed)) => Some(chain_seed.clone()),
+        (None, None) => None,
     }
 }
 
@@ -186,6 +205,9 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
         spans.push(Span::raw(
             " j/k move  Enter edit/act  Esc stop editing  r refresh ",
         ));
+        if app.account_view.chain_seed.confirm.is_open() {
+            spans.push(Span::raw(" y arm, Enter to publish  Esc cancel "));
+        }
     }
     spans.push(Span::raw(" ? help  q quit "));
     let block = Block::default().borders(Borders::ALL);
@@ -201,6 +223,7 @@ const HELP_LINES: &[&str] = &[
     "j / k      Account: move between fields and buttons",
     "Enter      Account: edit a field, or act on a button",
     "Esc        Account: stop typing (while editing a field)",
+    "y, Enter   Account: confirm a Chain Seed publish (two keys, on purpose)",
     "mouse      click a sidebar row to select it",
     "?          toggle this help",
     "q / Esc    quit",

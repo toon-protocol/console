@@ -1,0 +1,61 @@
+{
+  "state": "not_yet_recoverable",
+  "pubkey": "d6b18830f963a2e67542e1d0d4c8628840b410e68022b7d8ec4036b6d3d7aa1c",
+  "addresses": {
+    "evm": {
+      "address": "0x7CE9373245B99C56fdF3e6435e235B629f52684d",
+      "path": "m/44'/60'/0'/0/0"
+    },
+    "solana": {
+      "address": "CzCWQRVdy1c4i8oGUaXfbSU7sNkCEgmS6YAuzMidXLDC",
+      "path": "m/44'/501'/0'/0'"
+    }
+  },
+  "origin": "minted",
+  "held": {
+    "since": "2026-09-24T12:17:54.991Z",
+    "origin": "minted",
+    "text": "This Chain Seed is NOT YET RECOVERABLE. It is sealed on this machine and on nothing else: no relay holds it, so if this disk is lost before the record is published, everything these addresses hold is lost with it — including anything deposited in the meantime. Publishing the record is a paid TOON packet, and a seed cannot pay for its own publication, because the payer key that pays is derived from the seed itself.",
+    "steps": [
+      "Send the chain’s own coin — ETH, SOL — to the payer address below, so a transaction can be paid for.",
+      "Fund that address with the settlement token, from this network’s faucet on devnet.",
+      "Open a payment channel with this network’s connector, on the Funds tab.",
+      "Publish the Chain Seed record. It is one paid write, at the price the connector quotes."
+    ]
+  },
+  "relayList": {
+    "state": "none",
+    "read": [],
+    "write": []
+  },
+  "writes": {
+    "relays": [
+      "wss://relay.toon.test"
+    ],
+    "plan": [
+      {
+        "url": "wss://relay.toon.test",
+        "ready": true,
+        "destination": "g.toon.relay",
+        "payAt": "https://connector.test/ilp",
+        "price": "1",
+        "chain": "evm:31337",
+        "channelId": "0xchannel",
+        "via": "document"
+      }
+    ],
+    "destination": "g.toon.relay",
+    "payAt": "https://connector.test/ilp",
+    "price": "1",
+    "totalPrice": "1",
+    "chain": "evm:31337",
+    "channelId": "0xchannel",
+    "ready": true
+  },
+  "warning": {
+    "text": "Whoever holds this account’s Nostr key holds its funds. The Chain Seed is sealed to that key, so anyone who can sign as this account can unseal it, derive these addresses and spend what they hold. Losing the Nostr key loses the funds with it: nothing in TOON Network, and no one running it, can recover them for you.",
+    "acknowledgedAt": "2026-09-24T12:17:54.987Z"
+  },
+  "supersededSeeds": 0,
+  "checkedAt": "2026-09-24T12:17:55.077Z"
+}

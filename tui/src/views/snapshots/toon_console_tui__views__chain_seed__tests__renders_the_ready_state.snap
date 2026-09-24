@@ -1,0 +1,32 @@
+---
+source: src/views/chain_seed.rs
+expression: output
+---
+┌ Chain Seed — minted ───────────────────────────────────────────────────────────────────┐
+│EVM (Base): 0x9858EfFD232B4033E47d90003D41EC34EcaEda94  (m/44'/60'/0'/0/0)              │
+│Solana: HAgk14JpMQLgt6rVgv7cBQFJWFto5Dqxi472uT3DKpqk  (m/44'/501'/0'/0')                │
+│                                                                                        │
+│Read from wss://relay.toon.test. Published 2026-09-24.                                  │
+│                                                                                        │
+│ Read from relays again                                                                 │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+└────────────────────────────────────────────────────────────────────────────────────────┘

@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use toon_console_tui::types::{Health, Profiles, SessionStatus};
+use toon_console_tui::types::{ChainSeedStatus, Health, Profiles, SessionStatus};
 
 type Check = fn(&str) -> Result<(), String>;
 
@@ -41,6 +41,21 @@ fn registry() -> BTreeMap<&'static str, Check> {
     map.insert("account-signed-out", check::<SessionStatus> as Check);
     map.insert("account-signed-in", check::<SessionStatus> as Check);
     map.insert("profiles", check::<Profiles> as Check);
+    // TOON_Network#142 (Chain Seed): every fixture `api-chain-seed.test.ts`
+    // writes is the same `ChainSeedStatus` shape the state it names comes
+    // from.
+    for name in [
+        "chain-seed-signed-out",
+        "chain-seed-unknown",
+        "chain-seed-absent",
+        "chain-seed-absent-acknowledged",
+        "chain-seed-not-yet-recoverable",
+        "chain-seed-not-yet-recoverable-blocked",
+        "chain-seed-ready",
+        "chain-seed-unreadable",
+    ] {
+        map.insert(name, check::<ChainSeedStatus> as Check);
+    }
     map
 }
 

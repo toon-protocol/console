@@ -27,7 +27,8 @@ use toon_console_tui::client::DaemonClient;
 use toon_console_tui::desktop;
 use toon_console_tui::launch::{launch_file_path, LaunchError};
 use toon_console_tui::types::{
-    BunkerSignerRequest, Health, ProfileSwitchRequest, Profiles, SessionStatus, SignInRequest,
+    BunkerSignerRequest, ChainSeedStatus, Health, ImportChainSeedRequest, ProfileSwitchRequest,
+    Profiles, SessionStatus, SignInRequest,
 };
 use toon_console_tui::ui;
 
@@ -51,6 +52,10 @@ enum RuntimeEvent {
     ProfileSwitched(Profiles),
     ProfileSwitchFailed(String),
     SwitchView(View),
+    /// The answer to `GET /api/chain-seed`, or to any Chain Seed action
+    /// (acknowledge, mint, import, publish, refresh) — every one of those
+    /// routes answers with the same `ChainSeedStatus` (TOON_Network#142).
+    ChainSeedLoaded(Box<Result<ChainSeedStatus, String>>),
 }
 
 #[tokio::main]
@@ -172,6 +177,55 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()
                                     spawn_switch_profile(client.clone(), tx.clone(), id);
                                 }
                             }
+                            Command::AcknowledgeChainSeedWarning => {
+                                if let Some(client) = &client {
+                                    spawn_chain_seed_post_empty(
+                                        client.clone(),
+                                        tx.clone(),
+                                        "/api/chain-seed/acknowledge",
+                                    );
+                                }
+                            }
+                            Command::MintChainSeed => {
+                                if let Some(client) = &client {
+                                    spawn_chain_seed_post_empty(
+                                        client.clone(),
+                                        tx.clone(),
+                                        "/api/chain-seed/mint",
+                                    );
+                                }
+                            }
+                            Command::ImportChainSeed(mnemonic) => {
+                                if let Some(client) = &client {
+                                    spawn_chain_seed_post(
+                                        client.clone(),
+                                        tx.clone(),
+                                        "/api/chain-seed/import",
+                                        ImportChainSeedRequest { mnemonic },
+                                    );
+                                }
+                            }
+                            // Only ever produced by the confirm modal's own
+                            // `y`-then-`Enter` — see `views::chain_seed` and
+                            // `views::account::handle_key`.
+                            Command::PublishChainSeed => {
+                                if let Some(client) = &client {
+                                    spawn_chain_seed_post_empty(
+                                        client.clone(),
+                                        tx.clone(),
+                                        "/api/chain-seed/publish",
+                                    );
+                                }
+                            }
+                            Command::RefreshChainSeed => {
+                                if let Some(client) = &client {
+                                    spawn_chain_seed_post_empty(
+                                        client.clone(),
+                                        tx.clone(),
+                                        "/api/chain-seed/refresh",
+                                    );
+                                }
+                            }
                             Command::None => {}
                         }
                     }
@@ -214,9 +268,26 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()
                     },
                     RuntimeEvent::AccountLoaded(result) => match *result {
                         Ok(status) => {
+                            let pubkey = status.account.as_ref().map(|view| view.pubkey.clone());
                             app.account = Some(status);
                             app.loading_account = false;
                             app.account_error = None;
+                            // The Chain Seed belongs to the Account
+                            // (TOON_Network#142): signing in as somebody
+                            // else — or signing out — is a different seed
+                            // or none, so a change in who is signed in is
+                            // the trigger to read it again, the same way
+                            // `use-chain-seed.ts` keys its reload off
+                            // `options.pubkey`.
+                            if pubkey != app.chain_seed_for_pubkey {
+                                app.chain_seed_for_pubkey = pubkey.clone();
+                                if let (Some(client), Some(_)) = (&client, &pubkey) {
+                                    spawn_chain_seed_fetch(client.clone(), tx.clone());
+                                    app.loading_chain_seed = true;
+                                } else {
+                                    app.chain_seed = None;
+                                }
+                            }
                         }
                         Err(message) => {
                             app.loading_account = false;
@@ -246,6 +317,14 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()
                             app.loading_health = true;
                             spawn_account_fetch(client.clone(), tx.clone());
                             app.loading_account = true;
+                            // `writes` (what a Chain Seed publish would cost)
+                            // is quoted by the active profile's connector, so
+                            // it re-reads here too, not only on a pubkey
+                            // change.
+                            if app.chain_seed_for_pubkey.is_some() {
+                                spawn_chain_seed_fetch(client.clone(), tx.clone());
+                                app.loading_chain_seed = true;
+                            }
                         }
                     }
                     RuntimeEvent::ProfileSwitchFailed(message) => {
@@ -255,6 +334,17 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()
                     RuntimeEvent::SwitchView(view) => {
                         app.view = view;
                     }
+                    RuntimeEvent::ChainSeedLoaded(result) => match *result {
+                        Ok(status) => {
+                            app.chain_seed = Some(status);
+                            app.loading_chain_seed = false;
+                            app.chain_seed_error = None;
+                        }
+                        Err(message) => {
+                            app.loading_chain_seed = false;
+                            app.chain_seed_error = Some(message);
+                        }
+                    },
                 }
             }
         }
@@ -390,6 +480,53 @@ fn spawn_switch_profile(client: Arc<DaemonClient>, tx: UnboundedSender<RuntimeEv
                 let _ = tx.send(RuntimeEvent::ProfileSwitchFailed(err.to_string()));
             }
         }
+    });
+}
+
+/// One-shot `GET /api/chain-seed` (TOON_Network#142). Read on connect once
+/// an account is known signed in, again on a pubkey change or a profile
+/// switch, and again whenever an action posts a body and gets a fresh
+/// `ChainSeedStatus` back (`spawn_chain_seed_post`/`_empty` below reuse this
+/// same event).
+fn spawn_chain_seed_fetch(client: Arc<DaemonClient>, tx: UnboundedSender<RuntimeEvent>) {
+    tokio::spawn(async move {
+        let result = client
+            .get::<ChainSeedStatus>("/api/chain-seed")
+            .await
+            .map_err(|err| err.to_string());
+        let _ = tx.send(RuntimeEvent::ChainSeedLoaded(Box::new(result)));
+    });
+}
+
+/// Every Chain Seed action that takes a body (only `import`, today) answers
+/// with the same `ChainSeedStatus` `GET /api/chain-seed` does.
+fn spawn_chain_seed_post<B: serde::Serialize + Send + Sync + 'static>(
+    client: Arc<DaemonClient>,
+    tx: UnboundedSender<RuntimeEvent>,
+    path: &'static str,
+    body: B,
+) {
+    tokio::spawn(async move {
+        let result = client
+            .post::<B, ChainSeedStatus>(path, &body)
+            .await
+            .map_err(|err| err.to_string());
+        let _ = tx.send(RuntimeEvent::ChainSeedLoaded(Box::new(result)));
+    });
+}
+
+/// Acknowledge, mint, publish and refresh all take no body.
+fn spawn_chain_seed_post_empty(
+    client: Arc<DaemonClient>,
+    tx: UnboundedSender<RuntimeEvent>,
+    path: &'static str,
+) {
+    tokio::spawn(async move {
+        let result = client
+            .post_empty::<ChainSeedStatus>(path)
+            .await
+            .map_err(|err| err.to_string());
+        let _ = tx.send(RuntimeEvent::ChainSeedLoaded(Box::new(result)));
     });
 }
 
