@@ -40,6 +40,7 @@ use toon_console_tui::types::{
 };
 use toon_console_tui::ui;
 use toon_console_tui::views::account as account_view;
+use toon_console_tui::views::chain_seed;
 use toon_console_tui::views::new_workload;
 use toon_console_tui::views::workloads as workloads_view;
 
@@ -615,9 +616,24 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()
                     }
                     RuntimeEvent::ChainSeedLoaded(result) => match *result {
                         Ok(status) => {
+                            let first_read = chain_seed::first_read_needed(
+                                &status,
+                                app.chain_seed_read_for.as_deref(),
+                            );
+                            if first_read {
+                                app.chain_seed_read_for = status.pubkey.clone();
+                            }
                             app.chain_seed = Some(status);
                             app.loading_chain_seed = false;
                             app.chain_seed_error = None;
+                            if first_read {
+                                if let Some(client) = &client {
+                                    spawn_chain_seed_call(client.clone(), tx.clone(), |client| async move {
+                                        api::refresh_chain_seed(&client).await
+                                    });
+                                    app.loading_chain_seed = true;
+                                }
+                            }
                         }
                         Err(message) => {
                             app.loading_chain_seed = false;

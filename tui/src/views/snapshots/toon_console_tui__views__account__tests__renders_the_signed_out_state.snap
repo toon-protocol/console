@@ -1,16 +1,17 @@
 ---
 source: src/views/account.rs
-assertion_line: 1015
 expression: output
 ---
 ┌ Connect a remote signer ────────────────────────────┐┌ Use the local keystore (encrypted file) ────────────┐
-│NIP-46: Amber, nsec.app or `nak bunker`. The key     ││Sealed into                                          │
-│never leaves it.                                     ││/home/tester/.config/toon-console/keystore.json.     │
+│NIP-46: Amber, nsec.app or `nak bunker`. The key     ││Sealed into /home/tester/.config/toon-console/keystor│
+│never leaves it.                                     ││e.json.                                              │
 │                                                     ││                                                     │
 │Bunker URI: ▏                                        ││(x) Generate                                         │
 │Keystore passphrase: …                               ││( ) Import nsec                                      │
 │                                                     ││( ) Import mnemonic                                  │
 │ Connect                                             ││Keystore passphrase: …                               │
+│                                                     ││                                                     │
+│                                                     ││ Generate and sign in                                │
 └─────────────────────────────────────────────────────┘└─────────────────────────────────────────────────────┘
 ┌ Signers on this machine ───────────────────────────────────────────────────────────────────────────────────┐
 │agent  local key   Sign in   Forget                                                                         │

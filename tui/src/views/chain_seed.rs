@@ -123,6 +123,18 @@ pub fn targets(status: Option<&ChainSeedStatus>, show_import: bool) -> Vec<Targe
     out
 }
 
+/// Whether the daemon has yet to look for this account's seed on its relays:
+/// `unknown` means nobody has asked, so neither "none yet" nor a published
+/// record can be told apart. The runtime asks once per signed-in pubkey (a
+/// free relay read, `POST /api/chain-seed/refresh`) — without it a fresh
+/// sign-in sat on "reading…" until something else happened to look.
+/// `read_for` is the pubkey that first read was already asked for.
+pub fn first_read_needed(status: &ChainSeedStatus, read_for: Option<&str>) -> bool {
+    status.state == ChainSeedState::Unknown
+        && status.pubkey.is_some()
+        && status.pubkey.as_deref() != read_for
+}
+
 /// Turns an `Enter` on `target` into a state change or a [`Command`], the
 /// same contract `views::account::activate` follows. `Target::Mnemonic` is
 /// handled by the caller (`views::account`) before this is reached — see the
@@ -595,6 +607,17 @@ mod tests {
             reason: None,
             checked_at: "2026-09-24T12:00:00.000Z".to_string(),
         }
+    }
+
+    #[test]
+    fn an_unknown_seed_is_read_once_per_account() {
+        let mut status = unknown_status();
+        status.pubkey = Some("aa".to_string());
+        assert!(first_read_needed(&status, None));
+        assert!(!first_read_needed(&status, Some("aa")));
+        assert!(first_read_needed(&status, Some("bb")));
+        assert!(!first_read_needed(&absent_unacknowledged_status(), None));
+        assert!(!first_read_needed(&ready_status(), None));
     }
 
     fn unknown_status() -> ChainSeedStatus {

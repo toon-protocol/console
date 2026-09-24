@@ -555,10 +555,11 @@ pub fn draw(
         } else {
             status.signers.len() as u16 + 3
         };
+        let top_height = local_keystore_height(state, status, area.width / 2).max(9);
         let rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(9),
+                Constraint::Length(top_height),
                 Constraint::Length(saved_height),
                 Constraint::Length(profiles_height),
                 Constraint::Length(error_height),
@@ -660,6 +661,31 @@ fn draw_remote_signer(
     rows.finish(frame, inner)
 }
 
+/// "Sealed into <path>." cut into lines no wider than `width`, so a long
+/// keystore path takes the rows it needs instead of hiding the rows under it.
+fn sealed_into_lines(status: &SessionStatus, width: u16) -> Vec<String> {
+    let text = format!("Sealed into {}.", status.keystore.location);
+    let width = usize::from(width.max(1));
+    let chars: Vec<char> = text.chars().collect();
+    chars
+        .chunks(width)
+        .map(|chunk| chunk.iter().collect())
+        .collect()
+}
+
+/// The local keystore card's full height, borders included: every row
+/// `draw_local_keystore` pushes, for the mode and keystore in hand. The
+/// signed-out row is sized from this, so "Generate and sign in" is never
+/// cut off below the card's edge.
+fn local_keystore_height(state: &AccountViewState, status: &SessionStatus, width: u16) -> u16 {
+    let inner_width = width.saturating_sub(2);
+    let path = sealed_into_lines(status, inner_width).len() as u16;
+    let field = u16::from(state.local_mode != LocalSignerMode::Generate);
+    let passphrase = u16::from(status.keystore.needs_passphrase);
+    // path, blank, three modes, field, passphrase, blank, submit, borders
+    path + 1 + 3 + field + passphrase + 1 + 1 + 2
+}
+
 fn draw_local_keystore(
     frame: &mut Frame,
     area: Rect,
@@ -677,12 +703,17 @@ fn draw_local_keystore(
     frame.render_widget(block, area);
 
     let mut rows = RowLines::default();
-    rows.push(Line::from(Span::styled(
-        format!("Sealed into {}.", status.keystore.location),
-        Style::default()
-            .fg(Color::DarkGray)
-            .add_modifier(Modifier::ITALIC),
-    )));
+    // Split by hand rather than left to the paragraph's wrap: a wrapped line
+    // would push every row below it down without `RowLines` knowing, and
+    // both the card's height and the mouse hit rows count logical lines.
+    for chunk in sealed_into_lines(status, inner.width) {
+        rows.push(Line::from(Span::styled(
+            chunk,
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::ITALIC),
+        )));
+    }
     rows.push(Line::raw(""));
     rows.push_target(
         Target::ModeGenerate,
@@ -933,6 +964,29 @@ fn draw_error(frame: &mut Frame, area: Rect, error: Option<&str>) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_local_keystore_card_is_tall_enough_for_its_submit_row() {
+        let mut status: SessionStatus = serde_json::from_str(include_str!(
+            "../../../packages/daemon/fixtures/api/account-signed-out.json"
+        ))
+        .unwrap();
+        status.keystore.needs_passphrase = true;
+        status.keystore.location = "/a/very/long/path/".repeat(8);
+        let mut state = AccountViewState::new();
+        state.local_mode = LocalSignerMode::Nsec;
+        let width = 60;
+        let lines = sealed_into_lines(&status, width - 2);
+        assert!(lines.len() > 1, "the path should need more than one line");
+        assert!(lines
+            .iter()
+            .all(|line| line.chars().count() <= usize::from(width - 2)));
+        // path lines + blank + 3 modes + nsec + passphrase + blank + submit + 2 borders
+        assert_eq!(
+            local_keystore_height(&state, &status, width),
+            lines.len() as u16 + 10
+        );
+    }
+
     use super::*;
     use crate::types::{
         AccountMetadata, AccountProfile, AccountView, KeystoreBackend, KeystoreInfo, ProfileState,

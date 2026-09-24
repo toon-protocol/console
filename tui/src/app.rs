@@ -138,6 +138,9 @@ pub struct App {
     /// account (or a different one) triggers a fresh read rather than
     /// showing the previous account's Chain Seed for one frame.
     pub chain_seed_for_pubkey: Option<String>,
+    /// The pubkey whose first relay read of its Chain Seed has been asked
+    /// for — see `views::chain_seed::first_read_needed`.
+    pub chain_seed_read_for: Option<String>,
     /// The last Chain Seed action's failure, if any — shown next to the
     /// section the same way `account_error` is, and cleared the moment a
     /// fresh `ChainSeedStatus` arrives.
@@ -199,6 +202,7 @@ impl App {
             chain_seed: None,
             loading_chain_seed: false,
             chain_seed_for_pubkey: None,
+            chain_seed_read_for: None,
             chain_seed_error: None,
             account_view: AccountViewState::new(),
             directory: DirectoryViewState::new(),
