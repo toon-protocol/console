@@ -131,7 +131,7 @@ export function ConsoleApp() {
     active: tab === 'funds',
     pubkey: account.status?.account?.pubkey,
     ...(health === undefined ? {} : { profileId: health.profile.id }),
-    revision: funding.status?.chains.map((chain) => chain.channel.phase).join('|'),
+    revision: funding.status?.chains?.map((chain) => chain.channel.phase).join('|'),
   });
   // Keyed to the ACCOUNT alone. A lease belongs to whoever holds its Root
   // Secret, and the vault holds leases from every network this account has
