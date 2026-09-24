@@ -1,6 +1,7 @@
 //! One module per view (ADR 0028's sidebar), so parallel tickets touch
 //! distinct files. `tui/README.md` says how to add one.
 
+pub mod account;
 pub mod directory;
 pub mod docs;
 pub mod health;

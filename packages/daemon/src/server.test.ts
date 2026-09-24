@@ -190,6 +190,16 @@ describe('the daemon server', () => {
     writeApiFixture('health', body);
   });
 
+  it('answers the profile list, and the TUI fixture for it (TOON_Network#141)', async () => {
+    const response = await api('/api/profiles');
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { activeId: string; profiles: { id: string }[] };
+    expect(body.activeId).toBe('devnet');
+    expect(body.profiles.map((profile) => profile.id)).toContain('devnet');
+
+    writeApiFixture('profiles', body);
+  });
+
   it('switches the active profile and keeps it switched', async () => {
     const switched = await api('/api/profiles/active', {
       method: 'POST',

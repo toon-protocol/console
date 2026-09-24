@@ -122,6 +122,32 @@ pub fn format_thousands(n: i64) -> String {
     format!("{sign}{grouped}")
 }
 
+/// Mirrors `shortNpub` in `packages/ui/src/app/account-view.tsx`: enough of
+/// an npub to recognise it at a glance, not all sixty-three characters —
+/// used both by the header (TOON_Network#141) and the Account view itself.
+pub fn short_npub(npub: &str) -> String {
+    if npub.len() <= 16 {
+        return npub.to_string();
+    }
+    format!("{}…{}", &npub[..10], &npub[npub.len() - 4..])
+}
+
+/// The name shown for a signed-in account: its kind-0 `displayName`, then
+/// its `name`, then its short npub — `AccountChip`'s own fallback chain in
+/// `packages/ui/src/app/account-view.tsx`.
+pub fn account_display_name(view: &crate::types::AccountView) -> String {
+    view.profile
+        .as_ref()
+        .and_then(|profile| profile.metadata.as_ref())
+        .and_then(|metadata| {
+            metadata
+                .display_name
+                .clone()
+                .or_else(|| metadata.name.clone())
+        })
+        .unwrap_or_else(|| short_npub(&view.npub))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -210,5 +236,16 @@ mod tests {
         assert_eq!(format_thousands(20_000), "20,000");
         assert_eq!(format_thousands(1_234_567), "1,234,567");
         assert_eq!(format_thousands(-2_500), "-2,500");
+    }
+
+    #[test]
+    fn a_short_npub_is_shown_in_full() {
+        assert_eq!(short_npub("npub1abc"), "npub1abc");
+    }
+
+    #[test]
+    fn a_full_length_npub_is_shortened_to_its_ends() {
+        let npub = "npub1exampleexampleexampleexampleexampleexampleexampleexamplex";
+        assert_eq!(short_npub(npub), "npub1examp…plex");
     }
 }

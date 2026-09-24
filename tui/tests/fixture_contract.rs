@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use toon_console_tui::types::{Directory, DocsIndex, DocsPage, Health};
+use toon_console_tui::types::{Directory, DocsIndex, DocsPage, Health, Profiles, SessionStatus};
 
 type Check = fn(&str) -> Result<(), String>;
 
@@ -38,6 +38,12 @@ fn registry() -> BTreeMap<&'static str, Check> {
     map.insert("directory", check::<Directory> as Check);
     map.insert("docs", check::<DocsIndex> as Check);
     map.insert("doc", check::<DocsPage> as Check);
+    // TOON_Network#141 (Account): `GET /api/account` answers the same
+    // `SessionStatus` shape signed in or out, so both fixtures check the
+    // same type.
+    map.insert("account-signed-out", check::<SessionStatus> as Check);
+    map.insert("account-signed-in", check::<SessionStatus> as Check);
+    map.insert("profiles", check::<Profiles> as Check);
     map
 }
 
