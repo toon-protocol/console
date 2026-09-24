@@ -3,9 +3,13 @@ source: src/views/workloads.rs
 expression: render(&state)
 ---
 ┌ Workloads────────────────────────────────────────────────────────┐┌ Detail ────────────────────────────────────────────────────────────────────────┐
-│  ID            LISTING    STATUS         RUNWAY      SB   GW     ││aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa                │
-│> aaaaaaaaaaaa… basic v1   running        3 d 0 h          ✓      ││Listing basic v1  Provider g.toon.provider                                      │
-│                                                                  ││Runway 3 d 0 h                                                                  │
+│  ID            LISTING    STATUS         RUNWAY      SB   GW     ││b2e292ee009eb3fc064aaa7a1bc70a28adc1039f495751d4caa0cb9c08fd8abd                │
+│> b2e292ee009e… basic v1   expired 2h ⌛    unknown          ✓     ││Listing basic v1  Provider g.toon.provider                                      │
+│                                                                  ││Expired 2 h 0 min ago: the paid time ran out with nothing extending it, and the │
+│                                                                  ││provider has removed it. Auto-extend (a) or extend (e) before the paid time runs│
+│                                                                  ││out to keep one alive; spawning again is the only way to get this one back.     │
+│                                                                  ││                                                                                │
+│                                                                  ││Runway This lease has ended, so it has no runway.                               │
 │                                                                  ││                                                                                │
 │                                                                  ││Leases (primary first)                                                          │
 │                                                                  ││  standalone running          basic v1  running now                             │
@@ -21,14 +25,10 @@ expression: render(&state)
 │                                                                  ││  No budget set. Press `a` to set one.                                          │
 │                                                                  ││                                                                                │
 │                                                                  ││Gateway                                                                         │
-│                                                                  ││  gy3kac2vsozt.gw.example — served                                              │
+│                                                                  ││  wlrjf3qat2z7ybskvj5bxrykfcw4ca47jflvdvgkudfzych5rk6q.gw.devnet.toonprotocol.de│
+│                                                                  ││v — reading…                                                                    │
 │                                                                  ││                                                                                │
 │                                                                  ││Continuation Token                                                              │
 │                                                                  ││  Reading…                                                                      │
-│                                                                  ││                                                                                │
-│                                                                  ││                                                                                │
-│                                                                  ││                                                                                │
-│                                                                  ││                                                                                │
-│                                                                  ││                                                                                │
 │                                                                  ││                                                                                │
 └──────────────────────────────────────────────────────────────────┘└────────────────────────────────────────────────────────────────────────────────┘

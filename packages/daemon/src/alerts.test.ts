@@ -246,6 +246,9 @@ describe('notifying', () => {
         terminate: async () => {
           throw new Error('not used');
         },
+        forget: async () => {
+          throw new Error('not used');
+        },
       },
       watcher
     );
@@ -277,6 +280,10 @@ describe('notifying', () => {
           calls.push({ name: 'terminate', args });
           throw new Error('not used');
         },
+        forget: async (...args) => {
+          calls.push({ name: 'forget', args });
+          throw new Error('not used');
+        },
       },
       watcher
     );
@@ -284,6 +291,7 @@ describe('notifying', () => {
     await wrapped.card('w', { refresh: true });
     await wrapped.extend('w', { member: 'm', maxPrice: '1' }).catch(() => undefined);
     await wrapped.terminate('w', { member: 'm' }).catch(() => undefined);
+    await wrapped.forget('w').catch(() => undefined);
 
     // A wrapper that dropped `terminate`'s options would end the PRIMARY every
     // time, whichever member was asked for — irreversibly, with no refund
@@ -292,6 +300,7 @@ describe('notifying', () => {
       { name: 'card', args: ['w', { refresh: true }] },
       { name: 'extend', args: ['w', { member: 'm', maxPrice: '1' }] },
       { name: 'terminate', args: ['w', { member: 'm' }] },
+      { name: 'forget', args: ['w'] },
     ]);
   });
 });

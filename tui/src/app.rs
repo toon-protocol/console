@@ -395,6 +395,13 @@ pub enum Command {
     WithdrawWorkload {
         workload_id: String,
     },
+    /// `DELETE /api/workloads/<id>` (TOON_Network#138) — `D` on an ended
+    /// workload, through `widgets::confirm`. Drops this account's Lease
+    /// Vault entry for it; the daemon refuses this outright on anything
+    /// still live.
+    ForgetWorkload {
+        workload_id: String,
+    },
     /// `label` is what the footer says was copied (TOON_Network#138: "never
     /// the value when it is long"); `value` is what actually reaches
     /// `wl-copy`. Issued only by `app::handle_key`'s `y` binding, whether

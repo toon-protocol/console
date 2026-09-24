@@ -242,6 +242,38 @@ describe('the dashboard routes', () => {
     writeApiFixture('workload-terminate', answer.body);
   });
 
+  it('reports Expired on `unknown_workload` once paid, and forgets it on DELETE (TOON_Network#138)', async () => {
+    port.answer = refusal('unknown_workload', 'this provider holds no lease with that id');
+
+    const answer = await call('GET', `/api/workloads/${workloadId}`, undefined, 'refresh=1');
+    expect(answer.status).toBe(200);
+    const card = answer.body as WorkloadCard;
+    expect(card.status.kind).toBe('read');
+    if (card.status.kind !== 'read') throw new Error('unreachable');
+    expect(card.status.life).toEqual({ phase: 'ended', ending: 'expired' });
+    expect(card.endedAs).toBe('expired');
+
+    // The TUI's fixture contract (TOON_Network#138, ADR 0028).
+    writeApiFixture('workload-expired', answer.body);
+
+    const forgotten = await call('DELETE', `/api/workloads/${workloadId}`);
+    expect(forgotten.status).toBe(200);
+    expect(forgotten.body).toMatchObject({ workloadId, forgotten: true });
+    writeApiFixture('workload-forget', forgotten.body);
+
+    const gone = await call('GET', '/api/workloads');
+    expect((gone.body as DashboardView).cards).toHaveLength(0);
+  });
+
+  it('refuses DELETE on a workload this console has not seen end', async () => {
+    const answer = await call('DELETE', `/api/workloads/${workloadId}`);
+
+    expect(answer.status).toBe(409);
+    expect(answer.body).toMatchObject({ error: 'not_ended' });
+    // Untouched: still in the vault and on the dashboard.
+    expect(((await call('GET', '/api/workloads')).body as DashboardView).cards).toHaveLength(1);
+  });
+
   it('shows a silent provider as silent rather than failing the request', async () => {
     port.answer = silence();
 

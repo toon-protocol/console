@@ -434,6 +434,12 @@ function endingSentence(life: Extract<LeaseLife, { phase: 'ended' }>): string {
       return 'Termination: its tenant ended it. There is no refund.';
     case 'eviction':
       return 'Eviction: its provider ended it, and must publish an Eviction Notice saying why.';
+    case 'expired':
+      return (
+        'Expired: the paid time ran out with nothing extending it, and the provider has ' +
+        'removed it. Extend it — or auto-extend — before the paid time runs out to ' +
+        'keep one alive; spawning again is the only way to get it back.'
+      );
     default:
       return life.word === undefined
         ? 'The provider did not say which ending this was.'

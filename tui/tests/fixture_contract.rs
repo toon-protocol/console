@@ -21,10 +21,10 @@ use std::path::{Path, PathBuf};
 
 use toon_console_tui::types::{
     ChainSeedStatus, Dashboard, Directory, DocsIndex, DocsPage, ExpandedTemplate, ExtendResult,
-    FundingStatus, GasPurchase, GasQuote, GasStationStatus, GatewayView, HandoverResult, Health,
-    PreflightView, ProfileEndpointsError, Profiles, RotationResult, RotationView, SessionStatus,
-    SpawnResult, StandbySetPreflightView, StandbySetResult, TemplateGallery, TerminateResult,
-    WithdrawalResult, WorkloadCard,
+    ForgetResult, FundingStatus, GasPurchase, GasQuote, GasStationStatus, GatewayView,
+    HandoverResult, Health, PreflightView, ProfileEndpointsError, Profiles, RotationResult,
+    RotationView, SessionStatus, SpawnResult, StandbySetPreflightView, StandbySetResult,
+    TemplateGallery, TerminateResult, WithdrawalResult, WorkloadCard,
 };
 
 type Check = fn(&str) -> Result<(), String>;
@@ -91,6 +91,10 @@ fn registry() -> BTreeMap<&'static str, Check> {
     map.insert("workloads", check::<Dashboard> as Check);
     map.insert("workload-extend", check::<ExtendResult> as Check);
     map.insert("workload-terminate", check::<TerminateResult> as Check);
+    // TOON_Network#138 (expired vs a genuinely lost lease; forgetting an
+    // ended workload).
+    map.insert("workload-expired", check::<WorkloadCard> as Check);
+    map.insert("workload-forget", check::<ForgetResult> as Check);
     // TOON_Network#144 (auto-extend, rotate, gateway).
     map.insert("workload-auto-extend-armed", check::<WorkloadCard> as Check);
     map.insert("workload-auto-extend-off", check::<WorkloadCard> as Check);

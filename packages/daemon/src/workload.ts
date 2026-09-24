@@ -92,8 +92,21 @@ import type { WorkloadMemberNote, WorkloadNote, WorkloadNoteStore } from './work
 /* What a lease is doing                                                      */
 /* -------------------------------------------------------------------------- */
 
-/** §6.7's endings. `unstated` is a refusal that said only "it has ended". */
-export type LeaseEnding = 'expiry' | 'termination' | 'eviction' | 'unstated';
+/**
+ * §6.7's endings, plus one this console works out for itself.
+ *
+ * `unstated` is a refusal that said only "it has ended". `expired` is not one
+ * of §6.7's three words — no provider ever answers it — it is what this
+ * console reports when a provider no longer even holds the lease
+ * (`unknown_workload`) and this account's own Lease Vault record says the
+ * paid time was already up. That is a real ending and a common one: nobody
+ * extended before the clock ran out, the provider swept the workload, and
+ * from then on it has nothing to say about it at all. `expiry`, by contrast,
+ * is the word for a provider that DID answer and said so itself (§6.7) —
+ * keeping the two apart is what stops a guess from being shown with the same
+ * confidence as a fact (TOON_Network#138).
+ */
+export type LeaseEnding = 'expiry' | 'termination' | 'eviction' | 'unstated' | 'expired';
 
 /**
  * §6.7's lease state, as the wire spells it: a string for a state with nothing
@@ -483,6 +496,14 @@ export interface TerminateResult {
   readonly card: WorkloadCard;
 }
 
+/** `WorkloadStore.forget`'s answer (TOON_Network#138). */
+export interface ForgetResult {
+  readonly workloadId: string;
+  /** `false` only when a best-effort relay cleanup failed; it is gone locally either way. */
+  readonly forgotten: boolean;
+  readonly reason?: string | undefined;
+}
+
 export class WorkloadError extends Error {
   readonly code: string;
   readonly status: number;
@@ -866,6 +887,48 @@ export class WorkloadStore {
       ...(cost === undefined ? {} : { cost }),
       ended: ended ?? 'termination',
       card: await this.#card(lease, false),
+    };
+  }
+
+  /**
+   * Forget an ended workload: drop this account's Lease Vault entry for it,
+   * so it leaves the list (TOON_Network#138).
+   *
+   * Refused on anything still live — a lease this console has not seen end,
+   * by Expiry, Termination or Eviction, keeps its record, because that record
+   * holds the only Root Secret that could ever stop it (§6.1.1). `retract`
+   * drops the local copy unconditionally and, when this lease was ever
+   * published, takes a best-effort second try at removing it from the
+   * account's own relays too (ADR 0021) — the same mechanism a refused spawn
+   * is cleaned up with, reused here for the same reason: a record with
+   * nothing behind it is not worth keeping.
+   */
+  async forget(workloadId: string): Promise<ForgetResult> {
+    // The existence check alone: a bad or unknown id is refused exactly as
+    // every other route on this surface refuses it, before anything else is
+    // asked.
+    this.#lease(workloadId);
+    const note = this.#noteFor(workloadId);
+    if (note?.endedAs === undefined) {
+      throw new WorkloadError(
+        'not_ended',
+        `Workload ${workloadId} has not ended, so it stays in this account's list. Only a ` +
+          `lease this console has seen end — by running out, by Termination or by Eviction — ` +
+          `can be forgotten: forgetting a live one would drop the only Root Secret that could ` +
+          `ever stop it. Extend it, or terminate it, first.`,
+        409
+      );
+    }
+    const pubkey = this.#deps.vault.status().pubkey;
+    const outcome = await this.#deps.vault.retract(
+      workloadId,
+      `forgotten locally: this account had already seen it end (${note.endedAs})`
+    );
+    if (pubkey !== undefined) this.#deps.notes.remove(pubkey, workloadId);
+    return {
+      workloadId,
+      forgotten: outcome.retracted,
+      ...(outcome.reason === undefined ? {} : { reason: outcome.reason }),
     };
   }
 
@@ -1347,7 +1410,15 @@ export class WorkloadStore {
     }
 
     const outcome = await this.#send(planned, body);
-    const status = this.#statusOf(outcome, planned, readAt);
+    const status = this.#statusOf(outcome, planned, readAt, {
+      expiresAt: member.expiresAt ?? lease.expiresAt,
+      // A member that this console already knows ended — by Termination or
+      // Eviction, told to it directly — must not be RE-explained as Expiry
+      // the moment the provider sweeps it and starts answering
+      // `unknown_workload`. That fact is already known and is not this
+      // one's to guess a second, different reason for.
+      knownEnding: this.#knownEnding(lease, member),
+    });
     this.#note(lease, member, {
       status,
       ...(status.kind === 'read' && status.life.phase === 'ended'
@@ -1360,7 +1431,30 @@ export class WorkloadStore {
     return status;
   }
 
-  #statusOf(outcome: PacketOutcome, plan: OpPlan, readAt: string): WorkloadStatus {
+  /** What this console already believes ended this member's lease, if it does. */
+  #knownEnding(lease: LeaseView, member: LeaseMemberView): LeaseEnding | undefined {
+    const note = this.#noteFor(lease.workloadId);
+    return member.index === 0
+      ? (note?.members?.[member.pubkey]?.endedAs ?? note?.endedAs)
+      : note?.members?.[member.pubkey]?.endedAs;
+  }
+
+  /**
+   * A provider's answer, read against what this console already knew.
+   *
+   * `local` is the Lease Vault's own idea of this member — its last known
+   * expiry and its last known ending, if any — and it is what turns a bare
+   * `unknown_workload` into something a person can act on (TOON_Network#138).
+   * A provider that no longer holds a lease says exactly that and nothing
+   * else; the two facts that decide what it MEANS live in this account's own
+   * record, not on the wire.
+   */
+  #statusOf(
+    outcome: PacketOutcome,
+    plan: OpPlan,
+    readAt: string,
+    local: { expiresAt: number | undefined; knownEnding: LeaseEnding | undefined }
+  ): WorkloadStatus {
     const cost = costOf(outcome);
     if (outcome.kind === 'unknown') {
       return {
@@ -1391,6 +1485,30 @@ export class WorkloadStore {
 
     const read = readAnswer(outcome);
     if (read.error !== undefined) {
+      // `unknown_workload` from a provider that has never told this console
+      // an ending is read against the Lease Vault's own idea of when the
+      // paid time was up (TOON_Network#138). A member already known to have
+      // ended some other way — Termination, Eviction — keeps that word: the
+      // sweep that follows is not a second, different ending.
+      if (read.error === 'unknown_workload' && local.knownEnding === undefined) {
+        const past = local.expiresAt !== undefined && local.expiresAt <= this.#seconds();
+        if (past) {
+          return {
+            kind: 'read',
+            life: { phase: 'ended', ending: 'expired' },
+            ...optional('expiresAt', local.expiresAt),
+            ...(cost === undefined ? {} : { cost }),
+            readAt,
+          };
+        }
+        return {
+          kind: 'refused',
+          code: read.error,
+          message: unknownWorkloadMessage(local.expiresAt, read.message),
+          ...(cost === undefined ? {} : { cost }),
+          readAt,
+        };
+      }
       return {
         kind: 'refused',
         code: read.error,
@@ -2208,6 +2326,12 @@ export function endingWords(life: Extract<LeaseLife, { phase: 'ended' }>): strin
       return 'Termination: its tenant ended it';
     case 'eviction':
       return 'Eviction: its provider ended it, and must publish an Eviction Notice';
+    case 'expired':
+      return (
+        'Expired: the paid time ran out with nothing extending it, and the provider has ' +
+        'removed it. Extend it — or auto-extend — before the paid time runs out to keep one ' +
+        'alive; spawning again is the only way to get it back.'
+      );
     default:
       return life.word === undefined
         ? 'the provider did not say which ending'
@@ -2250,6 +2374,36 @@ function isoOf(seconds: number): string | undefined {
   if (!Number.isFinite(seconds)) return undefined;
   const at = new Date(seconds * 1000);
   return Number.isNaN(at.getTime()) ? undefined : at.toISOString();
+}
+
+/**
+ * `unknown_workload` from a provider, when this account's own record says the
+ * paid time is NOT up (TOON_Network#138).
+ *
+ * That combination is not an ending — it is the provider losing a lease it
+ * should still be holding, which is a real problem and a different one from
+ * "nobody paid". The provider's own words are kept, because they may say more
+ * than this console can (a sweep that fired early, a migration that dropped a
+ * record) — but they are no longer the whole of the sentence.
+ */
+function unknownWorkloadMessage(
+  expiresAt: number | undefined,
+  providerMessage: string | undefined
+): string {
+  const said = providerMessage ?? 'this provider holds no lease with that workload id.';
+  if (expiresAt === undefined) {
+    return (
+      `${said} This account's own record does not say when this lease's paid time runs out, ` +
+      `so whether it should still be there is unknown.`
+    );
+  }
+  const until = isoOf(expiresAt) ?? `unix ${expiresAt}`;
+  return (
+    `${said} This account's own record says this lease is paid until ${until} — still ahead — ` +
+    `so the provider appears to have LOST a lease that should still be running. That is a real ` +
+    `problem, not an expiry: nothing here says the money stopped buying time, only that the ` +
+    `provider no longer has anything to say about it.`
+  );
 }
 
 /**
