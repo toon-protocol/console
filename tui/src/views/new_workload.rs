@@ -441,6 +441,19 @@ pub fn handle_key(state: &mut NewWorkloadViewState, key: KeyEvent) -> Option<Com
         });
     }
 
+    // `p` opens "Publish a Template" from every step, not only the gallery:
+    // the tab stays on whichever step a person left it at, and a key that
+    // silently did nothing there read as a broken one. Never while a field
+    // is being typed in, where `p` is a letter.
+    if state.stage != Stage::Gallery
+        && !state.form.editing
+        && key.code == KeyCode::Char('p')
+        && key.modifiers.is_empty()
+    {
+        state.publish = Some(TemplatePublishState::new());
+        return Some(Command::None);
+    }
+
     match state.stage {
         Stage::Gallery => gallery_handle_key(state, key),
         Stage::Form => form_handle_key(state, key),
@@ -1469,14 +1482,14 @@ fn draw_form(frame: &mut Frame, area: Rect, state: &NewWorkloadViewState) {
         let focused = targets.get(state.form.cursor) == Some(&target);
         lines.push(Line::from(vec![
             label_span(&format!("{name}: ")),
-            state.form.env_fields[index].value_span(focused && state.form.editing),
+            state.form.env_fields[index].value_span(focused),
         ]));
         push_error(&mut lines, &state.form.errors, target);
     }
 
     if template_offers_ssh(state) {
         let ssh_focused = targets.get(state.form.cursor) == Some(&FormTarget::Ssh);
-        lines.push(state.form.ssh.line(ssh_focused && state.form.editing));
+        lines.push(state.form.ssh.line(ssh_focused));
         push_error(&mut lines, &state.form.errors, FormTarget::Ssh);
     } else if let Some(template) = &state.template {
         lines.push(Line::from(Span::styled(
@@ -1489,7 +1502,7 @@ fn draw_form(frame: &mut Frame, area: Rect, state: &NewWorkloadViewState) {
     }
 
     let volume_focused = targets.get(state.form.cursor) == Some(&FormTarget::Volume);
-    lines.push(state.form.volume.line(volume_focused && state.form.editing));
+    lines.push(state.form.volume.line(volume_focused));
     push_error(&mut lines, &state.form.errors, FormTarget::Volume);
 
     lines.push(Line::raw(""));
@@ -1701,6 +1714,30 @@ fn draw_preflight(frame: &mut Frame, area: Rect, state: &NewWorkloadViewState) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn p_opens_publish_from_a_later_step_but_types_a_p_in_a_field() {
+        let mut state = NewWorkloadViewState {
+            stage: Stage::Standbys,
+            ..Default::default()
+        };
+        handle_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE),
+        );
+        assert!(state.publish.is_some());
+
+        let mut state = NewWorkloadViewState {
+            stage: Stage::Form,
+            ..Default::default()
+        };
+        state.form.editing = true;
+        handle_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE),
+        );
+        assert!(state.publish.is_none());
+    }
+
     use super::*;
     use crate::types::{
         ListingResources, LivenessView, PreflightListingView, PreflightPayment, PreflightVault,

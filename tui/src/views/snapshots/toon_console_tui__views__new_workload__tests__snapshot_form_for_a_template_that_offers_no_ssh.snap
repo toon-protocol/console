@@ -6,7 +6,7 @@ expression: render(&state)
 │Fixed by the publisher:                                                                                               │
 │  MODE=production                                                                                                     │
 │                                                                                                                      │
-│SITE_TITLE: …                                                                                                         │
+│SITE_TITLE: ▏                                                                                                         │
 │smoke-http does not offer SSH, so no key is asked for.                                                                │
 │Volume (GB, optional): …                                                                                              │
 │                                                                                                                      │
