@@ -118,9 +118,15 @@ export const SSH_PUBLIC_KEY =
  * decide `ssh_offered` on the Lease Vault record — the one signal recorded at
  * spawn time and kept for as long as the lease is, rather than re-derived from
  * a Template that may since have changed or vanished from the relays.
+ *
+ * It is an ordinary ed25519 public key whose private half was generated and
+ * destroyed at once (`ssh-keygen`, then `shred`), so nobody can log in with
+ * it. It is deliberately NOT an all-zero key: that encodes a small-order
+ * point, for which some ed25519 verifiers accept forged signatures, and an
+ * image that does run sshd would then take a login from anyone.
  */
 export const NO_SSH_PLACEHOLDER_KEY =
-  'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA no-ssh-offered-by-template';
+  'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEiTFdstu+75Fi+qE6yXVLgSdoRQ7DYKJ16TL0PLGRK7 no-ssh-offered-by-template';
 
 /** A fresh `workload_id`: 32 bytes the tenant chooses at random (§6.2). */
 export function newWorkloadId(): string {
