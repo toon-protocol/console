@@ -23,7 +23,8 @@ use toon_console_tui::types::{
     ChainSeedStatus, Dashboard, Directory, DocsIndex, DocsPage, ExpandedTemplate, ExtendResult,
     FundingStatus, GasPurchase, GasQuote, GasStationStatus, GatewayView, HandoverResult, Health,
     PreflightView, Profiles, RotationResult, RotationView, SessionStatus, SpawnResult,
-    TemplateGallery, TerminateResult, WithdrawalResult, WorkloadCard,
+    StandbySetPreflightView, StandbySetResult, TemplateGallery, TerminateResult,
+    WithdrawalResult, WorkloadCard,
 };
 
 type Check = fn(&str) -> Result<(), String>;
@@ -94,14 +95,20 @@ fn registry() -> BTreeMap<&'static str, Check> {
         check::<WithdrawalResult> as Check,
     );
     // TOON_Network#146 (New workload): the Template gallery, expanding one
-    // into a spawn, and the primary spawn's preflight/result. A Standby
-    // Set's preflight/spawn have no fixture of their own — there is no
-    // API-level test for `/api/leases/standby-set*` to hook a
-    // `writeApiFixture` into yet; see the PR description.
+    // into a spawn, and the primary spawn's preflight/result, plus a Standby
+    // Set's own pair (`api-leases-standby-set.test.ts`, spec §7).
     map.insert("templates", check::<TemplateGallery> as Check);
     map.insert("template-expand", check::<ExpandedTemplate> as Check);
     map.insert("leases-preflight", check::<PreflightView> as Check);
     map.insert("leases-spawn", check::<SpawnResult> as Check);
+    map.insert(
+        "leases-standby-set-preflight",
+        check::<StandbySetPreflightView> as Check,
+    );
+    map.insert(
+        "leases-standby-set-spawn",
+        check::<StandbySetResult> as Check,
+    );
     map
 }
 
