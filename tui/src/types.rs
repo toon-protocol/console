@@ -1921,6 +1921,78 @@ pub struct ExpandedTemplate {
     pub warnings: Vec<String>,
 }
 
+/// `POST /api/templates/publish(/preview)`'s body (TOON_Network#138): the
+/// `template.json` file's own content — read off disk by the TUI, never
+/// parsed here beyond `serde_json::Value` — and the image it names, by
+/// digest. No secret rides in either field.
+#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+pub struct TemplatePublishRequestBody {
+    pub template: serde_json::Value,
+    pub image: String,
+}
+
+/// An unsigned Nostr event, exactly as `nostr-tools`' `EventTemplate` shapes
+/// one and `POST /api/templates/publish/preview` answers it: no `id`, no
+/// `pubkey`, no `sig` — nothing here is signed until `POST
+/// /api/templates/publish` sends it, and this route spends nothing.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct UnsignedTemplateEvent {
+    pub kind: i64,
+    pub created_at: i64,
+    pub tags: Vec<Vec<String>>,
+    pub content: String,
+}
+
+/// `POST /api/templates/publish/preview`'s answer (TOON_Network#138): the
+/// Image Registry entry (kind `30434`) and the Template (kind `30436`) this
+/// console would sign and pay for, plus the writer's own quote — `targets`
+/// carries `blockedBy` when nothing here could be paid for right now. A
+/// preview spends nothing: it is `RelayWriter.targets()`, a free read.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct TemplatePublishPreview {
+    #[serde(rename = "entryKind")]
+    pub entry_kind: i64,
+    #[serde(rename = "entryAddress")]
+    pub entry_address: String,
+    #[serde(rename = "entryEvent")]
+    pub entry_event: UnsignedTemplateEvent,
+    #[serde(rename = "templateKind")]
+    pub template_kind: i64,
+    #[serde(rename = "templateAddress")]
+    pub template_address: String,
+    #[serde(rename = "templateEvent")]
+    pub template_event: UnsignedTemplateEvent,
+    #[serde(rename = "imageDigest")]
+    pub image_digest: String,
+    pub title: String,
+    pub summary: String,
+    pub targets: RelayWriteTargets,
+}
+
+/// One of the two writes `POST /api/templates/publish` made: `"image-entry"`
+/// or `"template"`, in that order — the image entry always lands first, so a
+/// Template a relay serves back never names an entry that is not there yet.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct TemplatePublishOutcome {
+    pub what: String,
+    pub address: String,
+    #[serde(rename = "eventId")]
+    pub event_id: String,
+    #[serde(default)]
+    pub cost: Option<String>,
+}
+
+/// `POST /api/templates/publish`'s answer on success: both writes, what the
+/// whole publish cost (both claims summed, never recomputed — #82), and the
+/// Template's own address to select in the gallery afterwards.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct TemplatePublishResult {
+    pub outcomes: Vec<TemplatePublishOutcome>,
+    pub cost: String,
+    #[serde(rename = "templateAddress")]
+    pub template_address: String,
+}
+
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Default)]
 pub struct SpawnImageRequest {
     #[serde(skip_serializing_if = "Option::is_none")]

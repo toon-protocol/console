@@ -29,8 +29,9 @@ use toon_console_tui::client::DaemonClient;
 use toon_console_tui::types::{
     Dashboard, ExtendResult, FundingStatus, GasPurchase, GasQuote, GasStationStatus, GatewayView,
     HandoverResult, RotationResult, RotationView, StandbyMemberRequest, StandbySetPreflightView,
-    StandbySetRequestBody, StandbySetResult, TemplateSpawnRequestBody, TerminateResult,
-    WithdrawalResult, WorkloadCard,
+    StandbySetRequestBody, StandbySetResult, TemplatePublishPreview, TemplatePublishRequestBody,
+    TemplatePublishResult, TemplateSpawnRequestBody, TerminateResult, WithdrawalResult,
+    WorkloadCard,
 };
 
 const TOKEN: &str = "test-token";
@@ -647,4 +648,68 @@ async fn spawn_standby_set_posts_to_the_spawn_route_and_decodes_the_real_fixture
     let sent = recorded.lock().unwrap().take().unwrap();
     assert_eq!(sent.method, "POST");
     assert_eq!(sent.path, "/api/leases/standby-set");
+}
+
+fn template_publish_request() -> TemplatePublishRequestBody {
+    TemplatePublishRequestBody {
+        template: serde_json::json!({
+            "name": "ssh-box",
+            "title": "SSH box (Alpine)",
+            "summary": "An SSH shell with your key and nothing else.",
+            "ports": [{"container_port": 22, "protocol": "tcp"}],
+            "env_fixed": {},
+            "env_tenant": [],
+            "ssh_key": {"required": true},
+        }),
+        image: "ghcr.io/toon-protocol/ssh-box@sha256:f9f8eb3e68dd23d8bbac21ca253a02bcf20ebbcc44eb5d4b7ca0d7d972fc4e97".to_string(),
+    }
+}
+
+/// TOON_Network#138: `POST /api/templates/publish/preview` — a free quote,
+/// against the daemon's real fixture.
+#[tokio::test]
+async fn preview_template_publish_posts_the_body_and_decodes_the_real_fixture() {
+    let body: &'static str = Box::leak(fixture("template-publish-preview").into_boxed_str());
+    let recorded = Arc::new(Mutex::new(None));
+    let (url, _server) = spawn_stub(body, recorded.clone());
+    let dir = tempfile::tempdir().unwrap();
+    let path: PathBuf = dir.path().join("launch.json");
+    write_record(&path, &url);
+    let client = DaemonClient::connect(path).await.unwrap();
+
+    let request = template_publish_request();
+    let preview: TemplatePublishPreview = api::preview_template_publish(&client, &request)
+        .await
+        .unwrap();
+
+    assert_eq!(preview.entry_kind, 30434);
+    assert_eq!(preview.template_kind, 30436);
+    let sent = recorded.lock().unwrap().take().unwrap();
+    assert_eq!(sent.method, "POST");
+    assert_eq!(sent.path, "/api/templates/publish/preview");
+    let sent: serde_json::Value = serde_json::from_str(&sent.body).unwrap();
+    assert_eq!(sent["image"], request.image.as_str());
+    assert_eq!(sent["template"]["name"], "ssh-box");
+}
+
+/// TOON_Network#138: `POST /api/templates/publish` — **spends** two paid
+/// relay writes in the real daemon; here, against its real fixture.
+#[tokio::test]
+async fn publish_template_posts_the_body_and_decodes_the_real_fixture() {
+    let body: &'static str = Box::leak(fixture("template-publish").into_boxed_str());
+    let recorded = Arc::new(Mutex::new(None));
+    let (url, _server) = spawn_stub(body, recorded.clone());
+    let dir = tempfile::tempdir().unwrap();
+    let path: PathBuf = dir.path().join("launch.json");
+    write_record(&path, &url);
+    let client = DaemonClient::connect(path).await.unwrap();
+
+    let request = template_publish_request();
+    let result: TemplatePublishResult = api::publish_template(&client, &request).await.unwrap();
+
+    assert_eq!(result.outcomes.len(), 2);
+    assert!(result.template_address.starts_with("30436:"));
+    let sent = recorded.lock().unwrap().take().unwrap();
+    assert_eq!(sent.method, "POST");
+    assert_eq!(sent.path, "/api/templates/publish");
 }

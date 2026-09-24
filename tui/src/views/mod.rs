@@ -10,4 +10,5 @@ pub mod health;
 pub mod network;
 pub mod new_workload;
 pub mod placeholder;
+pub mod template_publish;
 pub mod workloads;

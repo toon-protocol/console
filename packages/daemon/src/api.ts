@@ -60,6 +60,12 @@ import {
   type TemplateSettings,
   type TemplateSpawnPort,
 } from './template-spawn.js';
+import {
+  ConsoleTemplatePublishError,
+  type ConsoleTemplatePublishPreview,
+  type ConsoleTemplatePublishRequest,
+  type ConsoleTemplatePublishResult,
+} from './template-publish.js';
 import type { TemplateGalleryResult, TemplateView } from './templates.js';
 import type { DaemonVersion } from './version.js';
 import {
@@ -133,6 +139,13 @@ export interface ApiDeps {
    * wired, and `POST /api/templates/spawn` says so rather than pretending.
    */
   readonly spawnFromTemplate?: TemplateSpawnPort | undefined;
+  /**
+   * Publishing a Template AS the signed-in account, paying from its own
+   * relay channel (TOON_Network#138). Absent only in a build that did not
+   * wire it, and `POST /api/templates/publish(/preview)` say so rather than
+   * pretending.
+   */
+  readonly templatePublish?: TemplatePublishPort | undefined;
   /**
    * The dashboard (TOON_Network#93). Absent only in a build that wired the
    * vault without it, and the routes say so rather than pretending.
@@ -220,6 +233,12 @@ export interface RotationPort {
 export interface AutoExtendPort {
   arm(request: ArmRequest): Promise<AutoExtendPolicy>;
   disarm(workloadId: string): AutoExtendPolicy | undefined;
+}
+
+/** What `/api/templates/publish(/preview)` needs of `ConsoleTemplatePublisher`. */
+export interface TemplatePublishPort {
+  preview(request: ConsoleTemplatePublishRequest): Promise<ConsoleTemplatePublishPreview>;
+  publish(request: ConsoleTemplatePublishRequest): Promise<ConsoleTemplatePublishResult>;
 }
 
 export interface ApiRequest {
@@ -846,6 +865,48 @@ async function handleTemplates(
 ): Promise<ApiResponse> {
   if (path === '/api/templates' && method === 'GET') {
     return ok(await deps.readTemplates(deps.profiles.active()));
+  }
+
+  if (
+    method === 'POST' &&
+    (path === '/api/templates/publish/preview' || path === '/api/templates/publish')
+  ) {
+    const parsed = readTemplatePublishRequest(body);
+    if ('error' in parsed) return problem(400, 'invalid_request', parsed.error);
+
+    if (deps.templatePublish === undefined) {
+      // Not an error in the request: publishing AS the signed-in account is
+      // TOON_Network#138's own paid hop, same shape as #92's spawn above.
+      return problem(
+        501,
+        'template_publish_unwired',
+        'This console cannot yet publish a Template from the gallery. Use ' +
+          '`npm run template:publish` instead, or ask for TOON_Network#138 to be wired.'
+      );
+    }
+
+    try {
+      return ok(
+        path === '/api/templates/publish/preview'
+          ? await deps.templatePublish.preview(parsed.value)
+          : await deps.templatePublish.publish(parsed.value)
+      );
+    } catch (error) {
+      if (error instanceof ConsoleTemplatePublishError) {
+        return problem(error.status, error.code, error.message);
+      }
+      if (error instanceof RelayWriteError) {
+        return {
+          status: error.status,
+          body: {
+            error: error.code,
+            message: error.message,
+            ...(error.writes ? { relays: error.writes } : {}),
+          },
+        };
+      }
+      throw error;
+    }
   }
 
   if (
@@ -1555,6 +1616,31 @@ function accountProblem(error: unknown): ApiResponse {
 
 function asRecord(body: unknown): Record<string, unknown> {
   return typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : {};
+}
+
+/**
+ * `POST /api/templates/publish(/preview)`'s body: `{ template, image }`, where
+ * `template` is the `template.json` content itself (the TUI reads the file;
+ * this route never does) and `image` is the digest-pinned reference to build
+ * the Image Registry entry from.
+ */
+function readTemplatePublishRequest(
+  body: unknown
+): { value: ConsoleTemplatePublishRequest } | { error: string } {
+  const fields = asRecord(body);
+  const template = fields.template;
+  if (typeof template !== 'object' || template === null || Array.isArray(template)) {
+    return {
+      error: 'Body must include `template`, the template.json content, as a JSON object.',
+    };
+  }
+  const image = string(fields, 'image');
+  if (image === undefined) {
+    return {
+      error: 'Body must include `image`, the image to publish, by digest: `registry/repo@sha256:…`.',
+    };
+  }
+  return { value: { template, image } };
 }
 
 function string(fields: Record<string, unknown>, key: string): string | undefined {

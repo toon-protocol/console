@@ -66,6 +66,7 @@ use crate::types::{
     TemplateSpawnRequestBody, TemplateView,
 };
 use crate::views::directory::{ListingPicker, PickerEvent};
+use crate::views::template_publish::{self, TemplatePublishState};
 use crate::widgets::confirm::{Confirm, ConfirmOutcome};
 use crate::widgets::input::TextField;
 use crate::widgets::list::{ListOutcome, ListState};
@@ -194,6 +195,16 @@ pub struct NewWorkloadViewState {
     pub loading_gallery: bool,
     pub gallery_error: Option<String>,
     pub gallery_list: ListState,
+    /// A Template's `address` to select once the NEXT `GET /api/templates`
+    /// read lands — set the moment `POST /api/templates/publish` succeeds
+    /// (TOON_Network#138), consumed (and cleared) by `main.rs`'s
+    /// `TemplatesLoaded` handler the same way `workloads::pending_select` is.
+    pub pending_select: Option<String>,
+    /// "Publish a Template" (TOON_Network#138), opened with `p` on the
+    /// Gallery stage. An overlay rather than a `Stage` of its own: it always
+    /// opens and closes on top of the Gallery, the same way `confirm` and
+    /// `channel_confirm` overlay the Preflight stage below.
+    pub publish: Option<TemplatePublishState>,
 
     /// The Template chosen from the gallery, carried through every later
     /// stage — cleared only when the wizard resets.
@@ -270,6 +281,8 @@ impl NewWorkloadViewState {
             loading_gallery: false,
             gallery_error: None,
             gallery_list: ListState::new(),
+            pending_select: None,
+            publish: None,
             template: None,
             form: FormFields::default(),
             expanding: false,
@@ -369,6 +382,21 @@ fn clear_connector_funding(state: &mut NewWorkloadViewState) {
 /// Returns `None` for a key this view has no opinion about right now, so the
 /// global keymap (view switching, `?`, quit) still gets it.
 pub fn handle_key(state: &mut NewWorkloadViewState, key: KeyEvent) -> Option<Command> {
+    // TOON_Network#138: "Publish a Template" is its own small overlay,
+    // opened only from the Gallery stage (`gallery_handle_key`'s `p`) — but
+    // checked here, first, the same "modal covers everything underneath it"
+    // rule `confirm`/`channel_confirm` follow below, so nothing on the
+    // Gallery underneath it ever sees a key while it is open.
+    if let Some(publish) = &mut state.publish {
+        return Some(match template_publish::handle_key(publish, key) {
+            template_publish::Outcome::Command(command) => *command,
+            template_publish::Outcome::Close => {
+                state.publish = None;
+                Command::None
+            }
+        });
+    }
+
     // Checked before `confirm` below: only one of the two can ever be open
     // at once (`offer_open_channel_confirm` and `preflight_handle_key`'s `s`
     // arm both refuse to run while the other kind is showing), but this is
@@ -456,6 +484,27 @@ fn gallery_total(state: &NewWorkloadViewState) -> usize {
     }
 }
 
+/// Selects the Template at `address` in the gallery — the "select the new
+/// Template" half of TOON_Network#138's publish flow, `main.rs`'s own
+/// mirror of `views::workloads::select_workload`. Called after a fresh
+/// `GET /api/templates` read that should now carry it.
+pub fn select_template(state: &mut NewWorkloadViewState, address: &str) -> bool {
+    if !state.gallery_list.filter.is_empty() {
+        state.gallery_list.filter.clear();
+        state.gallery_list.filtering = false;
+    }
+    match gallery_rows(state)
+        .iter()
+        .position(|template| template.address == address)
+    {
+        Some(index) => {
+            state.gallery_list.selected = index;
+            true
+        }
+        None => false,
+    }
+}
+
 fn gallery_handle_key(state: &mut NewWorkloadViewState, key: KeyEvent) -> Option<Command> {
     let rows_len = gallery_rows(state).len();
     match state.gallery_list.handle_key(key, rows_len) {
@@ -486,6 +535,13 @@ fn gallery_handle_key(state: &mut NewWorkloadViewState, key: KeyEvent) -> Option
     }
     match key.code {
         KeyCode::Char('r') => Some(Command::RefreshTemplates),
+        // TOON_Network#138: "Publish a Template" — opens on top of the
+        // Gallery, the same overlay shape `confirm`/`channel_confirm` give
+        // the Preflight stage below.
+        KeyCode::Char('p') => {
+            state.publish = Some(TemplatePublishState::new());
+            Some(Command::None)
+        }
         _ => None,
     }
 }
@@ -531,6 +587,10 @@ fn form_field_mut(state: &mut NewWorkloadViewState, target: FormTarget) -> Optio
 /// stage, or while the Form stage's field is not being edited, or while a
 /// spawn confirm is open — "a paste while no field is editing is ignored."
 pub fn handle_paste(state: &mut NewWorkloadViewState, text: &str) {
+    if let Some(publish) = &mut state.publish {
+        template_publish::handle_paste(publish, text);
+        return;
+    }
     if state.confirm.is_some() || state.stage != Stage::Form || !state.form.editing {
         return;
     }
@@ -1231,6 +1291,10 @@ pub fn draw(
             Vec::new()
         }
     };
+    if let Some(publish) = &state.publish {
+        template_publish::draw(frame, area, publish);
+        return Vec::new();
+    }
     if let Some(confirm) = &state.channel_confirm {
         crate::widgets::confirm::draw(frame, area, confirm);
         return Vec::new();

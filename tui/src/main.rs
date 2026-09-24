@@ -42,14 +42,16 @@ use toon_console_tui::types::{
     GasQuote, GasStationStatus, GatewayView, HandoverResult, Health, PreflightView,
     ProfileEndpointsError, ProfileEndpointsRequest, Profiles, RotationResult, RotationView,
     SessionStatus, SignInRequest, SpawnRequestBody, SpawnResult, StandbySetPreflightView,
-    StandbySetRequestBody, StandbySetResult, TemplateGallery, TemplateSpawnRequestBody,
-    TerminateResult, WithdrawalResult, WorkloadCard,
+    StandbySetRequestBody, StandbySetResult, TemplateGallery, TemplatePublishPreview,
+    TemplatePublishRequestBody, TemplatePublishResult, TemplateSpawnRequestBody, TerminateResult,
+    WithdrawalResult, WorkloadCard,
 };
 use toon_console_tui::ui;
 use toon_console_tui::views::account as account_view;
 use toon_console_tui::views::chain_seed;
 use toon_console_tui::views::funds;
 use toon_console_tui::views::new_workload;
+use toon_console_tui::views::template_publish;
 use toon_console_tui::views::workloads as workloads_view;
 
 /// How long to wait between attempts to find the daemon while it is down —
@@ -166,6 +168,20 @@ enum RuntimeEvent {
     /// Workloads view with the new lease selected (see the handler below).
     WorkloadSpawned(Box<Result<SpawnResult, String>>),
     StandbySetSpawned(Box<Result<StandbySetResult, String>>),
+    /// `POST /api/templates/publish/preview` (TOON_Network#138) — free. The
+    /// request travels alongside its own preview on success, so
+    /// `views::template_publish::apply_preview` can keep the EXACT body a
+    /// preview was built from, to send again unchanged once "Publish" is
+    /// confirmed. `Err` covers both a daemon refusal and reading the local
+    /// file itself failing — see `read_template_file` below.
+    TemplatePublishPreviewed(
+        Box<Result<(TemplatePublishRequestBody, TemplatePublishPreview), String>>,
+    ),
+    /// `POST /api/templates/publish` — **spends**: two paid relay writes.
+    /// On success `run` closes the modal, selects the new Template in the
+    /// gallery once it re-reads (`new_workload.pending_select`), the same
+    /// "select what was just bought" pattern `WorkloadSpawned` follows.
+    TemplatePublished(Box<Result<TemplatePublishResult, String>>),
 }
 
 #[tokio::main]
@@ -528,6 +544,41 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()
                             Command::SpawnStandbySet(request) => {
                                 if let Some(client) = &client {
                                     spawn_standby_set_spawn(client.clone(), tx.clone(), request);
+                                }
+                            }
+                            // TOON_Network#138: reading the local
+                            // `template.json` is this crate's own job
+                            // (never the daemon's) — done right here,
+                            // synchronously, before anything is spawned; a
+                            // read or parse failure never reaches the
+                            // network at all.
+                            Command::PreviewTemplatePublish { path, image } => {
+                                match read_template_file(&path) {
+                                    Ok(template) => {
+                                        if let Some(client) = &client {
+                                            spawn_preview_template_publish(
+                                                client.clone(),
+                                                tx.clone(),
+                                                TemplatePublishRequestBody { template, image },
+                                            );
+                                        }
+                                    }
+                                    Err(message) => {
+                                        if let Some(publish) = &mut app.new_workload.publish {
+                                            template_publish::apply_preview(
+                                                publish,
+                                                Err(message),
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            // Only ever produced by "Publish a Template"'s
+                            // own typed-`yes`-then-`Enter` confirmation —
+                            // see `views::template_publish::handle_key`.
+                            Command::PublishTemplate(request) => {
+                                if let Some(client) = &client {
+                                    spawn_publish_template(client.clone(), tx.clone(), request);
                                 }
                             }
                             Command::None => {}
@@ -952,6 +1003,16 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()
                             Ok(gallery) => {
                                 app.new_workload.gallery = Some(gallery);
                                 app.new_workload.gallery_error = None;
+                                // TOON_Network#138: land on a Template a
+                                // publish just bought, the first gallery
+                                // read that carries it — mirrors
+                                // `WorkloadsLoaded`'s own `pending_select`.
+                                if let Some(address) = app.new_workload.pending_select.take() {
+                                    new_workload::select_template(
+                                        &mut app.new_workload,
+                                        &address,
+                                    );
+                                }
                             }
                             Err(message) => app.new_workload.gallery_error = Some(message),
                         }
@@ -1031,6 +1092,32 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()
                                 }
                             }
                             Err(message) => app.new_workload.spawn_error = Some(message),
+                        }
+                    }
+                    RuntimeEvent::TemplatePublishPreviewed(result) => {
+                        if let Some(publish) = &mut app.new_workload.publish {
+                            template_publish::apply_preview(publish, *result);
+                        }
+                    }
+                    RuntimeEvent::TemplatePublished(result) => {
+                        let outcome = match *result {
+                            Ok(published) => Ok(published.template_address),
+                            Err(message) => Err(message),
+                        };
+                        let address = app
+                            .new_workload
+                            .publish
+                            .as_mut()
+                            .and_then(|publish| template_publish::apply_publish(publish, outcome));
+                        if let Some(address) = address {
+                            app.new_workload.publish = None;
+                            app.new_workload.pending_select = Some(address);
+                            app.new_workload.status =
+                                Some("Published. Selecting it in the gallery.".to_string());
+                            if let Some(client) = &client {
+                                spawn_templates_fetch(client.clone(), tx.clone());
+                                app.new_workload.loading_gallery = true;
+                            }
                         }
                     }
                 }
@@ -1255,6 +1342,51 @@ fn spawn_standby_set_spawn(
         tx,
         move || async move { api::spawn_standby_set(&client, &request).await },
         RuntimeEvent::StandbySetSpawned,
+    );
+}
+
+/// Reads and parses the `template.json` a person named in "Publish a
+/// Template" (TOON_Network#138) — this crate's own job: the daemon's
+/// `POST /api/templates/publish(/preview)` takes the file's CONTENT, never
+/// a path it would have to reach into this machine's filesystem for. No
+/// secret is ever in this file.
+fn read_template_file(path: &str) -> Result<serde_json::Value, String> {
+    let content =
+        std::fs::read_to_string(path).map_err(|err| format!("Could not read {path}: {err}"))?;
+    serde_json::from_str(&content).map_err(|err| format!("{path} is not valid JSON: {err}"))
+}
+
+/// `POST /api/templates/publish/preview` — free. `request` travels back
+/// alongside the preview on success so `views::template_publish::apply_preview`
+/// can keep the exact body a real publish would send.
+fn spawn_preview_template_publish(
+    client: Arc<DaemonClient>,
+    tx: UnboundedSender<RuntimeEvent>,
+    request: TemplatePublishRequestBody,
+) {
+    spawn_call(
+        tx,
+        move || async move {
+            let preview = api::preview_template_publish(&client, &request).await?;
+            Ok((request, preview))
+        },
+        RuntimeEvent::TemplatePublishPreviewed,
+    );
+}
+
+/// `POST /api/templates/publish` — **spends**: two paid relay writes,
+/// signed by the session's own `ConsoleSigner`. Only ever reached after
+/// `views::template_publish::handle_key`'s own typed-`yes`-then-`Enter`
+/// confirmation.
+fn spawn_publish_template(
+    client: Arc<DaemonClient>,
+    tx: UnboundedSender<RuntimeEvent>,
+    request: TemplatePublishRequestBody,
+) {
+    spawn_call(
+        tx,
+        move || async move { api::publish_template(&client, &request).await },
+        RuntimeEvent::TemplatePublished,
     );
 }
 

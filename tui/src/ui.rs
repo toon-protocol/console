@@ -318,19 +318,27 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
         ));
     }
     if app.view == View::New {
-        spans.push(Span::raw(match app.new_workload.stage {
-            views::new_workload::Stage::Gallery => " j/k select  / filter  Enter open  r refresh ",
-            views::new_workload::Stage::Form => {
-                " j/k move  Enter edit/preview  Ctrl+V paste  Esc stop editing  Backspace back "
-            }
-            views::new_workload::Stage::Listing => " j/k move  Enter choose  Backspace back ",
-            views::new_workload::Stage::Standbys => {
-                " j/k move  Enter add  d remove last  n continue  Backspace back "
-            }
-            views::new_workload::Stage::Preflight => {
-                " L toggle local-only  s spawn (asks for confirmation)  Backspace back "
-            }
-        }));
+        if app.new_workload.publish.is_some() {
+            spans.push(Span::raw(
+                " j/k move  Enter edit/preview/publish  Ctrl+V paste  Esc close ",
+            ));
+        } else {
+            spans.push(Span::raw(match app.new_workload.stage {
+                views::new_workload::Stage::Gallery => {
+                    " j/k select  / filter  Enter open  p publish a Template  r refresh "
+                }
+                views::new_workload::Stage::Form => {
+                    " j/k move  Enter edit/preview  Ctrl+V paste  Esc stop editing  Backspace back "
+                }
+                views::new_workload::Stage::Listing => " j/k move  Enter choose  Backspace back ",
+                views::new_workload::Stage::Standbys => {
+                    " j/k move  Enter add  d remove last  n continue  Backspace back "
+                }
+                views::new_workload::Stage::Preflight => {
+                    " L toggle local-only  s spawn (asks for confirmation)  Backspace back "
+                }
+            }));
+        }
         if app.new_workload.confirm.is_some() {
             spans.push(Span::raw(" type yes, Enter to spawn  Esc cancel "));
         }
@@ -394,6 +402,7 @@ const HELP_LINES: &[&str] = &[
     "n          Standbys: continue to the preflight",
     "L          Preflight: toggle local-only and re-price",
     "s, yes     Preflight: spawn (asks for confirmation)",
+    "p          Gallery: publish a Template; Enter previews, then yes publishes",
 ];
 
 fn draw_help(frame: &mut Frame, area: Rect) {

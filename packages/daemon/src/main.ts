@@ -46,6 +46,7 @@ import { startServer } from './server.js';
 import { readTheme } from './theme.js';
 import { SignerIndex, signerIndexPath } from './signer-index.js';
 import { readTakeover } from './takeover.js';
+import { ConsoleTemplatePublisher } from './template-publish.js';
 import { readTemplates } from './templates.js';
 import { daemonVersion } from './version.js';
 import { AutoExtender, FileAutoExtendStore } from './auto-extend.js';
@@ -174,6 +175,16 @@ export async function main(): Promise<void> {
     payerKeys: (use) => chainSeed.usePayerKeys(use),
     paths,
     port: new LiveRelayWritePort(),
+  });
+
+  // Publishing a Template from the gallery, AS the signed-in account
+  // (TOON_Network#138): the same signer and the same writer as everything
+  // else here, never a raw key from an env var — `main-template-publish.ts`
+  // stays for an account that holds one of those, but a console-generated
+  // account has neither an nsec nor a Chain Seed mnemonic to hand it.
+  const templatePublisher = new ConsoleTemplatePublisher({
+    signer: () => session.signingPort(),
+    writer: () => writer,
   });
 
   /**
@@ -382,6 +393,7 @@ export async function main(): Promise<void> {
       // the same result as the equivalent manual spawn" is true by
       // construction rather than by two builders agreeing.
       spawnFromTemplate: (request) => leases.spawnFromTemplate(request),
+      templatePublish: templatePublisher,
       workloads: watchedWorkloads,
       autoExtend: budgets,
       gateway,

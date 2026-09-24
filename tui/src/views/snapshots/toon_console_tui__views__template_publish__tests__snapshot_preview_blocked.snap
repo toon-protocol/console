@@ -1,0 +1,29 @@
+---
+source: src/views/template_publish.rs
+assertion_line: 793
+expression: render(&state)
+---
+                                                                                          
+                                                                                          
+                                                                                          
+                                                                                          
+                                                                                          
+                                                                                          
+       ┌ Publish a Template — preview ────────────────────────────────────────────┐       
+       │SSH box (Alpine)                                                          │       
+       │An SSH shell with your key and nothing else.                              │       
+       │                                                                          │       
+       │Image digest: sha256:aaaa                                                 │       
+       │                                                                          │       
+       │kind 30434 — Image Registry entry                                         │       
+       │  30434:abc:ssh-box:latest                                                │       
+       │kind 30436 — Template                                                     │       
+       │  30436:abc:ssh-box                                                       │       
+       │                                                                          │       
+       │No channel to pay with.                                                   │       
+       │                                                                          │       
+       │ Publish                                                                  │       
+       │                                                                          │       
+       │                                                                          │       
+       │                                                                          │       
+       └──────────────────────────────────────────────────────────────────────────┘

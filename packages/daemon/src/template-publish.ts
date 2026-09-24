@@ -2,7 +2,8 @@ import type { EventTemplate } from 'nostr-tools/core';
 import { npubEncode } from 'nostr-tools/nip19';
 
 import type { NostrEvent } from './nostr.js';
-import type { RelayWriter } from './relay-write.js';
+import type { RelayWriter, RelayWriteTargets } from './relay-write.js';
+import type { AccountSigning } from './signer.js';
 import { entryFromManifest, pickPlatform, type EntryContent } from './smoke-image.js';
 
 /**
@@ -484,4 +485,160 @@ function safeBigInt(value: string): bigint {
   } catch {
     return 0n;
   }
+}
+
+/* -------------------------------------------------------------------------- */
+/* The console's own action: publish AS the signed-in account (TOON_Network#138) */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * `POST /api/templates/publish(/preview)`'s body: the `template.json` content
+ * a person read off disk (the TUI's job, not this console's — no secret is in
+ * it), and the image it names, by digest.
+ */
+export interface ConsoleTemplatePublishRequest {
+  readonly template: unknown;
+  readonly image: string;
+}
+
+/** What `POST /api/templates/publish/preview` answers. Nothing is sent to buy this. */
+export interface ConsoleTemplatePublishPreview {
+  readonly entryKind: typeof REGISTRY_KIND;
+  readonly entryAddress: string;
+  readonly entryEvent: EventTemplate;
+  readonly templateKind: typeof TEMPLATE_KIND;
+  readonly templateAddress: string;
+  readonly templateEvent: EventTemplate;
+  readonly imageDigest: string;
+  readonly title: string;
+  readonly summary: string;
+  /** The quoted price per write, the total for both writes, and `blockedBy`
+   *  when nothing here could be paid for right now — straight off
+   *  `RelayWriter.targets()`, never recomputed (#82). */
+  readonly targets: RelayWriteTargets;
+}
+
+/** What `POST /api/templates/publish` answers on success. */
+export interface ConsoleTemplatePublishResult extends TemplatePublishReport {
+  readonly templateAddress: string;
+}
+
+export class ConsoleTemplatePublishError extends Error {
+  readonly code: string;
+  readonly status: number;
+  constructor(code: string, message: string, status: number) {
+    super(message);
+    this.name = 'ConsoleTemplatePublishError';
+    this.code = code;
+    this.status = status;
+  }
+}
+
+export interface ConsoleTemplatePublisherDeps {
+  /** The session's signer, exactly as `ChainSeedStore` is handed one —
+   *  `undefined` when nobody is signed in. */
+  readonly signer: () => AccountSigning | undefined;
+  /** The console's one writer (`relay-write.ts`). A thunk for the same
+   *  reason `chain-seed.ts`'s is: whichever of the two is built second is
+   *  the one that exists by the time either is used. */
+  readonly writer: () => RelayWriter;
+  /** Injected in tests; the default reads a real public registry. */
+  readonly fetchImpl?: typeof fetch | undefined;
+  readonly arch?: string | undefined;
+}
+
+/**
+ * Preview and publish a Template as the signed-in account, paying from its
+ * own relay channel — the one thing `main-template-publish.ts` cannot do for
+ * an account whose key was generated inside the console (TOON_Network#138).
+ *
+ * The shape is `ChainSeedStore.publish`'s: planning spends nothing and is the
+ * exact same `planTemplatePublish` a real publish signs, so a preview and a
+ * publish can never disagree about what would be sent; signing goes through
+ * the session's `ConsoleSigner` and never a raw key (ADR 0020); and paying
+ * goes through `relay-write.ts`, the console's only writer, which is what
+ * turns a `RelayWriteError` — a refused or unpayable write — into a clear
+ * refusal rather than a silent 500.
+ */
+export class ConsoleTemplatePublisher {
+  readonly #deps: ConsoleTemplatePublisherDeps;
+
+  constructor(deps: ConsoleTemplatePublisherDeps) {
+    this.#deps = deps;
+  }
+
+  async preview(request: ConsoleTemplatePublishRequest): Promise<ConsoleTemplatePublishPreview> {
+    const { plan, file } = await this.#plan(request);
+    const targets = await this.#deps.writer().targets();
+    return {
+      entryKind: REGISTRY_KIND,
+      entryAddress: plan.entryAddress,
+      entryEvent: plan.entryEvent,
+      templateKind: TEMPLATE_KIND,
+      templateAddress: plan.templateAddress,
+      templateEvent: plan.templateEvent,
+      imageDigest: plan.imageDigest,
+      title: file.title,
+      summary: file.summary,
+      targets,
+    };
+  }
+
+  async publish(request: ConsoleTemplatePublishRequest): Promise<ConsoleTemplatePublishResult> {
+    const signer = this.#signer();
+    const { plan } = await this.#plan(request);
+    const report = await publishTemplatePlan(plan, {
+      sign: (template) => signer.sign(template),
+      writer: this.#deps.writer(),
+    });
+    return { ...report, templateAddress: plan.templateAddress };
+  }
+
+  async #plan(
+    request: ConsoleTemplatePublishRequest
+  ): Promise<{ readonly plan: TemplatePublishPlan; readonly file: TemplateInputFile }> {
+    const signer = this.#signer();
+
+    let file: TemplateInputFile;
+    try {
+      file = readTemplateInputFile(request.template);
+    } catch (error) {
+      throw new ConsoleTemplatePublishError('invalid_template', messageOf(error), 400);
+    }
+
+    let resolved: { ref: ParsedImageReference; entry: EntryContent };
+    try {
+      resolved = await resolveOciEntry(request.image, this.#deps.arch ?? 'amd64', {
+        ...(this.#deps.fetchImpl === undefined ? {} : { fetchImpl: this.#deps.fetchImpl }),
+      });
+    } catch (error) {
+      throw new ConsoleTemplatePublishError('image_unresolved', messageOf(error), 400);
+    }
+
+    const plan = planTemplatePublish({
+      pubkey: signer.pubkey,
+      file,
+      entry: resolved.entry,
+      ref: resolved.ref,
+      image: request.image,
+    });
+    return { plan, file };
+  }
+
+  #signer(): AccountSigning {
+    const signer = this.#deps.signer();
+    if (signer === undefined) {
+      throw new ConsoleTemplatePublishError(
+        'not_signed_in',
+        'Sign in before publishing a Template: it is published as the signed-in account and ' +
+          'paid from its own relay channel, the same way the Chain Seed is.',
+        409
+      );
+    }
+    return signer;
+  }
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

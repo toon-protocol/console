@@ -10,7 +10,8 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 
 use crate::types::{
     ChainSeedStatus, ExpandTemplateRequest, Health, LocalSignerRequest, ProfileEndpointsRequest,
-    Profiles, SessionStatus, SpawnRequestBody, StandbySetRequestBody, TemplateSpawnRequestBody,
+    Profiles, SessionStatus, SpawnRequestBody, StandbySetRequestBody, TemplatePublishRequestBody,
+    TemplateSpawnRequestBody,
 };
 use crate::views::account::{self, AccountViewState};
 use crate::views::directory::{self, DirectoryViewState};
@@ -435,6 +436,21 @@ pub enum Command {
     /// `POST /api/leases/standby-set` — **spends at every member** (ADR
     /// 0003). Same confirmation gate as `SpawnFromTemplate`.
     SpawnStandbySet(StandbySetRequestBody),
+    /// `POST /api/templates/publish/preview` (TOON_Network#138) — free.
+    /// `path` names a local `template.json` this crate reads for itself
+    /// (`views::template_publish`'s own job, never the daemon's) and hands
+    /// its content along with `image`; nothing here is a secret.
+    PreviewTemplatePublish {
+        path: String,
+        image: String,
+    },
+    /// `POST /api/templates/publish` — **spends**: two paid relay writes,
+    /// signed by the session's own `ConsoleSigner` and paid from the
+    /// account's existing relay channel. Only ever reached after
+    /// `widgets::confirm::Confirm`'s typed-`yes` dance
+    /// (`views::template_publish::handle_key`); the exact body the preview
+    /// already showed, sent again unchanged.
+    PublishTemplate(TemplatePublishRequestBody),
 }
 
 /// The one place a keypress becomes a decision.
