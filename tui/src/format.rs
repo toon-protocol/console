@@ -241,6 +241,28 @@ pub fn format_amount(amount: Option<&crate::types::Amount>) -> String {
     }
 }
 
+/// A base-unit figure read off THIS chain's own connector (a suggested
+/// deposit, an open channel's `available`, ...), scaled by the chain's own
+/// token decimals and symbol — one formatter shared by the New workload
+/// wizard's "open a channel with this connector" confirm (TOON_Network#138)
+/// and the Funds tab's "also open with" panel, rather than each building its
+/// own `Amount` by hand. The symbol comes from `chain.balances.token`, the
+/// only place this API ever names one for a settlement token (see
+/// `ChainFundingView`'s own doc comment on `token` for why `TokenRef` itself
+/// carries none).
+pub fn format_chain_amount(chain: &crate::types::ChainFundingView, amount: &str) -> String {
+    format_amount(Some(&crate::types::Amount {
+        amount: amount.to_string(),
+        decimals: Some(chain.token.decimals),
+        symbol: chain
+            .balances
+            .token
+            .as_ref()
+            .and_then(|token| token.symbol.clone()),
+        address: Some(chain.token.address.clone()),
+    }))
+}
+
 fn scale(amount: &str, decimals: i64) -> String {
     if decimals <= 0 || amount.is_empty() || !amount.bytes().all(|b| b.is_ascii_digit()) {
         return amount.to_string();
@@ -642,6 +664,18 @@ mod tests {
             total_channel_balance(Some(&funding)),
             "340282366920938463463374607431768211456 WEI"
         );
+    }
+
+    #[test]
+    fn format_chain_amount_scales_by_the_chains_own_decimals_and_symbol() {
+        let chain = chain_with_channel("none", None, Some("USDC"), 6);
+        assert_eq!(format_chain_amount(&chain, "1500000"), "1.5 USDC");
+    }
+
+    #[test]
+    fn format_chain_amount_omits_the_symbol_when_the_chain_never_read_one() {
+        let chain = chain_with_channel("none", None, None, 6);
+        assert_eq!(format_chain_amount(&chain, "1500000"), "1.5");
     }
 
     #[test]

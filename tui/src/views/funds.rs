@@ -31,6 +31,19 @@ use crate::types::{
 };
 use crate::widgets::confirm::{Confirm, ConfirmOutcome};
 
+/// A connector this session itself opened a channel with, other than the
+/// profile's own — New workload's own "open a channel with this connector"
+/// (TOON_Network#138). No daemon route lists every connector an account
+/// holds a channel with, so this view shows only the profile's own (below)
+/// plus whatever this session actually opened, honestly labelled by its own
+/// connector, rather than pretend to know about channels it never asked
+/// about.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OtherConnector {
+    pub connector: String,
+    pub funding: FundingStatus,
+}
+
 /// What is being confirmed, captured at the moment `o` or `b` proposed it so
 /// that what typing `yes`+`Enter` sends is provably what was shown — nothing
 /// is recomputed between the two.
@@ -62,6 +75,19 @@ pub struct FundsState {
     pub gas_purchase: Option<GasPurchase>,
     pub selected: usize,
     confirm: Option<Confirm<Action>>,
+    /// The connector every chain above holds its channel with — the active
+    /// profile's own (TOON_Network#138: "make it clear which connector each
+    /// chain's channel is with"), read from `Health.profile.connectorUrl`
+    /// the same source the header's profile label already uses. `None`
+    /// before Health has answered.
+    pub connector_url: Option<String>,
+    /// A channel this session opened with a DIFFERENT connector — set by
+    /// `main.rs` once New workload's own "open a channel with this
+    /// connector" flow reports the channel it opened turned `open`. See
+    /// [`OtherConnector`]'s own doc comment for why this view knows about
+    /// only this one, and not every connector the account might hold a
+    /// channel with.
+    pub other_connector: Option<OtherConnector>,
 }
 
 impl Default for FundsState {
@@ -79,6 +105,8 @@ impl Default for FundsState {
             gas_purchase: None,
             selected: 0,
             confirm: None,
+            connector_url: None,
+            other_connector: None,
         }
     }
 }
@@ -631,6 +659,18 @@ fn draw_chain_detail(frame: &mut Frame, area: Rect, chain: &ChainFundingView, st
     frame.render_widget(block, area);
 
     let mut lines = Vec::new();
+    // TOON_Network#138: which connector this chain's channel is WITH — not
+    // `counterparty` below, which is the on-chain settlement contract, not a
+    // connector at all.
+    lines.push(Line::from(vec![
+        label("Connector "),
+        Span::raw(
+            state
+                .connector_url
+                .clone()
+                .unwrap_or_else(|| "…".to_string()),
+        ),
+    ]));
     lines.push(Line::from(vec![
         label("Token "),
         Span::raw(format!(
@@ -797,6 +837,37 @@ fn draw_chain_detail(frame: &mut Frame, area: Rect, chain: &ChainFundingView, st
                 _ => "Unknown outcome — nobody reported what became of that packet. Read the balances again.".to_string(),
             };
             lines.push(Line::from(Span::styled(text, style)));
+        }
+    }
+
+    if let Some(other) = &state.other_connector {
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            format!("Also open with {} (this session)", other.connector),
+            Style::default().add_modifier(Modifier::BOLD),
+        )));
+        let mut any_open = false;
+        for other_chain in &other.funding.chains {
+            if other_chain.channel.phase != "open" {
+                continue;
+            }
+            any_open = true;
+            let available = other_chain
+                .channel
+                .available
+                .as_deref()
+                .map(|amount| crate::format::format_chain_amount(other_chain, amount))
+                .unwrap_or_else(|| "unknown".to_string());
+            lines.push(Line::from(format!(
+                "  {} — available {available}",
+                other_chain.chain
+            )));
+        }
+        if !any_open {
+            lines.push(Line::from(Span::styled(
+                "  none open yet",
+                Style::default().fg(Color::DarkGray),
+            )));
         }
     }
 
@@ -1697,6 +1768,65 @@ mod tests {
         handle_key(&mut state, key(KeyCode::Char('o')));
         assert!(state.confirm.is_some());
         render(&state);
+    }
+
+    #[test]
+    fn the_chain_detail_names_the_connector_its_channel_is_with() {
+        let mut state = FundsState::default();
+        state.funding = Some(sample_funding(
+            "ready",
+            vec![sample_chain("evm:84532", true, "present", "open")],
+        ));
+        state.connector_url = Some("https://sandbox.example/ilp".to_string());
+        let text = render(&state);
+        assert!(text.contains("https://sandbox.example/ilp"));
+    }
+
+    #[test]
+    fn the_chain_detail_shows_an_ellipsis_for_the_connector_before_health_has_answered() {
+        let mut state = FundsState::default();
+        state.funding = Some(sample_funding(
+            "ready",
+            vec![sample_chain("evm:84532", true, "present", "open")],
+        ));
+        // `connector_url` left at its `Default` (`None`) on purpose.
+        let text = render(&state);
+        assert!(text.contains("Connector …"));
+    }
+
+    #[test]
+    fn other_connector_lists_its_own_open_chains_labelled_by_its_own_url() {
+        let mut state = FundsState::default();
+        state.funding = Some(sample_funding(
+            "ready",
+            vec![sample_chain("evm:84532", true, "present", "none")],
+        ));
+        let mut other_chain = sample_chain("evm:31337", true, "present", "open");
+        other_chain.channel.available = Some("2500000".to_string());
+        state.other_connector = Some(OtherConnector {
+            connector: "https://provider.example/ilp".to_string(),
+            funding: sample_funding("ready", vec![other_chain]),
+        });
+        let text = render(&state);
+        assert!(text.contains("Also open with https://provider.example/ilp (this session)"));
+        assert!(text.contains("evm:31337"));
+        assert!(text.contains("2.5 USDC"));
+    }
+
+    #[test]
+    fn other_connector_says_none_open_yet_before_its_own_channel_lands() {
+        let mut state = FundsState::default();
+        state.funding = Some(sample_funding(
+            "ready",
+            vec![sample_chain("evm:84532", true, "present", "none")],
+        ));
+        let other_chain = sample_chain("evm:31337", true, "present", "opening");
+        state.other_connector = Some(OtherConnector {
+            connector: "https://provider.example/ilp".to_string(),
+            funding: sample_funding("ready", vec![other_chain]),
+        });
+        let text = render(&state);
+        assert!(text.contains("none open yet"));
     }
 
     #[test]

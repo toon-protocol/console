@@ -1,0 +1,53 @@
+{
+  "ok": false,
+  "problems": [
+    "No payment channel with the connector at https://provider.example/ilp. A spawn pays from a channel and must never open one for you — opening locks collateral on chain and costs the chain's own gas. Open one on evm:31337 from the Funds tab, naming this connector."
+  ],
+  "provider": {
+    "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
+    "ilpAddress": "g.toon.provider",
+    "connectorUrl": "https://provider.example/ilp",
+    "hidden": false,
+    "liveness": "live"
+  },
+  "listing": {
+    "name": "basic",
+    "version": 1,
+    "leaseIntervalSeconds": 3600,
+    "price": 1000,
+    "capabilities": []
+  },
+  "route": "g.toon.provider.basic.v1.spawn",
+  "payment": {
+    "connectorUrl": "https://provider.example/ilp",
+    "via": "provider-connector",
+    "reason": "Local sandbox's connector publishes no route carrying g.toon.provider.basic.v1.spawn, so the packet is paid at the provider's own connector, which terminates it (spec §4.1, §5)."
+  },
+  "vault": {
+    "localOnly": false,
+    "writes": {
+      "relays": [
+        "wss://own.relay.test"
+      ],
+      "plan": [
+        {
+          "url": "wss://own.relay.test",
+          "ready": true,
+          "destination": "g.toon.relay",
+          "payAt": "https://connector.test/ilp",
+          "price": "1",
+          "chain": "evm:31337",
+          "channelId": "0xchannel",
+          "via": "document"
+        }
+      ],
+      "destination": "g.toon.relay",
+      "payAt": "https://connector.test/ilp",
+      "price": "1",
+      "totalPrice": "1",
+      "chain": "evm:31337",
+      "channelId": "0xchannel",
+      "ready": true
+    }
+  }
+}

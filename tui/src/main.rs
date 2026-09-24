@@ -48,6 +48,7 @@ use toon_console_tui::types::{
 use toon_console_tui::ui;
 use toon_console_tui::views::account as account_view;
 use toon_console_tui::views::chain_seed;
+use toon_console_tui::views::funds;
 use toon_console_tui::views::new_workload;
 use toon_console_tui::views::workloads as workloads_view;
 
@@ -111,6 +112,14 @@ enum RuntimeEvent {
     DocsLinkOpenFailed(String),
     // -- Funds (TOON_Network#147) --
     FundingLoaded(Box<Result<FundingStatus, String>>),
+    /// TOON_Network#138: New workload's own "open a channel with this
+    /// connector" — the answer to both `Command::FetchFundingForConnector`
+    /// (the `o` read) and `Command::OpenChannelForConnector` (the confirmed
+    /// open), which share this one event because both hand back the same
+    /// connector-scoped `FundingStatus`
+    /// (`views::new_workload::apply_connector_funding` does not care which
+    /// request produced it).
+    ConnectorFundingLoaded(Box<Result<FundingStatus, String>>),
     GasStationLoaded(Box<Result<GasStationStatus, String>>),
     GasQuoteLoaded(Box<Result<GasQuote, String>>),
     GasPurchaseLoaded(Box<Result<GasPurchase, String>>),
@@ -402,6 +411,18 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()
                                     spawn_open_channel(client.clone(), tx.clone(), chain, deposit, connector);
                                 }
                             }
+                            // -- New workload's own "open a channel with
+                            // this connector" (TOON_Network#138) --
+                            Command::FetchFundingForConnector(connector) => {
+                                if let Some(client) = &client {
+                                    spawn_connector_funding_fetch(client.clone(), tx.clone(), connector);
+                                }
+                            }
+                            Command::OpenChannelForConnector { chain, deposit, connector } => {
+                                if let Some(client) = &client {
+                                    spawn_open_channel_for_connector(client.clone(), tx.clone(), chain, deposit, connector);
+                                }
+                            }
                             Command::Drip { chain } => {
                                 if let Some(client) = &client {
                                     app.funds.funding_busy = true;
@@ -572,6 +593,11 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()
                     }
                     RuntimeEvent::HealthLoaded(result) => match *result {
                         Ok(health) => {
+                            // TOON_Network#138: the Funds tab's own "which
+                            // connector is this channel with" line reads the
+                            // same profile connector the header's label
+                            // does, rather than keep a second copy of it.
+                            app.funds.connector_url = Some(health.profile.connector_url.clone());
                             app.health = Some(health);
                             app.loading_health = false;
                             app.daemon_status = DaemonStatus::Connected;
@@ -754,6 +780,42 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()
                             if let Some(client) = &client {
                                 spawn_chain_seed_fetch(client.clone(), tx.clone());
                                 app.loading_chain_seed = true;
+                            }
+                        }
+                    }
+                    // TOON_Network#138: New workload's own "open a channel
+                    // with this connector" — the connector-scoped funding
+                    // read, and the confirmed open, land here alike.
+                    RuntimeEvent::ConnectorFundingLoaded(result) => {
+                        let just_opened = new_workload::apply_connector_funding(
+                            &mut app.new_workload,
+                            *result,
+                        );
+                        if just_opened {
+                            // TOON_Network#138: the Funds tab's own "also
+                            // open with" panel is told about this connector
+                            // too — the only way it learns of one that is
+                            // not the profile's own, since no daemon route
+                            // lists every connector this account holds a
+                            // channel with (`views::funds::OtherConnector`'s
+                            // own doc comment).
+                            if let (Some(connector), Some(funding)) = (
+                                app.new_workload.connector_funding_url.clone(),
+                                app.new_workload.connector_funding.clone(),
+                            ) {
+                                app.funds.other_connector =
+                                    Some(funds::OtherConnector { connector, funding });
+                            }
+                            if let Some(client) = &client {
+                                match new_workload::retry_preflight(&mut app.new_workload) {
+                                    Command::PreflightSpawn(body) => {
+                                        spawn_preflight_spawn(client.clone(), tx.clone(), body);
+                                    }
+                                    Command::PreflightStandbySet(body) => {
+                                        spawn_preflight_standby_set(client.clone(), tx.clone(), body);
+                                    }
+                                    _ => {}
+                                }
                             }
                         }
                     }
@@ -984,6 +1046,9 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()
                 if let Some(client) = &client {
                     if app.funds.pending() {
                         spawn_funding_fetch(client.clone(), tx.clone(), false);
+                    }
+                    if let Some(connector) = new_workload::connector_funding_poll(&app.new_workload) {
+                        spawn_connector_funding_fetch(client.clone(), tx.clone(), connector);
                     }
                 }
             }
@@ -1481,6 +1546,40 @@ fn spawn_open_channel(
         tx,
         move || async move { api::open_channel(&client, chain, deposit, connector).await },
         RuntimeEvent::FundingLoaded,
+    );
+}
+
+/// `GET /api/funding?connector=<url>` (TOON_Network#138) — New workload's
+/// own `o`, and the poll while it is `opening`.
+fn spawn_connector_funding_fetch(
+    client: Arc<DaemonClient>,
+    tx: UnboundedSender<RuntimeEvent>,
+    connector: String,
+) {
+    spawn_call(
+        tx,
+        move || async move { api::funding_for_connector(&client, &connector).await },
+        RuntimeEvent::ConnectorFundingLoaded,
+    );
+}
+
+/// Issued only from `Command::OpenChannelForConnector`, itself only ever
+/// produced once New workload's own channel confirmation
+/// (`views::new_workload::handle_key`'s `channel_confirm`) has been shown
+/// and accepted — never straight from a keypress. Answers
+/// `RuntimeEvent::ConnectorFundingLoaded`, the same event the GET above
+/// sends: both are one connector's `FundingStatus`.
+fn spawn_open_channel_for_connector(
+    client: Arc<DaemonClient>,
+    tx: UnboundedSender<RuntimeEvent>,
+    chain: String,
+    deposit: Option<String>,
+    connector: String,
+) {
+    spawn_call(
+        tx,
+        move || async move { api::open_channel(&client, chain, deposit, Some(connector)).await },
+        RuntimeEvent::ConnectorFundingLoaded,
     );
 }
 

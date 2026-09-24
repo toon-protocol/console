@@ -59,10 +59,11 @@ use ratatui::Frame;
 
 use crate::app::Command;
 use crate::types::{
-    Directory, ExpandTemplateRequest, ExpandedTemplate, ListingView, PreflightView, ProviderView,
-    RegistryEntryRequest, SpawnContentImage, SpawnImageRequest, SpawnPortRequest, SpawnRequestBody,
-    StandbyMemberRequest, StandbySetPreflightView, StandbySetRequestBody, TemplateAvailability,
-    TemplateGallery, TemplateSpawnRequestBody, TemplateView,
+    ChainFundingView, Directory, ExpandTemplateRequest, ExpandedTemplate, FundingStatus,
+    ListingView, PreflightView, ProviderView, RegistryEntryRequest, SpawnContentImage,
+    SpawnImageRequest, SpawnPortRequest, SpawnRequestBody, StandbyMemberRequest,
+    StandbySetPreflightView, StandbySetRequestBody, TemplateAvailability, TemplateGallery,
+    TemplateSpawnRequestBody, TemplateView,
 };
 use crate::views::directory::{ListingPicker, PickerEvent};
 use crate::widgets::confirm::{Confirm, ConfirmOutcome};
@@ -174,6 +175,17 @@ pub enum SpawnAction {
     StandbySet(Box<StandbySetRequestBody>),
 }
 
+/// What a confirmed `o` becomes (TOON_Network#138: "open a channel with this
+/// connector"), captured at the moment the confirmation was shown so that
+/// typing `yes`+`Enter` sends provably the same chain, connector and deposit
+/// that were on screen — nothing is recomputed in between.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OpenChannelPlan {
+    pub chain: String,
+    pub connector: String,
+    pub deposit: Option<String>,
+}
+
 pub struct NewWorkloadViewState {
     pub stage: Stage,
 
@@ -226,6 +238,28 @@ pub struct NewWorkloadViewState {
     /// A message from the last cancelled confirmation or a successful
     /// spawn — cleared the next time something meaningful changes.
     pub status: Option<String>,
+
+    // -- "Open a channel with this connector" (TOON_Network#138) --
+    /// The connector `o` last asked `GET /api/funding?connector=<url>` about
+    /// — `missing_channel_connector`'s answer at the moment `o` was pressed,
+    /// kept so a later poll or a fresh answer knows what it is scoped to.
+    pub connector_funding_url: Option<String>,
+    /// That connector's own funding read — same `FundingStatus` shape the
+    /// Funds tab's own `app.funds.funding` is, scoped to a connector that
+    /// need not be the profile's own.
+    pub connector_funding: Option<FundingStatus>,
+    pub connector_funding_loading: bool,
+    pub connector_funding_error: Option<String>,
+    /// Shown once `connector_funding` has answered with an openable chain —
+    /// a second, independent confirmation from `confirm` above (that one
+    /// spawns; this one opens a channel), so both can never collide.
+    pub channel_confirm: Option<Confirm<OpenChannelPlan>>,
+    /// The chain a confirmed open is in flight for — which of
+    /// `connector_funding`'s chains the poll (main.rs, Funds cadence) and
+    /// the "did it just turn open" check both watch. A connector can settle
+    /// on more than one chain, and only the one actually being opened
+    /// matters.
+    pub opening_chain: Option<String>,
 }
 
 impl NewWorkloadViewState {
@@ -256,6 +290,12 @@ impl NewWorkloadViewState {
             spawning: false,
             spawn_error: None,
             status: None,
+            connector_funding_url: None,
+            connector_funding: None,
+            connector_funding_loading: false,
+            connector_funding_error: None,
+            channel_confirm: None,
+            opening_chain: None,
         }
     }
 }
@@ -308,6 +348,20 @@ pub fn reset_wizard(state: &mut NewWorkloadViewState, status: impl Into<String>)
     state.spawning = false;
     state.spawn_error = None;
     state.status = Some(status.into());
+    clear_connector_funding(state);
+}
+
+/// Drops every "open a channel with this connector" field back to its
+/// starting point — called on a full wizard reset and whenever Backspace
+/// leaves the Preflight stage, so a stale read or a stale confirmation from
+/// one Listing's connector never leaks into a different one's.
+fn clear_connector_funding(state: &mut NewWorkloadViewState) {
+    state.connector_funding_url = None;
+    state.connector_funding = None;
+    state.connector_funding_loading = false;
+    state.connector_funding_error = None;
+    state.channel_confirm = None;
+    state.opening_chain = None;
 }
 
 /// The one place a keypress becomes a decision for this view — the same
@@ -315,6 +369,30 @@ pub fn reset_wizard(state: &mut NewWorkloadViewState, status: impl Into<String>)
 /// Returns `None` for a key this view has no opinion about right now, so the
 /// global keymap (view switching, `?`, quit) still gets it.
 pub fn handle_key(state: &mut NewWorkloadViewState, key: KeyEvent) -> Option<Command> {
+    // Checked before `confirm` below: only one of the two can ever be open
+    // at once (`offer_open_channel_confirm` and `preflight_handle_key`'s `s`
+    // arm both refuse to run while the other kind is showing), but this is
+    // the seam that would decide if that ever changed.
+    if let Some(confirm) = &mut state.channel_confirm {
+        return Some(match confirm.handle_key(key) {
+            ConfirmOutcome::Pending => Command::None,
+            ConfirmOutcome::Cancelled => {
+                state.channel_confirm = None;
+                state.status = Some("Cancelled. No channel was opened.".to_string());
+                Command::None
+            }
+            ConfirmOutcome::Confirmed(plan) => {
+                state.channel_confirm = None;
+                state.opening_chain = Some(plan.chain.clone());
+                Command::OpenChannelForConnector {
+                    chain: plan.chain,
+                    deposit: plan.deposit,
+                    connector: plan.connector,
+                }
+            }
+        });
+    }
+
     if let Some(confirm) = &mut state.confirm {
         return Some(match confirm.handle_key(key) {
             ConfirmOutcome::Pending => Command::None,
@@ -905,15 +983,184 @@ fn preflight_confirm_lines(state: &NewWorkloadViewState) -> Vec<String> {
     }
 }
 
+/// The connector a spawn WOULD pay at, when the preflight already says there
+/// is no bound channel there — read off `PreflightView::payment` alone,
+/// structurally (`channel_id` absent), never by matching `problems`' prose
+/// (`lease.ts`'s `#payment` sets `channelId` if and only if
+/// `findChannelBinding` found one). `None` on any other problem, and `None`
+/// once a fresh preflight comes back with a channel — so `o` only ever does
+/// anything on exactly this one problem.
+fn missing_channel_connector(state: &NewWorkloadViewState) -> Option<String> {
+    let payment = state.preflight.as_ref()?.payment.as_ref()?;
+    if payment.channel_id.is_none() {
+        Some(payment.connector_url.clone())
+    } else {
+        None
+    }
+}
+
+/// Which of a connector's own chains to offer opening: the one the
+/// preflight's `payment.chain` named, if it did and that chain answers
+/// `canOpen`, else the first the connector says can be opened at all. The
+/// daemon's own "no channel" case does not currently name a chain (every
+/// settlement it checked failed to find a binding, so there is no single one
+/// to prefer) — this still checks first, both because a later daemon change
+/// could start naming one and because it is what the ticket's acceptance
+/// criterion asks for.
+fn choose_open_chain<'a>(
+    preflight: Option<&PreflightView>,
+    funding: &'a FundingStatus,
+) -> Option<&'a ChainFundingView> {
+    let named = preflight
+        .and_then(|preflight| preflight.payment.as_ref())
+        .and_then(|payment| payment.chain.as_deref());
+    if let Some(named) = named {
+        if let Some(chain) = funding
+            .chains
+            .iter()
+            .find(|chain| chain.chain == named && chain.can_open)
+        {
+            return Some(chain);
+        }
+    }
+    funding.chains.iter().find(|chain| chain.can_open)
+}
+
+/// Builds and shows the "open a channel with this connector" confirmation,
+/// once `connector_funding` has answered and there is a chain to offer.
+/// A no-op while one is already open, while the connector no longer has a
+/// missing-channel problem (a fresh preflight arrived in the meantime), or
+/// while `connector_funding` has nothing openable — `draw_preflight` shows
+/// why in each of those cases instead.
+fn offer_open_channel_confirm(state: &mut NewWorkloadViewState) {
+    if state.channel_confirm.is_some() {
+        return;
+    }
+    let Some(connector) = missing_channel_connector(state) else {
+        return;
+    };
+    let Some(funding) = &state.connector_funding else {
+        return;
+    };
+    let Some(chain) = choose_open_chain(state.preflight.as_ref(), funding) else {
+        return;
+    };
+    let amount_line = match &chain.suggested_deposit {
+        Some(amount) => format!(
+            "Collateral: {}",
+            crate::format::format_chain_amount(chain, amount)
+        ),
+        None => "Collateral: the connector's own default amount".to_string(),
+    };
+    let lines = vec![
+        format!("Open a payment channel on {} with {connector}", chain.chain),
+        amount_line,
+        "This locks collateral on chain and pays the chain's own gas for the transaction."
+            .to_string(),
+    ];
+    state.channel_confirm = Some(Confirm::new(
+        "Open channel",
+        lines,
+        OpenChannelPlan {
+            chain: chain.chain.clone(),
+            connector,
+            deposit: chain.suggested_deposit.clone(),
+        },
+    ));
+}
+
+/// Applies `Command::FetchFundingForConnector`'s or
+/// `Command::OpenChannelForConnector`'s answer — both are the same
+/// `FundingStatus` shape (`api::funding_for_connector`'s doc comment says
+/// why), so one function updates `connector_funding` for either. Returns
+/// `true` when the chain this wizard is watching (`opening_chain`) has just
+/// turned `open` — `main.rs`'s cue to re-run the preflight, since only it
+/// knows how to dispatch `PreflightSpawn`/`PreflightStandbySet`.
+pub fn apply_connector_funding(
+    state: &mut NewWorkloadViewState,
+    result: Result<FundingStatus, String>,
+) -> bool {
+    state.connector_funding_loading = false;
+    match result {
+        Ok(status) => {
+            state.connector_funding_error = None;
+            let just_opened = state.opening_chain.as_ref().is_some_and(|chain_id| {
+                status
+                    .chains
+                    .iter()
+                    .any(|chain| chain.chain == *chain_id && chain.channel.phase == "open")
+            });
+            state.connector_funding = Some(status);
+            if just_opened {
+                state.opening_chain = None;
+                state.channel_confirm = None;
+                return true;
+            }
+            offer_open_channel_confirm(state);
+            false
+        }
+        Err(message) => {
+            state.connector_funding_error = Some(message);
+            false
+        }
+    }
+}
+
+/// True while the chain this wizard asked to open on is still `opening` —
+/// the same "poll only while something is happening" gate
+/// `views::funds::FundsState::pending` uses for the Funds tab's own funding,
+/// extended here to New workload's own connector-scoped read.
+fn connector_funding_pending(state: &NewWorkloadViewState) -> bool {
+    state.opening_chain.as_ref().is_some_and(|chain_id| {
+        state.connector_funding.as_ref().is_some_and(|funding| {
+            funding
+                .chains
+                .iter()
+                .any(|chain| chain.chain == *chain_id && chain.channel.phase == "opening")
+        })
+    })
+}
+
+/// The connector to re-read on the next Funds-cadence tick, or `None` when
+/// nothing is opening — `main.rs`'s `funding_clock` branch calls this
+/// alongside `FundsState::pending`.
+pub fn connector_funding_poll(state: &NewWorkloadViewState) -> Option<String> {
+    if connector_funding_pending(state) {
+        state.connector_funding_url.clone()
+    } else {
+        None
+    }
+}
+
+/// Re-sends whichever preflight the wizard is showing — `main.rs` calls this
+/// once `apply_connector_funding` reports the watched chain just turned
+/// `open`, so the Preflight stage re-checks itself against the daemon rather
+/// than trusting the same "no channel" answer it started from.
+pub fn retry_preflight(state: &mut NewWorkloadViewState) -> Command {
+    start_preflight(state)
+}
+
 fn preflight_handle_key(state: &mut NewWorkloadViewState, key: KeyEvent) -> Option<Command> {
     match key.code {
         KeyCode::Backspace => {
             state.stage = Stage::Standbys;
+            clear_connector_funding(state);
             Some(Command::None)
         }
         KeyCode::Char('L') => {
             state.local_only = !state.local_only;
             Some(start_preflight(state))
+        }
+        KeyCode::Char('o') => {
+            let Some(connector) = missing_channel_connector(state) else {
+                return Some(Command::None);
+            };
+            state.connector_funding_url = Some(connector.clone());
+            state.connector_funding = None;
+            state.connector_funding_error = None;
+            state.connector_funding_loading = true;
+            state.channel_confirm = None;
+            Some(Command::FetchFundingForConnector(connector))
         }
         KeyCode::Char('s') => {
             if state.spawning || !preflight_ok(state) {
@@ -962,6 +1209,10 @@ pub fn draw(
             Vec::new()
         }
     };
+    if let Some(confirm) = &state.channel_confirm {
+        crate::widgets::confirm::draw(frame, area, confirm);
+        return Vec::new();
+    }
     if let Some(confirm) = &state.confirm {
         crate::widgets::confirm::draw(frame, area, confirm);
         return Vec::new();
@@ -1295,6 +1546,24 @@ fn draw_preflight(frame: &mut Frame, area: Rect, state: &NewWorkloadViewState) {
         for problem in &preflight.problems {
             lines.push(error_line(&format!("Problem: {problem}")));
         }
+        if let Some(connector) = missing_channel_connector(state) {
+            lines.push(Line::raw(""));
+            if state.connector_funding_loading {
+                lines.push(Line::from(format!("Reading funds at {connector}\u{2026}")));
+            } else if let Some(err) = &state.connector_funding_error {
+                lines.push(error_line(err));
+            } else if connector_funding_pending(state) {
+                lines.push(Line::from(Span::styled(
+                    format!("Opening a channel with {connector}\u{2026}"),
+                    Style::default().fg(Color::Yellow),
+                )));
+            } else {
+                lines.push(Line::from(Span::styled(
+                    format!("o opens a channel with {connector}"),
+                    Style::default().add_modifier(Modifier::BOLD),
+                )));
+            }
+        }
     } else if let Some(err) = &state.preflight_error {
         lines.push(error_line(err));
     } else {
@@ -1338,9 +1607,9 @@ fn draw_preflight(frame: &mut Frame, area: Rect, state: &NewWorkloadViewState) {
 mod tests {
     use super::*;
     use crate::types::{
-        ListingResources, LivenessView, PreflightListingView, PreflightVault, ProviderProfileView,
-        PublisherView, RelayWriteTargets, SpawnContent, SpawnContentPort, TemplateImage,
-        TemplatePort, TemplateResources,
+        ListingResources, LivenessView, PreflightListingView, PreflightPayment, PreflightVault,
+        ProviderProfileView, PublisherView, RelayWriteTargets, SpawnContent, SpawnContentPort,
+        TemplateImage, TemplatePort, TemplateResources,
     };
     use crossterm::event::KeyModifiers;
     use ratatui::backend::TestBackend;
@@ -1903,6 +2172,432 @@ mod tests {
         let command = preflight_handle_key(&mut state, key(KeyCode::Char('L')));
         assert!(state.local_only);
         assert!(matches!(command, Some(Command::PreflightSpawn(_))));
+    }
+
+    // -- "Open a channel with this connector" (TOON_Network#138) -----------
+
+    fn preflight_missing_channel(chain: Option<&str>) -> PreflightView {
+        let mut preflight = ready_preflight();
+        preflight.ok = false;
+        preflight.problems = vec![
+            "No payment channel with the connector at https://provider.example/ilp.".to_string(),
+        ];
+        preflight.payment = Some(PreflightPayment {
+            connector_url: "https://provider.example/ilp".to_string(),
+            via: "provider-connector".to_string(),
+            reason: "no route carries it".to_string(),
+            chain: chain.map(str::to_string),
+            channel_id: None,
+            route_price: None,
+            over_anon: None,
+            rpc_over_anon: None,
+        });
+        preflight
+    }
+
+    fn open_chain(chain: &str, can_open: bool) -> ChainFundingView {
+        use crate::types::{Amount, BalanceView, ChainAddress, GasView, RpcRef, TokenRef};
+        ChainFundingView {
+            chain: chain.to_string(),
+            kind: "evm".to_string(),
+            counterparty: "0xsettlement".to_string(),
+            token: TokenRef {
+                address: "0xusdc".to_string(),
+                decimals: 6,
+            },
+            deposit: ChainAddress {
+                address: "0xdeposit".to_string(),
+                path: "m/44'/60'/0'/0/0".to_string(),
+            },
+            rpc: RpcRef {
+                url: "https://rpc.example".to_string(),
+                source: "profile".to_string(),
+            },
+            balances: BalanceView {
+                state: "read".to_string(),
+                native: None,
+                token: Some(Amount {
+                    amount: "0".to_string(),
+                    decimals: Some(6),
+                    symbol: Some("USDC".to_string()),
+                    address: None,
+                }),
+                reason: None,
+                read_at: None,
+            },
+            gas: GasView {
+                verdict: "present".to_string(),
+                symbol: None,
+                headline: String::new(),
+                detail: String::new(),
+                command: None,
+                faucet_gives_gas: false,
+            },
+            channel: crate::types::ChannelView {
+                phase: "none".to_string(),
+                channel_id: None,
+                deposit: None,
+                spent: None,
+                available: None,
+                nonce: None,
+                opened_at: None,
+                started_at: None,
+                tx_hash: None,
+                reason: None,
+                out_of_gas: None,
+                watermark_uncertain: None,
+            },
+            can_open,
+            blocked_by: None,
+            suggested_deposit: Some("1000000".to_string()),
+        }
+    }
+
+    fn connector_funding(chains: Vec<ChainFundingView>) -> FundingStatus {
+        use crate::types::{CustodyView, FundingProfileRef};
+        FundingStatus {
+            state: "ready".to_string(),
+            profile: FundingProfileRef {
+                id: "sandbox".to_string(),
+                label: "Local sandbox".to_string(),
+            },
+            pubkey: None,
+            custody: CustodyView {
+                text: String::new(),
+                acknowledged_at: None,
+            },
+            superseded_seeds: 0,
+            held_seed: None,
+            chains,
+            quote: None,
+            faucet: None,
+            channel_store_path: None,
+            reason: None,
+            checked_at: "2026-09-24T00:00:00.000Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn missing_channel_connector_is_none_when_the_preflight_is_ok() {
+        let mut state = NewWorkloadViewState::new();
+        state.preflight = Some(ready_preflight());
+        assert_eq!(missing_channel_connector(&state), None);
+    }
+
+    #[test]
+    fn missing_channel_connector_reads_the_payment_field_not_the_problem_text() {
+        let mut state = NewWorkloadViewState::new();
+        state.preflight = Some(preflight_missing_channel(None));
+        assert_eq!(
+            missing_channel_connector(&state),
+            Some("https://provider.example/ilp".to_string())
+        );
+    }
+
+    #[test]
+    fn missing_channel_connector_is_none_once_a_channel_id_is_present() {
+        // The real "ok" fixture (`leases-preflight.json`): `payment` is set,
+        // but `channelId` is too — the ordinary, funded case, where `o` must
+        // do nothing.
+        let mut state = NewWorkloadViewState::new();
+        state.preflight = Some(real_fixture::<PreflightView>("leases-preflight"));
+        assert_eq!(missing_channel_connector(&state), None);
+    }
+
+    #[test]
+    fn o_does_nothing_when_the_preflight_has_no_missing_channel_problem() {
+        let mut state = NewWorkloadViewState::new();
+        state.stage = Stage::Preflight;
+        state.preflight = Some(ready_preflight());
+        let command = preflight_handle_key(&mut state, key(KeyCode::Char('o')));
+        assert_eq!(command, Some(Command::None));
+        assert!(state.connector_funding_url.is_none());
+    }
+
+    #[test]
+    fn o_reads_funding_scoped_to_the_connector_the_preflight_named() {
+        let mut state = NewWorkloadViewState::new();
+        state.stage = Stage::Preflight;
+        state.preflight = Some(preflight_missing_channel(None));
+        let command = preflight_handle_key(&mut state, key(KeyCode::Char('o')));
+        assert_eq!(
+            command,
+            Some(Command::FetchFundingForConnector(
+                "https://provider.example/ilp".to_string()
+            ))
+        );
+        assert!(state.connector_funding_loading);
+        assert_eq!(
+            state.connector_funding_url.as_deref(),
+            Some("https://provider.example/ilp")
+        );
+    }
+
+    #[test]
+    fn choose_open_chain_prefers_the_chain_the_preflight_named() {
+        let preflight = preflight_missing_channel(Some("solana"));
+        let funding = connector_funding(vec![
+            open_chain("evm:31337", true),
+            open_chain("solana", true),
+        ]);
+        let chosen = choose_open_chain(Some(&preflight), &funding).expect("a chain can open");
+        assert_eq!(chosen.chain, "solana");
+    }
+
+    #[test]
+    fn choose_open_chain_falls_back_to_the_first_openable_chain() {
+        // The daemon's real "no channel" answer never names a chain (every
+        // settlement it checked failed to find a binding) — this is that
+        // case.
+        let preflight = preflight_missing_channel(None);
+        let funding = connector_funding(vec![
+            open_chain("evm:31337", false),
+            open_chain("solana", true),
+        ]);
+        let chosen = choose_open_chain(Some(&preflight), &funding).expect("a chain can open");
+        assert_eq!(chosen.chain, "solana");
+    }
+
+    #[test]
+    fn choose_open_chain_ignores_a_named_chain_that_cannot_open() {
+        let preflight = preflight_missing_channel(Some("evm:31337"));
+        let funding = connector_funding(vec![
+            open_chain("evm:31337", false),
+            open_chain("solana", true),
+        ]);
+        let chosen = choose_open_chain(Some(&preflight), &funding).expect("a chain can open");
+        assert_eq!(chosen.chain, "solana");
+    }
+
+    #[test]
+    fn apply_connector_funding_offers_a_confirmation_naming_the_connector_chain_and_deposit() {
+        let mut state = NewWorkloadViewState::new();
+        state.preflight = Some(preflight_missing_channel(None));
+        state.connector_funding_url = Some("https://provider.example/ilp".to_string());
+        state.connector_funding_loading = true;
+
+        let just_opened = apply_connector_funding(
+            &mut state,
+            Ok(connector_funding(vec![open_chain("evm:31337", true)])),
+        );
+        assert!(!just_opened);
+        assert!(!state.connector_funding_loading);
+        let confirm = state.channel_confirm.as_ref().expect("a confirm is shown");
+        assert!(confirm
+            .lines
+            .iter()
+            .any(|line| line.contains("https://provider.example/ilp")));
+        assert!(confirm.lines.iter().any(|line| line.contains("evm:31337")));
+        assert!(confirm.lines.iter().any(|line| line.contains("USDC")));
+    }
+
+    #[test]
+    fn apply_connector_funding_offers_nothing_when_no_chain_can_open() {
+        let mut state = NewWorkloadViewState::new();
+        state.preflight = Some(preflight_missing_channel(None));
+        state.connector_funding_url = Some("https://provider.example/ilp".to_string());
+
+        apply_connector_funding(
+            &mut state,
+            Ok(connector_funding(vec![open_chain("evm:31337", false)])),
+        );
+        assert!(state.channel_confirm.is_none());
+    }
+
+    #[test]
+    fn apply_connector_funding_records_an_error() {
+        let mut state = NewWorkloadViewState::new();
+        state.connector_funding_loading = true;
+        apply_connector_funding(&mut state, Err("connector did not answer".to_string()));
+        assert_eq!(
+            state.connector_funding_error.as_deref(),
+            Some("connector did not answer")
+        );
+        assert!(!state.connector_funding_loading);
+    }
+
+    #[test]
+    fn confirming_yes_then_enter_issues_open_channel_for_connector_and_not_a_single_keypress() {
+        let mut state = NewWorkloadViewState::new();
+        state.preflight = Some(preflight_missing_channel(None));
+        state.connector_funding_url = Some("https://provider.example/ilp".to_string());
+        apply_connector_funding(
+            &mut state,
+            Ok(connector_funding(vec![open_chain("evm:31337", true)])),
+        );
+        assert!(state.channel_confirm.is_some());
+
+        // Enter alone must not confirm.
+        assert_eq!(
+            handle_key(&mut state, key(KeyCode::Enter)),
+            Some(Command::None)
+        );
+        assert!(state.channel_confirm.is_some());
+
+        for c in "yes".chars() {
+            handle_key(&mut state, key(KeyCode::Char(c)));
+        }
+        let command = handle_key(&mut state, key(KeyCode::Enter));
+        assert_eq!(
+            command,
+            Some(Command::OpenChannelForConnector {
+                chain: "evm:31337".to_string(),
+                deposit: Some("1000000".to_string()),
+                connector: "https://provider.example/ilp".to_string(),
+            })
+        );
+        assert!(state.channel_confirm.is_none());
+        assert_eq!(state.opening_chain.as_deref(), Some("evm:31337"));
+    }
+
+    #[test]
+    fn esc_cancels_the_channel_confirmation_without_issuing_a_command() {
+        let mut state = NewWorkloadViewState::new();
+        state.preflight = Some(preflight_missing_channel(None));
+        state.connector_funding_url = Some("https://provider.example/ilp".to_string());
+        apply_connector_funding(
+            &mut state,
+            Ok(connector_funding(vec![open_chain("evm:31337", true)])),
+        );
+        assert_eq!(
+            handle_key(&mut state, key(KeyCode::Esc)),
+            Some(Command::None)
+        );
+        assert!(state.channel_confirm.is_none());
+    }
+
+    #[test]
+    fn apply_connector_funding_reports_just_opened_once_the_watched_chain_turns_open() {
+        let mut state = NewWorkloadViewState::new();
+        state.opening_chain = Some("evm:31337".to_string());
+        state.connector_funding = Some(connector_funding(vec![{
+            let mut chain = open_chain("evm:31337", true);
+            chain.channel.phase = "opening".to_string();
+            chain
+        }]));
+        state.channel_confirm = Some(Confirm::new(
+            "Open channel",
+            vec![],
+            OpenChannelPlan {
+                chain: "evm:31337".to_string(),
+                connector: "https://provider.example/ilp".to_string(),
+                deposit: None,
+            },
+        ));
+
+        let just_opened = apply_connector_funding(
+            &mut state,
+            Ok(connector_funding(vec![{
+                let mut chain = open_chain("evm:31337", true);
+                chain.channel.phase = "open".to_string();
+                chain
+            }])),
+        );
+        assert!(just_opened);
+        assert!(state.opening_chain.is_none());
+        assert!(state.channel_confirm.is_none());
+    }
+
+    #[test]
+    fn connector_funding_poll_is_none_until_something_is_opening() {
+        let mut state = NewWorkloadViewState::new();
+        assert_eq!(connector_funding_poll(&state), None);
+
+        state.opening_chain = Some("evm:31337".to_string());
+        state.connector_funding_url = Some("https://provider.example/ilp".to_string());
+        state.connector_funding = Some(connector_funding(vec![{
+            let mut chain = open_chain("evm:31337", true);
+            chain.channel.phase = "opening".to_string();
+            chain
+        }]));
+        assert_eq!(
+            connector_funding_poll(&state),
+            Some("https://provider.example/ilp".to_string())
+        );
+
+        // Turns `open`: no longer pending, nothing left to poll for.
+        state.connector_funding = Some(connector_funding(vec![{
+            let mut chain = open_chain("evm:31337", true);
+            chain.channel.phase = "open".to_string();
+            chain
+        }]));
+        assert_eq!(connector_funding_poll(&state), None);
+    }
+
+    #[test]
+    fn retry_preflight_reissues_the_plain_spawn_preflight() {
+        let mut state = NewWorkloadViewState::new();
+        let template = available_template("static-site");
+        state.expansion = Some(expansion(&template));
+        state.expanded_with = Some(settings(&template));
+        state.template = Some(template);
+        state.all_providers = vec![provider(&"1".repeat(64), false)];
+        state.picker.set_providers(state.all_providers.clone());
+
+        match retry_preflight(&mut state) {
+            Command::PreflightSpawn(body) => assert_eq!(body.provider, "1".repeat(64)),
+            other => panic!("expected PreflightSpawn, got {other:?}"),
+        }
+        assert!(state.preflight_loading);
+    }
+
+    #[test]
+    fn backspace_off_the_preflight_stage_clears_the_connector_funding_state() {
+        let mut state = NewWorkloadViewState::new();
+        state.stage = Stage::Preflight;
+        state.preflight = Some(preflight_missing_channel(None));
+        state.connector_funding_url = Some("https://provider.example/ilp".to_string());
+        state.connector_funding = Some(connector_funding(vec![open_chain("evm:31337", true)]));
+
+        preflight_handle_key(&mut state, key(KeyCode::Backspace));
+        assert_eq!(state.stage, Stage::Standbys);
+        assert!(state.connector_funding_url.is_none());
+        assert!(state.connector_funding.is_none());
+    }
+
+    #[test]
+    fn draws_the_open_channel_hint_and_the_confirmation_without_panicking() {
+        let mut state = NewWorkloadViewState::new();
+        state.stage = Stage::Preflight;
+        state.preflight = Some(preflight_missing_channel(None));
+        render(&state);
+
+        state.connector_funding_url = Some("https://provider.example/ilp".to_string());
+        apply_connector_funding(
+            &mut state,
+            Ok(connector_funding(vec![open_chain("evm:31337", true)])),
+        );
+        assert!(state.channel_confirm.is_some());
+        let hits = {
+            let backend = TestBackend::new(120, 30);
+            let mut terminal = Terminal::new(backend).unwrap();
+            let mut hits = Vec::new();
+            terminal
+                .draw(|frame| {
+                    hits = draw(frame, frame.area(), &state, 0);
+                })
+                .unwrap();
+            hits
+        };
+        assert!(hits.is_empty(), "a confirm popup covers every row hit");
+    }
+
+    #[test]
+    fn renders_the_real_no_channel_preflight_fixture_without_panicking() {
+        let mut state = NewWorkloadViewState::new();
+        state.stage = Stage::Preflight;
+        state.preflight = Some(real_fixture::<PreflightView>("leases-preflight-no-channel"));
+        render(&state);
+    }
+
+    #[test]
+    fn a_real_connector_funding_fixture_offers_an_open_channel_confirmation() {
+        let mut state = NewWorkloadViewState::new();
+        state.preflight = Some(real_fixture::<PreflightView>("leases-preflight-no-channel"));
+        state.connector_funding_url = Some("https://provider.example/ilp".to_string());
+        let funding: FundingStatus = real_fixture("funding-connector");
+        apply_connector_funding(&mut state, Ok(funding));
+        assert!(state.channel_confirm.is_some());
     }
 
     #[test]

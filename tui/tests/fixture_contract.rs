@@ -80,6 +80,10 @@ fn registry() -> BTreeMap<&'static str, Check> {
     // POST /api/funding/gas/quote and POST /api/funding/gas/buy all answer
     // with one of these four shapes.
     map.insert("funding", check::<FundingStatus> as Check);
+    // TOON_Network#138 (New workload "open a channel with this connector"):
+    // `GET /api/funding?connector=<url>` answers the same `FundingStatus`
+    // shape, scoped to a connector that need not be the profile's own.
+    map.insert("funding-connector", check::<FundingStatus> as Check);
     map.insert("gas-station", check::<GasStationStatus> as Check);
     map.insert("gas-quote", check::<GasQuote> as Check);
     map.insert("gas-purchase", check::<GasPurchase> as Check);
@@ -111,6 +115,13 @@ fn registry() -> BTreeMap<&'static str, Check> {
     map.insert("templates", check::<TemplateGallery> as Check);
     map.insert("template-expand", check::<ExpandedTemplate> as Check);
     map.insert("leases-preflight", check::<PreflightView> as Check);
+    // TOON_Network#138: the same route with no channel bound yet — the
+    // structural shape New workload's Preflight stage detects `o` on
+    // (`payment.channelId` absent).
+    map.insert(
+        "leases-preflight-no-channel",
+        check::<PreflightView> as Check,
+    );
     map.insert("leases-spawn", check::<SpawnResult> as Check);
     map.insert(
         "leases-standby-set-preflight",

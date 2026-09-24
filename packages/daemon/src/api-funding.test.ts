@@ -109,6 +109,28 @@ describe('the funding routes', () => {
     writeApiFixture('funding', status(answer));
   });
 
+  it('answers the funding view scoped to a named connector, not just the profile’s own', async () => {
+    // TOON_Network#138 (console TUI New workload, "open a channel with this
+    // connector"): a spawn's preflight can name a connector that is not the
+    // active profile's own (the provider's own connector, spec §4.1), and
+    // `GET /api/funding?connector=<url>` is how the TUI reads that
+    // connector's own chains, decimals and `canOpen` before offering to open
+    // a channel with it.
+    const answer = await handleApi(deps, {
+      method: 'GET',
+      path: '/api/funding',
+      query: new URLSearchParams({ connector: 'https://provider.example/ilp' }),
+      body: undefined,
+    });
+    expect(answer.status).toBe(200);
+    expect(status(answer).state).toBe('ready');
+
+    // Same `FundingStatus` shape `funding` above reads for the profile's own
+    // connector — `tui/`'s hand-kept Rust type is checked against this real
+    // answer too, not just the un-scoped one.
+    writeApiFixture('funding-connector', status(answer));
+  });
+
   it('carries no key material, in any answer, ever', async () => {
     const answers = [
       await call('GET', '/api/funding'),

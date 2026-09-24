@@ -178,6 +178,27 @@ pub async fn funding(client: &DaemonClient, refresh: bool) -> Answer<FundingStat
         .await
 }
 
+/// `GET /api/funding?connector=<url>` (TOON_Network#138) — the funding read
+/// scoped to a connector that is not necessarily the profile's own: what New
+/// workload's Preflight stage asks for once a preflight's `payment` names a
+/// connector with no bound channel yet (`views::new_workload`'s `o`, "open a
+/// channel with this connector"). Answers the same `FundingStatus` shape
+/// `funding` above reads for the profile's own connector — the daemon's
+/// `FundingStore#status` treats a named connector exactly like the profile's
+/// own (`packages/daemon/src/funding.ts`'s `#target`), so one Rust type
+/// serves both.
+pub async fn funding_for_connector(
+    client: &DaemonClient,
+    connector: &str,
+) -> Answer<FundingStatus> {
+    client
+        .get(&format!(
+            "/api/funding?connector={}",
+            encode_path_segment(connector)
+        ))
+        .await
+}
+
 #[derive(Serialize)]
 struct OpenChannelBody {
     chain: String,

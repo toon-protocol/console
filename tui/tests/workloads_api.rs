@@ -27,8 +27,8 @@ use tokio::task::JoinHandle;
 use toon_console_tui::api;
 use toon_console_tui::client::DaemonClient;
 use toon_console_tui::types::{
-    Dashboard, ExtendResult, GasPurchase, GasQuote, GasStationStatus, GatewayView, HandoverResult,
-    RotationResult, RotationView, StandbyMemberRequest, StandbySetPreflightView,
+    Dashboard, ExtendResult, FundingStatus, GasPurchase, GasQuote, GasStationStatus, GatewayView,
+    HandoverResult, RotationResult, RotationView, StandbyMemberRequest, StandbySetPreflightView,
     StandbySetRequestBody, StandbySetResult, TemplateSpawnRequestBody, TerminateResult,
     WithdrawalResult, WorkloadCard,
 };
@@ -507,6 +507,68 @@ async fn buy_gas_posts_the_chain_and_quote_id_and_decodes_the_real_purchase_fixt
     assert_eq!(sent.path, "/api/funding/gas/buy");
     assert!(sent.body.contains("\"chain\":\"solana\""));
     assert!(sent.body.contains("\"quoteId\":\"q-7\""));
+}
+
+/// TOON_Network#138: New workload's Preflight stage reads funding scoped to
+/// a connector that is not necessarily the profile's own (`o`, "open a
+/// channel with this connector") — proves the query string is built with the
+/// connector percent-encoded, and that the answer decodes as the same
+/// `FundingStatus` shape `GET /api/funding` (no `connector`) does.
+#[tokio::test]
+async fn funding_for_connector_gets_with_the_connector_query_and_decodes_the_real_fixture() {
+    let body: &'static str = Box::leak(fixture("funding-connector").into_boxed_str());
+    let recorded = Arc::new(Mutex::new(None));
+    let (url, _server) = spawn_stub(body, recorded.clone());
+    let dir = tempfile::tempdir().unwrap();
+    let path: PathBuf = dir.path().join("launch.json");
+    write_record(&path, &url);
+    let client = DaemonClient::connect(path).await.unwrap();
+
+    let status: FundingStatus = api::funding_for_connector(&client, "https://provider.example/ilp")
+        .await
+        .unwrap();
+
+    assert_eq!(status.state, "ready");
+    let sent = recorded.lock().unwrap().take().unwrap();
+    assert_eq!(sent.method, "GET");
+    assert_eq!(
+        sent.path,
+        "/api/funding?connector=https%3A%2F%2Fprovider.example%2Filp"
+    );
+}
+
+/// `open_channel` already took an optional `connector` (TOON_Network#90's
+/// gas-station-buys-through-a-different-channel case); New workload's own
+/// confirmed open (TOON_Network#138) is the first caller that always passes
+/// one. Proves the body names it under the same `connector` key the daemon
+/// reads (`api.ts`'s `string(asRecord(body), 'connector')`).
+#[tokio::test]
+async fn open_channel_posts_the_named_connector() {
+    let body: &'static str = Box::leak(fixture("funding-connector").into_boxed_str());
+    let recorded = Arc::new(Mutex::new(None));
+    let (url, _server) = spawn_stub(body, recorded.clone());
+    let dir = tempfile::tempdir().unwrap();
+    let path: PathBuf = dir.path().join("launch.json");
+    write_record(&path, &url);
+    let client = DaemonClient::connect(path).await.unwrap();
+
+    let status = api::open_channel(
+        &client,
+        "evm:31337".to_string(),
+        Some("1000000".to_string()),
+        Some("https://provider.example/ilp".to_string()),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(status.state, "ready");
+    let sent = recorded.lock().unwrap().take().unwrap();
+    assert_eq!(sent.method, "POST");
+    assert_eq!(sent.path, "/api/funding/channel");
+    let sent_body: serde_json::Value = serde_json::from_str(&sent.body).unwrap();
+    assert_eq!(sent_body["chain"], "evm:31337");
+    assert_eq!(sent_body["deposit"], "1000000");
+    assert_eq!(sent_body["connector"], "https://provider.example/ilp");
 }
 
 /* -------------------------------------------------------------------------- */

@@ -332,6 +332,27 @@ pub enum Command {
         deposit: Option<String>,
         connector: Option<String>,
     },
+    /// `GET /api/funding?connector=<url>` (TOON_Network#138) — New
+    /// workload's Preflight stage's `o`, "open a channel with this
+    /// connector": reads a connector's own funding state before offering to
+    /// open one there. Issued only when the current preflight's `payment`
+    /// names a connector with no bound channel (`views::new_workload`'s
+    /// `missing_channel_connector`) — never straight from an arbitrary
+    /// keypress on an unrelated problem.
+    FetchFundingForConnector(String),
+    /// `POST /api/funding/channel` with a connector that is not necessarily
+    /// the profile's own — issued only after New workload's own channel
+    /// confirmation (`views::new_workload::handle_key`'s `channel_confirm`)
+    /// has been shown and accepted. Kept separate from `OpenChannel` above:
+    /// that one updates the Funds tab's own `app.funds.funding` (the
+    /// profile's own connector); this one updates New workload's
+    /// `connector_funding` instead, and can trigger a re-preflight once the
+    /// channel turns `open`.
+    OpenChannelForConnector {
+        chain: String,
+        deposit: Option<String>,
+        connector: String,
+    },
     Drip {
         chain: String,
     },

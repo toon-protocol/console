@@ -85,6 +85,17 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
     // TOON_Network#147: the total channel balance, shown on every view (not
     // only Funds) — a small additive read of `app.funds.funding`, which is
     // fetched eagerly on connect for exactly this reason.
+    //
+    // TOON_Network#138 decision: kept at the PROFILE's own connector rather
+    // than summed across every connector this session has touched. New
+    // workload's own "open a channel with this connector" (`o` on a
+    // Preflight's missing-channel problem) can open one with a DIFFERENT
+    // connector — the provider's own — and folding that balance into this
+    // one figure would silently mix two connectors' money into one number a
+    // person cannot pull apart again. Labelled so nobody reads it as the
+    // account's whole balance; the Funds tab's own "also open with" panel
+    // (`views::funds::draw_chain_detail`) is where that other channel's
+    // balance is shown, honestly against its own connector's name.
     let channels = crate::format::total_channel_balance(app.funds.funding.as_ref());
 
     let line = Line::from(vec![
@@ -97,7 +108,7 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
         Span::raw(" ── "),
         Span::raw(account),
         Span::raw(" ── "),
-        Span::raw(format!("channels: {channels}")),
+        Span::raw(format!("channels (profile connector): {channels}")),
         Span::raw(" ── "),
         status_span(&app.daemon_status),
         Span::raw(" "),
@@ -445,6 +456,31 @@ mod tests {
                 draw(frame, &app);
             })
             .unwrap();
+    }
+
+    /// TOON_Network#138: the header's channel total is the PROFILE
+    /// connector's own — never silently summed with a channel New workload
+    /// opened with a different connector (`views::funds`'s own "also open
+    /// with" panel is where that other balance lives) — so it says so.
+    #[test]
+    fn the_header_labels_the_channel_total_as_the_profile_connectors_own() {
+        let app = App::new();
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                draw(frame, &app);
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let mut text = String::new();
+        for y in buffer.area.top()..buffer.area.bottom() {
+            for x in buffer.area.left()..buffer.area.right() {
+                text.push_str(buffer[(x, y)].symbol());
+            }
+            text.push('\n');
+        }
+        assert!(text.contains("channels (profile connector):"));
     }
 
     #[test]
