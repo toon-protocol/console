@@ -174,6 +174,190 @@ pub struct DesktopView {
     pub at: String,
 }
 
+/// The Provider Directory (TOON_Network#91, #145), a mirror of the same
+/// fields `packages/ui/src/lib/daemon.ts` keeps for it. `Directory`'s fixture
+/// is written by `packages/daemon/src/directory.test.ts`.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+pub struct DirectoryFilters {
+    #[serde(default)]
+    pub isolation: Option<String>,
+    #[serde(default)]
+    pub arch: Option<String>,
+    /// A `<vendor>-<model>` label, or `any` for "some GPU".
+    #[serde(default)]
+    pub gpu: Option<String>,
+    /// Every one of these must be granted, not any of them.
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+    /// Unset shows Hidden Providers alongside the rest.
+    #[serde(default)]
+    pub hidden: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct SettlementTerm {
+    pub chain: String,
+    pub token: String,
+    pub decimals: i64,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct ProviderProfileView {
+    #[serde(rename = "ilpAddress")]
+    pub ilp_address: String,
+    #[serde(rename = "connectorUrl")]
+    pub connector_url: String,
+    #[serde(rename = "connectorSealKey")]
+    pub connector_seal_key: String,
+    /// The provider's own Relay Set (spec §4), verbatim.
+    pub relays: Vec<String>,
+    pub settlement: Vec<SettlementTerm>,
+    pub isolation: String,
+    pub hidden: bool,
+    /// Absent for a Hidden Provider, which MUST NOT publish one (§4.1, §10).
+    #[serde(default)]
+    pub host: Option<String>,
+    #[serde(rename = "livenessCadenceSeconds")]
+    #[serde(default)]
+    pub liveness_cadence_seconds: Option<i64>,
+    #[serde(rename = "publishedAt")]
+    pub published_at: String,
+    #[serde(rename = "eventId")]
+    pub event_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct ListingResources {
+    #[serde(rename = "cpuMillicores")]
+    pub cpu_millicores: i64,
+    #[serde(rename = "memoryMb")]
+    pub memory_mb: i64,
+    #[serde(rename = "storageGb")]
+    pub storage_gb: i64,
+    /// One device of this model, when the tier sells a GPU (§4.2).
+    #[serde(default)]
+    pub gpu: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct ListingView {
+    /// The `d` tag: the provider's own name for the tier, stable across versions.
+    pub name: String,
+    /// `30432:<pubkey>:<name>` — what a spawn will name (§6.1).
+    pub address: String,
+    pub version: i64,
+    pub resources: ListingResources,
+    pub arch: String,
+    pub isolation: String,
+    pub hidden: bool,
+    #[serde(rename = "leaseIntervalSeconds")]
+    pub lease_interval_seconds: i64,
+    /// µUSDC for one Lease Interval.
+    pub price: i64,
+    /// µUSDC per interval for a Warm Standby; absent means this tier sells none.
+    #[serde(rename = "standbyPrice")]
+    #[serde(default)]
+    pub standby_price: Option<i64>,
+    /// Granted by the Listing alone, verbatim from its content.
+    pub capabilities: Vec<String>,
+    /// Those §4.4 has not specified: shown, never read as a known one.
+    #[serde(rename = "unspecifiedCapabilities")]
+    pub unspecified_capabilities: Vec<String>,
+    #[serde(default)]
+    pub geohash: Option<String>,
+    #[serde(rename = "publishedAt")]
+    pub published_at: String,
+    #[serde(rename = "eventId")]
+    pub event_id: String,
+    /// How many leases of this tier the provider says could start now (§4.3).
+    #[serde(default)]
+    pub available: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct LivenessView {
+    /// `"live" | "stale" | "unknown"` — kept as a `String`, same reasoning as
+    /// `AnonTransportView::state` above: this view recomputes it against the
+    /// wall clock (`views::directory::liveness_now`) rather than trusting a
+    /// value that ages the moment the daemon sends it, so an unrecognised
+    /// fifth state must still render rather than fail to deserialize.
+    pub state: String,
+    #[serde(rename = "publishedAt")]
+    #[serde(default)]
+    pub published_at: Option<String>,
+    /// The moment it stops being true, from its own `expiration` tag (§4.3).
+    #[serde(rename = "expiresAt")]
+    #[serde(default)]
+    pub expires_at: Option<String>,
+    #[serde(rename = "secondsUntilExpiry")]
+    #[serde(default)]
+    pub seconds_until_expiry: Option<i64>,
+    #[serde(rename = "cadenceSeconds")]
+    #[serde(default)]
+    pub cadence_seconds: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct RejectedListing {
+    pub name: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct ProviderView {
+    pub pubkey: String,
+    pub profile: ProviderProfileView,
+    pub liveness: LivenessView,
+    /// Current, purchasable Listings, cheapest first.
+    pub listings: Vec<ListingView>,
+    #[serde(rename = "relaysRead")]
+    pub relays_read: Vec<String>,
+    /// Older Listing versions seen and set aside, so supersession is visible.
+    #[serde(rename = "supersededListings")]
+    pub superseded_listings: i64,
+    /// Listings dropped as unpurchasable, and why (§4.2, §4.4).
+    #[serde(rename = "rejectedListings")]
+    pub rejected_listings: Vec<RejectedListing>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct DirectoryRelayOutcome {
+    pub url: String,
+    pub state: String,
+    pub events: i64,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct DirectoryRelays {
+    pub seed: Vec<String>,
+    pub read: Vec<DirectoryRelayOutcome>,
+}
+
+/// `Directory` in `daemon.ts` — a discriminated union on `state`, same
+/// pattern as `ConnectorHealth` above.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(tag = "state")]
+pub enum Directory {
+    #[serde(rename = "ok")]
+    Ok {
+        relays: DirectoryRelays,
+        filters: DirectoryFilters,
+        providers: Vec<ProviderView>,
+        /// Listings found whose Provider Profile was on no relay read (§4.2).
+        #[serde(rename = "listingsWithoutProfile")]
+        listings_without_profile: i64,
+        /// Events a relay served that were not their author's.
+        #[serde(rename = "rejectedEvents")]
+        rejected_events: i64,
+        #[serde(rename = "readAt")]
+        read_at: String,
+    },
+    #[serde(rename = "unconfigured")]
+    Unconfigured { reason: String },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -209,5 +393,47 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(unreachable, ConnectorHealth::Unreachable { .. }));
+    }
+
+    #[test]
+    fn directory_ok_and_unconfigured_both_parse() {
+        let ok: Directory = serde_json::from_value(serde_json::json!({
+            "state": "ok",
+            "relays": {"seed": ["wss://seed"], "read": [{"url": "wss://seed", "state": "read", "events": 1}]},
+            "filters": {},
+            "providers": [{
+                "pubkey": "abc",
+                "profile": {
+                    "ilpAddress": "g.test", "connectorUrl": "https://c", "connectorSealKey": "0x04",
+                    "relays": [], "settlement": [], "isolation": "shared-kernel", "hidden": false,
+                    "publishedAt": "2026-09-22T00:00:00.000Z", "eventId": "e1"
+                },
+                "liveness": {"state": "live", "expiresAt": "2026-09-22T12:02:00.000Z", "secondsUntilExpiry": 120, "cadenceSeconds": 60},
+                "listings": [{
+                    "name": "basic", "address": "30432:abc:basic", "version": 1,
+                    "resources": {"cpuMillicores": 1000, "memoryMb": 1024, "storageGb": 10},
+                    "arch": "amd64", "isolation": "shared-kernel", "hidden": false,
+                    "leaseIntervalSeconds": 3600, "price": 1000,
+                    "capabilities": [], "unspecifiedCapabilities": [],
+                    "publishedAt": "2026-09-22T00:00:00.000Z", "eventId": "e2"
+                }],
+                "relaysRead": ["wss://seed"], "supersededListings": 0, "rejectedListings": []
+            }],
+            "listingsWithoutProfile": 0, "rejectedEvents": 0, "readAt": "2026-09-22T12:00:00.000Z"
+        }))
+        .unwrap();
+        match ok {
+            Directory::Ok { providers, .. } => {
+                assert_eq!(providers.len(), 1);
+                assert_eq!(providers[0].listings[0].price, 1000);
+            }
+            Directory::Unconfigured { .. } => panic!("expected Ok"),
+        }
+
+        let unconfigured: Directory = serde_json::from_value(
+            serde_json::json!({"state": "unconfigured", "reason": "no relay"}),
+        )
+        .unwrap();
+        assert!(matches!(unconfigured, Directory::Unconfigured { .. }));
     }
 }

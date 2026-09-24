@@ -9,6 +9,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
 use crate::types::Health;
+use crate::views::directory::{self, DirectoryCommand, DirectoryViewState};
 
 /// The seven views of the sidebar (ADR 0028), in the order `1`-`7` select
 /// them. `Health` is sixth, matching the spec's own numbering and the web
@@ -102,6 +103,17 @@ pub struct App {
     /// Set while a Health fetch is in flight, so the footer can say so
     /// instead of looking stuck.
     pub loading_health: bool,
+    /// The Directory view's own state (TOON_Network#145): filters, the last
+    /// read's relay summary and its `ListingPicker`. See
+    /// `views::directory` — this crate's shell only feeds it and draws it.
+    pub directory: DirectoryViewState,
+    /// Set while a Directory fetch is in flight.
+    pub loading_directory: bool,
+    /// A wall-clock reading, refreshed once a second regardless of which
+    /// view is showing, used only to age a Liveness countdown on screen
+    /// (`views::directory::liveness_now`) — every other view reads the
+    /// daemon's own timestamps instead.
+    pub now_ms: i64,
 }
 
 impl App {
@@ -113,8 +125,21 @@ impl App {
             daemon_status: DaemonStatus::Connecting,
             health: None,
             loading_health: false,
+            directory: DirectoryViewState::new(),
+            loading_directory: false,
+            now_ms: now_ms(),
         }
     }
+}
+
+/// The wall clock, in Unix milliseconds — `App::now_ms`'s only source.
+/// `main.rs`'s per-second tick calls this too, so there is exactly one place
+/// this crate reaches for `SystemTime::now()`.
+pub fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 impl Default for App {
@@ -131,6 +156,9 @@ pub enum Command {
     None,
     Quit,
     RefreshHealth,
+    /// `views::directory::DirectoryCommand::Refresh`, translated: re-read
+    /// `GET /api/directory` with `app.directory.filters`.
+    RefreshDirectory,
 }
 
 /// The one place a keypress becomes a decision.
@@ -145,6 +173,16 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> Command {
             _ => {}
         }
         return Command::None;
+    }
+
+    // Mirrors the help overlay just above: while the Directory view's detail
+    // popup covers the screen, only the keys that close it do anything, so
+    // Esc closes the popup rather than quitting the app underneath it.
+    if app.view == View::Directory && app.directory.detail_open {
+        return match directory::handle_key(&mut app.directory, key) {
+            DirectoryCommand::Refresh => Command::RefreshDirectory,
+            DirectoryCommand::None => Command::None,
+        };
     }
 
     match key.code {
@@ -185,6 +223,10 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> Command {
         KeyCode::Char('r') | KeyCode::Char('R') if app.view == View::Health => {
             Command::RefreshHealth
         }
+        _ if app.view == View::Directory => match directory::handle_key(&mut app.directory, key) {
+            DirectoryCommand::Refresh => Command::RefreshDirectory,
+            DirectoryCommand::None => Command::None,
+        },
         _ => Command::None,
     }
 }
