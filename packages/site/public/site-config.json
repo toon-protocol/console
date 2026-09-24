@@ -6,5 +6,6 @@
   "gatewayDomain": "gw.devnet.toonprotocol.dev",
   "aurPackage": "toon-console",
   "repoUrl": "https://github.com/toon-protocol/console",
-  "specUrl": "https://github.com/toon-protocol/TOON_Network"
+  "specUrl": "https://github.com/toon-protocol/TOON_Network",
+  "xUrl": "https://x.com/toonprotocol"
 }

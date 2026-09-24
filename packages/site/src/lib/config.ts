@@ -23,6 +23,7 @@ export interface SiteConfig {
   readonly aurPackage: string;
   readonly repoUrl: string;
   readonly specUrl: string;
+  readonly xUrl: string;
 }
 
 export const DEFAULT_CONFIG: SiteConfig = {
@@ -33,6 +34,7 @@ export const DEFAULT_CONFIG: SiteConfig = {
   aurPackage: 'toon-console',
   repoUrl: 'https://github.com/toon-protocol/console',
   specUrl: 'https://github.com/toon-protocol/TOON_Network',
+  xUrl: 'https://x.com/toonprotocol',
 };
 
 /** Never rejects: a missing or broken config file leaves the defaults. */
@@ -56,6 +58,7 @@ export async function loadConfig(
       aurPackage: string(fields['aurPackage']) ?? DEFAULT_CONFIG.aurPackage,
       repoUrl: string(fields['repoUrl']) ?? DEFAULT_CONFIG.repoUrl,
       specUrl: string(fields['specUrl']) ?? DEFAULT_CONFIG.specUrl,
+      xUrl: string(fields['xUrl']) ?? DEFAULT_CONFIG.xUrl,
     };
   } catch {
     return DEFAULT_CONFIG;

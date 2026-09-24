@@ -8,38 +8,298 @@
  * Tailwind build, no component library, nothing between the markup and what
  * ships.
  *
- * Dark by default, because everybody who is going to run a `systemd --user`
- * daemon on Omarchy has already decided that question.
+ * The look is a metered instrument, drawn in Omarchy's idiom. A lease is
+ * prepaid time that runs out unless somebody pays for another interval, so
+ * the page is built out of a meter's parts — graduation ticks, hairline
+ * rules, and a readout — rather than out of cards. Two accents, each with a
+ * job: AMBER is money and time (prices, paid intervals, the install command),
+ * STEEL is a live or published fact (the network chip, a gateway hostname).
+ * Nothing else is coloured.
+ *
+ * The console is opened as an Omarchy web app, so this page is dressed like
+ * one: a cool near-black, square corners, interface type set in a monospace,
+ * and a thin dither of squares over the whole page — the same grid the lease
+ * meter's intervals sit on, which is why the texture belongs to this site and
+ * not only to the one it is borrowed from. One band inverts: the mission
+ * reads on paper, the way terms do.
+ *
+ * Type has two faces and three roles. IBM Plex Mono is the machine speaking
+ * and anything you could copy (headings, controls, prices, commands); IBM
+ * Plex Serif is what you read at length (prose, and the mission, which is the
+ * one claim made in a human voice rather than a machine's). The faces are
+ * served from this build — a page that boasts about needing no network should
+ * not fetch its typeface from Google. Plex is OFL; see `src/fonts/OFL.txt`.
  */
 
+@font-face {
+  font-family: 'Plex Serif';
+  src: url('./fonts/plex-serif-400.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Plex Serif';
+  src: url('./fonts/plex-serif-600.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Plex Mono';
+  src: url('./fonts/plex-mono-400.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Plex Mono';
+  src: url('./fonts/plex-mono-600.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+/*
+ * What a theme does not decide: the roles, the faces and the measures. The
+ * palette below is Omarchy's own `themes/<name>/colors.toml`, one block per
+ * theme, mapped onto those roles — `background` is the page, `selection` and
+ * `muted` are its rules, the theme's yellow is money and time, its accent or
+ * cyan is a live fact. The console already wears whichever theme the desktop
+ * is in (ADR 0019); this is the same wardrobe, on the page that explains it.
+ */
 :root {
-  --bg: #0b0d12;
-  --bg-raised: #12151d;
-  --bg-sunken: #080a0e;
-  --ink: #e6e9ef;
-  --ink-dim: #9aa3b2;
-  --line: #222836;
-  --accent: #7dd3fc;
-  --accent-ink: #062330;
-  --warn: #fbbf24;
-  --radius: 10px;
-  --measure: 68ch;
+  /* The inverted band is derived, so every theme gets one without saying so. */
+  --paper: var(--ink);
+  --paper-ink: var(--bg);
+  --paper-dim: color-mix(in srgb, var(--bg) 58%, var(--ink));
+  --paper-rule: color-mix(in srgb, var(--bg) 20%, var(--ink));
+  --signal-ink: #10100c;
+
+  --mono: 'Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  --display: var(--mono);
+  --ui: var(--mono);
+  --text: 'Plex Serif', ui-serif, Georgia, 'Times New Roman', serif;
+
+  --measure: 62ch;
+  --wrap: 66rem;
+  --gutter: 1.5rem;
+  --edge: 2px;
+}
+
+/* Tokyo Night, the default, and what a visitor gets with no choice stored. */
+:root {
+  --bg: #1a1b26;
+  --bg-sunken: #0e0e14;
+  --panel: #24283b;
+  --ink: #c0caf5;
+  --ink-dim: #a9b1d6;
+  --rule: #292e42;
+  --rule-strong: #414868;
+  --signal-fill: #e0af68;
+  --live: #7aa2f7;
+  --signal: var(--signal-fill);
+  --dither: 0.26;
+  --dither-invert: 0;
   color-scheme: dark;
 }
 
+/* A browser asking for a light page gets Rosé Pine Dawn, until it chooses. */
 @media (prefers-color-scheme: light) {
-  :root {
-    --bg: #fbfcfe;
-    --bg-raised: #ffffff;
-    --bg-sunken: #f1f4f9;
-    --ink: #10141c;
-    --ink-dim: #55607a;
-    --line: #dfe4ee;
-    --accent: #0369a1;
-    --accent-ink: #ffffff;
-    --warn: #92610a;
+  :root:not([data-theme]) {
+    --bg: #faf4ed;
+    --bg-sunken: #e1dbd5;
+    --panel: #f2e9e1;
+    --ink: #575279;
+    --ink-dim: #6e6a86;
+    --rule: #dfdad9;
+    --rule-strong: #cecacd;
+    --signal-fill: #ea9d34;
+    --live: #286983;
+    --signal: color-mix(in srgb, var(--signal-fill) 62%, #120c00);
+    --dither: 0.38;
+    --dither-invert: 1;
     color-scheme: light;
   }
+}
+
+[data-theme='tokyo-night'] {
+  --bg: #1a1b26;
+  --bg-sunken: #0e0e14;
+  --panel: #24283b;
+  --ink: #c0caf5;
+  --ink-dim: #a9b1d6;
+  --rule: #292e42;
+  --rule-strong: #414868;
+  --signal-fill: #e0af68;
+  --live: #7aa2f7;
+  --signal: var(--signal-fill);
+  --dither: 0.26;
+  --dither-invert: 0;
+  color-scheme: dark;
+}
+
+[data-theme='catppuccin'] {
+  --bg: #1e1e2e;
+  --bg-sunken: #101019;
+  --panel: #313244;
+  --ink: #cdd6f4;
+  --ink-dim: #bac2de;
+  --rule: #45475a;
+  --rule-strong: #585b70;
+  --signal-fill: #f9e2af;
+  --live: #89b4fa;
+  --signal: var(--signal-fill);
+  --dither: 0.26;
+  --dither-invert: 0;
+  color-scheme: dark;
+}
+
+[data-theme='kanagawa'] {
+  --bg: #1f1f28;
+  --bg-sunken: #111116;
+  --panel: #223249;
+  --ink: #dcd7ba;
+  --ink-dim: #c8c093;
+  --rule: #363646;
+  --rule-strong: #54546d;
+  --signal-fill: #e6c384;
+  --live: #7e9cd8;
+  --signal: var(--signal-fill);
+  --dither: 0.26;
+  --dither-invert: 0;
+  color-scheme: dark;
+}
+
+[data-theme='everforest'] {
+  --bg: #2d353b;
+  --bg-sunken: #181d20;
+  --panel: #343f44;
+  --ink: #d3c6aa;
+  --ink-dim: #9da9a0;
+  --rule: #3d484d;
+  --rule-strong: #475258;
+  --signal-fill: #dbbc7f;
+  --live: #7fbbb3;
+  --signal: var(--signal-fill);
+  --dither: 0.26;
+  --dither-invert: 0;
+  color-scheme: dark;
+}
+
+[data-theme='gruvbox'] {
+  --bg: #282828;
+  --bg-sunken: #161616;
+  --panel: #3c3836;
+  --ink: #d4be98;
+  --ink-dim: #bdae93;
+  --rule: #504945;
+  --rule-strong: #665c54;
+  --signal-fill: #d8a657;
+  --live: #7daea3;
+  --signal: var(--signal-fill);
+  --dither: 0.26;
+  --dither-invert: 0;
+  color-scheme: dark;
+}
+
+[data-theme='nord'] {
+  --bg: #2e3440;
+  --bg-sunken: #191c23;
+  --panel: #3b4252;
+  --ink: #d8dee9;
+  --ink-dim: #adb5c4;
+  --rule: #434c5e;
+  --rule-strong: #4c566a;
+  --signal-fill: #ebcb8b;
+  --live: #88c0d0;
+  --signal: var(--signal-fill);
+  --dither: 0.26;
+  --dither-invert: 0;
+  color-scheme: dark;
+}
+
+[data-theme='osaka-jade'] {
+  --bg: #111c18;
+  --bg-sunken: #090f0d;
+  --panel: #23372b;
+  --ink: #d6d5bc;
+  --ink-dim: #c1c497;
+  --rule: #32473b;
+  --rule-strong: #53685b;
+  --signal-fill: #e5c736;
+  --live: #2dd5b7;
+  --signal: var(--signal-fill);
+  --dither: 0.26;
+  --dither-invert: 0;
+  color-scheme: dark;
+}
+
+[data-theme='ristretto'] {
+  --bg: #2c2525;
+  --bg-sunken: #181414;
+  --panel: #3d2f2a;
+  --ink: #e6d9db;
+  --ink-dim: #c3b7b8;
+  --rule: #403e41;
+  --rule-strong: #72696a;
+  --signal-fill: #fcd675;
+  --live: #85dacc;
+  --signal: var(--signal-fill);
+  --dither: 0.26;
+  --dither-invert: 0;
+  color-scheme: dark;
+}
+
+[data-theme='matte-black'] {
+  --bg: #121212;
+  --bg-sunken: #090909;
+  --panel: #1e1e1e;
+  --ink: #bebebe;
+  --ink-dim: #8a8a8d;
+  --rule: #2a2a2a;
+  --rule-strong: #333333;
+  --signal-fill: #e68e0d;
+  --live: #bebebe;
+  --signal: var(--signal-fill);
+  --dither: 0.26;
+  --dither-invert: 0;
+  color-scheme: dark;
+}
+
+[data-theme='rose-pine'] {
+  --bg: #faf4ed;
+  --bg-sunken: #e1dbd5;
+  --panel: #f2e9e1;
+  --ink: #575279;
+  --ink-dim: #6e6a86;
+  --rule: #dfdad9;
+  --rule-strong: #cecacd;
+  --signal-fill: #ea9d34;
+  --live: #286983;
+  --signal: color-mix(in srgb, var(--signal-fill) 62%, #120c00);
+  --dither: 0.5;
+  --dither-invert: 1;
+  color-scheme: light;
+}
+
+[data-theme='catppuccin-latte'] {
+  --bg: #eff1f5;
+  --bg-sunken: #d7d8dc;
+  --panel: #dce0e8;
+  --ink: #4c4f69;
+  --ink-dim: #5c5f77;
+  --rule: #ccd0da;
+  --rule-strong: #acb0be;
+  --signal-fill: #df8e1d;
+  --live: #1e66f5;
+  --signal: color-mix(in srgb, var(--signal-fill) 62%, #120c00);
+  --dither: 0.5;
+  --dither-invert: 1;
+  color-scheme: light;
 }
 
 * {
@@ -55,29 +315,36 @@ body {
 body {
   background: var(--bg);
   color: var(--ink);
-  font:
-    16px/1.65 ui-sans-serif,
-    system-ui,
-    -apple-system,
-    'Segoe UI',
-    sans-serif;
+  font: 400 1.0625rem/1.7 var(--text);
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--display);
+  font-weight: 600;
+  letter-spacing: -0.02em;
 }
 
 code,
 pre,
 .mono {
-  font:
-    0.9em/1.55 ui-monospace,
-    'JetBrains Mono',
-    'SF Mono',
-    Menlo,
-    monospace;
+  font-family: var(--mono);
+  font-size: 0.875em;
+  line-height: 1.6;
 }
 
 a {
-  color: var(--accent);
+  color: inherit;
+  text-decoration-color: var(--rule-strong);
+  text-decoration-thickness: 1px;
   text-underline-offset: 3px;
+}
+
+a:hover {
+  text-decoration-color: var(--signal);
 }
 
 button {
@@ -88,10 +355,57 @@ button {
   cursor: pointer;
 }
 
+[id] {
+  scroll-margin-top: 5rem;
+}
+
+:focus-visible {
+  outline: 2px solid var(--signal);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+
 .site {
+  position: relative;
   min-height: 100dvh;
   display: flex;
   flex-direction: column;
+}
+
+.site::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image: url('./dither.svg');
+  background-size: 320px 320px;
+  opacity: var(--dither);
+  filter: invert(var(--dither-invert));
+  -webkit-mask-image: radial-gradient(112% 82% at 50% 42%, transparent 38%, #000 100%);
+  mask-image: radial-gradient(112% 82% at 50% 42%, transparent 38%, #000 100%);
+}
+
+.wrap {
+  width: 100%;
+  max-width: var(--wrap);
+  margin: 0 auto;
+  padding-inline: var(--gutter);
+}
+
+.skip {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 20;
+  padding: 0.6rem 1rem;
+  background: var(--signal-fill);
+  color: var(--signal-ink);
+  font-family: var(--ui);
+}
+
+.skip:focus {
+  left: 0;
 }
 
 /* Header ------------------------------------------------------------------ */
@@ -100,97 +414,330 @@ button {
   position: sticky;
   top: 0;
   z-index: 10;
+  background: color-mix(in srgb, var(--bg) 92%, transparent);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--rule);
+  font-family: var(--ui);
+}
+
+.site-header .wrap {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 0.85rem 1.5rem;
-  background: color-mix(in srgb, var(--bg) 88%, transparent);
-  backdrop-filter: blur(8px);
-  border-bottom: 1px solid var(--line);
+  gap: 1.25rem;
+  min-height: 3.5rem;
+  padding-block: 0.5rem;
 }
 
 .brand {
-  font-weight: 650;
-  letter-spacing: -0.01em;
-}
-
-.site-header nav {
-  display: flex;
-  gap: 1.1rem;
+  display: inline-flex;
   align-items: center;
-  font-size: 0.92rem;
-  color: var(--ink-dim);
+  gap: 0.55rem;
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: 0.9375rem;
+  letter-spacing: -0.01em;
+  padding: 0;
 }
 
-.site-header nav a,
-.site-header nav button {
+.brand svg {
+  display: block;
+  flex: none;
+}
+
+/* The network chip: a live fact, so it is steel, and it is the site's one
+ * `role="status"`. It says devnet in the nav bar rather than in a strip
+ * underneath it, so the first honest sentence and the first designed one are
+ * the same sentence. */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.2rem 0.6rem 0.2rem 0.5rem;
+  border: 1px solid color-mix(in srgb, var(--live) 40%, transparent);
+  border-radius: var(--edge);
+  background: color-mix(in srgb, var(--live) 12%, transparent);
+  color: var(--ink);
+  font-size: 0.8125rem;
+  white-space: nowrap;
+}
+
+.chip::before {
+  content: '';
+  width: 0.4rem;
+  height: 0.4rem;
+  background: var(--live);
+}
+
+.chip .net {
+  font-family: var(--mono);
+  font-size: 0.8125rem;
+  color: var(--live);
+}
+
+.site-nav {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 1.15rem;
+  font-size: 0.9375rem;
+}
+
+.site-nav a,
+.site-nav button {
+  padding: 0.25rem 0;
   color: var(--ink-dim);
   text-decoration: none;
+  border-bottom: 2px solid transparent;
 }
 
-.site-header nav a:hover,
-.site-header nav button:hover {
+.site-nav a:hover,
+.site-nav button:hover {
   color: var(--ink);
+  border-bottom-color: var(--signal);
 }
 
-.network-banner {
-  padding: 0.5rem 1.5rem;
-  font-size: 0.85rem;
-  color: var(--warn);
-  background: color-mix(in srgb, var(--warn) 9%, transparent);
-  border-bottom: 1px solid color-mix(in srgb, var(--warn) 22%, transparent);
+/* An icon link is a control, not a word: same box as the theme button. */
+.site-nav .icon {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.3rem;
+  border: 1px solid transparent;
+  border-radius: var(--edge);
+  color: var(--ink-dim);
 }
 
-.network-banner strong {
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  font-size: 0.78rem;
+.site-nav .icon:hover {
+  color: var(--ink);
+  border-color: var(--rule-strong);
+}
+
+.site-nav .icon svg {
+  display: block;
+}
+
+.site-nav .install {
+  padding: 0.4rem 0.85rem;
+  border: 1px solid var(--signal);
+  border-bottom-width: 1px;
+  border-radius: var(--edge);
+  color: var(--signal);
+}
+
+.site-nav .install:hover {
+  background: var(--signal);
+  color: var(--signal-ink);
+  border-bottom-color: var(--signal);
 }
 
 .fallback-banner {
   margin: 0;
-  padding: 0.6rem 1.5rem;
-  font-size: 0.85rem;
-  color: var(--ink-dim);
+  border-bottom: 1px solid var(--rule);
   background: var(--bg-sunken);
-  border-bottom: 1px solid var(--line);
+  color: var(--ink-dim);
+  font-family: var(--ui);
+  font-size: 0.875rem;
 }
 
-/* Landing ----------------------------------------------------------------- */
+.fallback-banner span {
+  display: block;
+  width: 100%;
+  max-width: var(--wrap);
+  margin: 0 auto;
+  padding: 0.55rem var(--gutter);
+}
+
+/* Themes ------------------------------------------------------------------ */
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.themes {
+  position: relative;
+  display: flex;
+}
+
+.theme-button {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.3rem;
+  border: 1px solid transparent;
+  border-radius: var(--edge);
+  color: var(--ink-dim);
+}
+
+.theme-button:hover,
+.theme-button[aria-expanded='true'] {
+  color: var(--ink);
+  border-color: var(--rule-strong);
+}
+
+.theme-menu {
+  position: absolute;
+  top: calc(100% + 0.6rem);
+  right: 0;
+  z-index: 20;
+  min-width: 15.5rem;
+  padding: 0.4rem;
+  display: grid;
+  gap: 1px;
+  background: var(--panel);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--edge);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 35%);
+}
+
+.theme-note {
+  margin: 0.3rem 0.55rem 0.55rem;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--ink-dim);
+}
+
+.theme-menu button {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  padding: 0.35rem 0.5rem;
+  text-align: left;
+  font-size: 0.8125rem;
+  color: var(--ink-dim);
+  border-radius: var(--edge);
+}
+
+.theme-menu button:hover {
+  background: color-mix(in srgb, var(--ink) 9%, transparent);
+  color: var(--ink);
+}
+
+.theme-menu button[aria-checked='true'] {
+  color: var(--ink);
+}
+
+.theme-menu button[aria-checked='true']::after {
+  content: '';
+  margin-left: auto;
+  width: 2px;
+  height: 0.85rem;
+  background: var(--signal-fill);
+}
+
+/* A swatch is the theme itself: the id goes on the span, and the same block
+ * that paints the page paints these three bars. No colour is written twice. */
+.swatch {
+  display: inline-flex;
+  gap: 1px;
+  padding: 2px;
+  background: var(--bg);
+  border: 1px solid var(--rule-strong);
+}
+
+.swatch i {
+  width: 5px;
+  height: 12px;
+  background: var(--ink);
+}
+
+.swatch i:nth-child(2) {
+  background: var(--signal-fill);
+}
+
+.swatch i:nth-child(3) {
+  background: var(--live);
+}
+
+.swatch.system i,
+.swatch.system i:nth-child(2),
+.swatch.system i:nth-child(3) {
+  background: var(--rule-strong);
+}
+
+/* Sections ---------------------------------------------------------------- */
 
 .landing {
   flex: 1;
+}
+
+/* Every section but the hero and the inverted band opens on a hairline with a
+ * graduation tick at its left — the same mark the lease meter is made of. */
+.band {
+  border-top: 1px solid var(--rule);
+  padding-block: 3.5rem;
+}
+
+.band > .wrap > h2 {
+  position: relative;
+  margin: 0 0 1.75rem;
+  font-size: clamp(1.15rem, 2vw, 1.4rem);
+}
+
+@media (min-width: 58rem) {
+  .band > .wrap {
+    display: grid;
+    grid-template-columns: 11rem minmax(0, 1fr);
+    gap: 0 3.5rem;
+    align-items: start;
+  }
+
+  .band > .wrap > h2 {
+    grid-column: 1;
+    grid-row: 1;
+    margin: 0;
+    font-size: 1.0625rem;
+    line-height: 1.4;
+  }
+
+  .band > .wrap > *:not(h2) {
+    grid-column: 2;
+  }
+}
+
+.band > .wrap > h2::before {
+  content: '';
+  position: absolute;
+  top: -3.5rem;
+  left: 0;
+  width: 2px;
+  height: 1.1rem;
+  background: var(--signal-fill);
+}
+
+/* Hero -------------------------------------------------------------------- */
+
+.hero {
+  padding-block: clamp(2.5rem, 6vw, 4.5rem) 3.5rem;
+}
+
+.banner {
+  display: block;
   width: 100%;
-  max-width: 62rem;
-  margin: 0 auto;
-  padding: 3rem 1.5rem 5rem;
-}
-
-.landing section + section {
-  margin-top: 4rem;
-}
-
-.eyebrow {
-  margin: 0 0 0.75rem;
-  font-size: 0.78rem;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  color: var(--accent);
+  max-width: 52rem;
+  height: auto;
+  margin-bottom: clamp(1.75rem, 3.5vw, 2.75rem);
+  color: var(--ink);
 }
 
 .hero h1 {
   margin: 0;
-  font-size: clamp(2rem, 5vw, 3.1rem);
-  line-height: 1.1;
-  letter-spacing: -0.025em;
-  max-width: 20ch;
+  font-size: clamp(1.4rem, 2.9vw, 2.15rem);
+  line-height: 1.22;
+  letter-spacing: -0.03em;
+  max-width: 44ch;
+  text-wrap: balance;
 }
 
 .lede {
-  max-width: var(--measure);
-  margin: 1.25rem 0 0;
-  font-size: 1.1rem;
+  max-width: 68ch;
+  margin: 1.5rem 0 0;
+  font-family: var(--ui);
+  font-size: 0.9375rem;
+  line-height: 1.75;
   color: var(--ink-dim);
 }
 
@@ -199,183 +746,495 @@ button {
   font-weight: 600;
 }
 
+.disclosure {
+  max-width: 68ch;
+  margin: 0.75rem 0 0;
+  font-family: var(--ui);
+  font-size: 0.9375rem;
+  color: var(--ink);
+}
+
 .cta {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.75rem;
+  align-items: center;
+  gap: 0.9rem 1rem;
   margin-top: 2rem;
+  font-family: var(--ui);
 }
 
 .button {
-  display: inline-block;
-  padding: 0.65rem 1.25rem;
-  border-radius: var(--radius);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.65rem 1.1rem;
+  border-radius: var(--edge);
+  font-family: var(--display);
   font-weight: 600;
-  font-size: 0.95rem;
+  font-size: 0.9375rem;
   text-decoration: none;
 }
 
+.button svg {
+  display: block;
+  flex: none;
+}
+
 .button.primary {
-  background: var(--accent);
-  color: var(--accent-ink);
+  background: var(--signal-fill);
+  color: var(--signal-ink);
+}
+
+.button.primary:hover {
+  background: color-mix(in srgb, var(--signal-fill) 84%, #000);
 }
 
 .button.ghost {
-  border: 1px solid var(--line);
   color: var(--ink);
+  border: 1px solid var(--rule-strong);
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+}
+
+.button.ghost:hover {
+  border-color: var(--signal);
+  color: var(--signal);
 }
 
 .link {
-  color: var(--accent);
+  color: inherit;
+  padding: 0;
   text-decoration: underline;
+  text-decoration-color: var(--signal);
   text-underline-offset: 3px;
-  padding: 0;
 }
 
-h2 {
-  font-size: 1.35rem;
-  letter-spacing: -0.015em;
-  margin: 0 0 1rem;
+/* The meter: a lease, drawn ------------------------------------------------ */
+
+.meter {
+  margin: 3rem 0 0;
+  padding: 1.35rem 1.5rem 1.5rem;
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-left: 2px solid var(--signal-fill);
+  border-radius: var(--edge);
 }
 
-h3 {
-  font-size: 1.02rem;
-  margin: 0 0 0.35rem;
-}
-
-.honest ul {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  display: grid;
-  gap: 1rem;
-}
-
-.honest li {
-  max-width: var(--measure);
-  padding: 1rem 1.15rem;
-  background: var(--bg-raised);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
+.meter-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin: 0 0 1.1rem;
+  font-family: var(--ui);
+  font-size: 0.9375rem;
   color: var(--ink-dim);
 }
 
-.honest li strong {
+.meter-title b {
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: 0.9375rem;
   color: var(--ink);
 }
+
+.scale {
+  display: flex;
+  gap: 3px;
+  height: 2.75rem;
+  margin-bottom: 0.6rem;
+}
+
+.scale span {
+  flex: 1;
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--ink) 9%, transparent);
+  border-bottom: 2px solid var(--rule-strong);
+  transition: background-color 180ms ease-out;
+}
+
+.scale span.paid {
+  background: var(--signal-fill);
+  border-bottom-color: var(--signal-fill);
+}
+
+.scale span.spent {
+  background: color-mix(in srgb, var(--signal-fill) 26%, transparent);
+  border-bottom-color: color-mix(in srgb, var(--signal-fill) 50%, transparent);
+}
+
+.readout {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 2.25rem;
+  margin: 1.1rem 0 1.35rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--rule);
+}
+
+.readout > div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.readout dt {
+  font-family: var(--ui);
+  font-size: 0.8125rem;
+  color: var(--ink-dim);
+}
+
+.readout dd {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 1.0625rem;
+  font-weight: 600;
+  color: var(--signal);
+}
+
+.readout dd.quiet {
+  color: var(--ink);
+}
+
+.readout dd.gone {
+  color: var(--ink-dim);
+}
+
+.meter-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem 1.25rem;
+  font-family: var(--ui);
+  font-size: 0.9375rem;
+}
+
+.meter-controls button {
+  padding: 0.45rem 0.9rem;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--edge);
+  font-family: var(--mono);
+  font-size: 0.875rem;
+  color: var(--ink);
+}
+
+.meter-controls button:hover:not(:disabled) {
+  border-color: var(--signal);
+  color: var(--signal);
+}
+
+.meter-controls button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.meter-controls .pay {
+  border-color: color-mix(in srgb, var(--signal) 55%, transparent);
+  color: var(--signal);
+}
+
+.meter-note {
+  margin: 0;
+  color: var(--ink-dim);
+  font-family: var(--ui);
+  font-size: 0.875rem;
+}
+
+/* Mission ----------------------------------------------------------------- */
+
+/* The one inverted band. On a dark page the terms read on paper; in a light
+ * browser it flips and the terms are the dark thing. Either way it is the one
+ * place the page changes surface, so it is the one place a reader remembers. */
+.mission {
+  background: var(--paper);
+  color: var(--paper-ink);
+  padding-block: clamp(3.5rem, 7vw, 5rem);
+}
+
+@media (min-width: 62rem) {
+  .mission .wrap {
+    display: grid;
+    grid-template-columns: minmax(0, 1.04fr) minmax(0, 1fr);
+    gap: 0 4rem;
+    align-items: start;
+  }
+
+  .mission .wrap > h2 {
+    grid-row: span 2;
+  }
+
+  .mission .wrap > p {
+    margin-top: 0.35rem;
+  }
+
+  .mission .wrap > .signature {
+    margin-top: 1.75rem;
+  }
+}
+
+.mission h2 {
+  margin: 0;
+  max-width: 22ch;
+  font-family: var(--text);
+  font-weight: 600;
+  font-size: clamp(1.7rem, 3.4vw, 2.6rem);
+  line-height: 1.22;
+  letter-spacing: -0.012em;
+  text-wrap: balance;
+}
+
+.mission .wrap > p {
+  max-width: var(--measure);
+  margin: 1.5rem 0 0;
+  color: var(--paper-dim);
+}
+
+.mission .wrap > p strong {
+  color: var(--paper-ink);
+  font-weight: 600;
+}
+
+.mission .signature {
+  margin-top: 2rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--paper-rule);
+  font-family: var(--ui);
+  font-size: 0.9375rem;
+  color: var(--paper-dim);
+}
+
+/* What exists today ------------------------------------------------------- */
+
+/* Not cards: three clauses hanging off one rule, each opened by a tick. The
+ * page's honesty section should look like a ledger, not like a feature grid. */
+.plainly ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 1.5rem;
+}
+
+.plainly li {
+  max-width: var(--measure);
+  padding-left: 1.25rem;
+  border-left: 1px solid var(--rule-strong);
+  color: var(--ink-dim);
+  position: relative;
+}
+
+.plainly li::before {
+  content: '';
+  position: absolute;
+  left: -2px;
+  top: 0.45rem;
+  width: 3px;
+  height: 1.15rem;
+  background: var(--signal-fill);
+}
+
+.plainly li strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* How it works ------------------------------------------------------------ */
 
 .steps {
   list-style: none;
   counter-reset: step;
-  padding: 0;
   margin: 0;
+  padding: 0;
   display: grid;
-  gap: 1.25rem;
-  grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+  gap: 2rem 3rem;
+  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
 }
 
 .steps li {
   counter-increment: step;
-  padding: 1.15rem;
-  background: var(--bg-raised);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--rule);
+  position: relative;
 }
 
 .steps li::before {
   content: counter(step);
-  display: block;
-  font: 600 0.75rem/1 ui-monospace, monospace;
-  color: var(--accent);
-  margin-bottom: 0.6rem;
+  position: absolute;
+  top: -0.9rem;
+  left: 0;
+  padding-right: 0.5rem;
+  background: var(--bg);
+  font-family: var(--mono);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--signal);
+}
+
+.steps h3 {
+  margin: 0.4rem 0 0.5rem;
+  font-size: 0.975rem;
 }
 
 .steps p {
   margin: 0;
-  font-size: 0.93rem;
+  font-size: 1rem;
   color: var(--ink-dim);
 }
+
+.steps strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* Listings ---------------------------------------------------------------- */
 
 table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.93rem;
+  font-family: var(--ui);
+  font-size: 0.9375rem;
 }
 
 th,
 td {
   text-align: left;
-  padding: 0.6rem 0.85rem;
-  border-bottom: 1px solid var(--line);
+  padding: 0.7rem 1rem 0.7rem 0;
+  border-bottom: 1px solid var(--rule);
+  vertical-align: baseline;
 }
 
 th {
-  font-size: 0.78rem;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  font-family: var(--ui);
+  font-weight: 400;
+  font-size: 0.8125rem;
   color: var(--ink-dim);
+  border-bottom-color: var(--rule-strong);
+}
+
+.prices td:nth-child(2) {
+  font-family: var(--mono);
+  font-weight: 600;
+  color: var(--signal);
+  white-space: nowrap;
+}
+
+.prices td:nth-child(3) {
+  font-family: var(--mono);
+  color: var(--ink);
+  white-space: nowrap;
 }
 
 .note {
   max-width: var(--measure);
-  margin-top: 1rem;
-  font-size: 0.9rem;
+  margin-top: 1.5rem;
+  font-size: 1rem;
   color: var(--ink-dim);
 }
 
-pre {
-  overflow-x: auto;
-  padding: 1rem 1.15rem;
-  background: var(--bg-sunken);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
+.note .live {
+  color: var(--live);
+  border-color: color-mix(in srgb, var(--live) 35%, transparent);
 }
 
-:not(pre) > code {
-  padding: 0.12em 0.4em;
-  background: var(--bg-sunken);
-  border: 1px solid var(--line);
-  border-radius: 5px;
-}
+/* Install ----------------------------------------------------------------- */
 
-.install p {
+.install-band p {
   max-width: var(--measure);
   color: var(--ink-dim);
 }
 
-.doc-list {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  display: grid;
-  gap: 0.6rem;
-  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
-}
-
-.doc-link {
-  display: block;
-  width: 100%;
-  text-align: left;
-  padding: 0.9rem 1.05rem;
-  background: var(--bg-raised);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-}
-
-.doc-link:hover {
-  border-color: var(--accent);
-}
-
-.doc-title {
-  display: block;
+.install-band p strong {
+  color: var(--ink);
   font-weight: 600;
 }
 
-.doc-summary {
-  display: block;
-  margin-top: 0.25rem;
-  font-size: 0.88rem;
+.terminal {
+  position: relative;
+  max-width: 44rem;
+  margin: 1.5rem 0;
+}
+
+pre {
+  overflow-x: auto;
+  margin: 0;
+  padding: 1.1rem 4.5rem 1.1rem 1.2rem;
+  background: var(--bg-sunken);
+  border: 1px solid var(--rule);
+  border-left: 2px solid var(--signal-fill);
+  border-radius: var(--edge);
+}
+
+pre code {
+  font-size: 0.9375rem;
+}
+
+.copy {
+  position: absolute;
+  top: 0.55rem;
+  right: 0.55rem;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--edge);
+  font-family: var(--ui);
+  font-size: 0.8125rem;
   color: var(--ink-dim);
+}
+
+.copy:hover {
+  color: var(--ink);
+  border-color: var(--signal);
+}
+
+:not(pre) > code {
+  padding: 0.1em 0.35em;
+  background: color-mix(in srgb, var(--ink) 7%, transparent);
+  border: 1px solid var(--rule);
+  border-radius: var(--edge);
+}
+
+/* Docs index -------------------------------------------------------------- */
+
+.doc-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--rule);
+}
+
+.doc-list li {
+  border-bottom: 1px solid var(--rule);
+}
+
+.doc-link {
+  display: grid;
+  grid-template-columns: minmax(12rem, 18rem) minmax(0, 1fr);
+  gap: 0.35rem 2rem;
+  width: 100%;
+  text-align: left;
+  padding: 1rem 0.75rem 1rem 0.75rem;
+  border-left: 2px solid transparent;
+  margin-left: -0.75rem;
+}
+
+.doc-link:hover {
+  background: var(--panel);
+  border-left-color: var(--signal);
+}
+
+.doc-title {
+  font-family: var(--display);
+  font-size: 0.975rem;
+}
+
+.doc-summary {
+  color: var(--ink-dim);
+  font-size: 1rem;
+}
+
+@media (max-width: 44rem) {
+  .doc-link {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 /* Docs -------------------------------------------------------------------- */
@@ -383,34 +1242,37 @@ pre {
 .doc-layout {
   flex: 1;
   width: 100%;
-  max-width: 68rem;
+  max-width: var(--wrap);
   margin: 0 auto;
-  padding: 2.5rem 1.5rem 5rem;
+  padding: 2.5rem var(--gutter) 5rem;
   display: grid;
-  gap: 3rem;
-  grid-template-columns: 15rem minmax(0, 1fr);
+  gap: 3.5rem;
+  grid-template-columns: 14rem minmax(0, 1fr);
   align-items: start;
 }
 
 @media (max-width: 62rem) {
   .doc-layout {
     grid-template-columns: minmax(0, 1fr);
-    gap: 1.5rem;
+    gap: 2rem;
   }
 }
 
 .doc-side {
   position: sticky;
-  top: 5.5rem;
-  font-size: 0.92rem;
+  top: 5rem;
+  font-family: var(--ui);
+  font-size: 0.9375rem;
 }
 
 .doc-side ol {
   list-style: none;
   padding: 0;
   margin: 0;
-  display: grid;
-  gap: 0.15rem;
+}
+
+.doc-side li {
+  border-left: 1px solid var(--rule);
 }
 
 .doc-side button,
@@ -418,16 +1280,17 @@ pre {
   display: block;
   width: 100%;
   text-align: left;
-  padding: 0.3rem 0.6rem;
-  border-radius: 6px;
+  padding: 0.3rem 0.75rem;
   color: var(--ink-dim);
   text-decoration: none;
 }
 
+.doc-side li.current {
+  border-left-color: var(--signal);
+}
+
 .doc-side li.current > button {
   color: var(--ink);
-  font-weight: 600;
-  background: var(--bg-raised);
 }
 
 .doc-side button:hover,
@@ -437,14 +1300,15 @@ pre {
 
 .side-heading {
   margin: 1.75rem 0 0.5rem;
-  font-size: 0.72rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font-family: var(--ui);
+  font-weight: 400;
+  font-size: 0.875rem;
+  letter-spacing: 0;
   color: var(--ink-dim);
 }
 
 .contents {
-  font-size: 0.88rem;
+  font-size: 0.875rem;
 }
 
 .doc-main {
@@ -452,8 +1316,11 @@ pre {
 }
 
 .doc-meta {
-  margin: 0 0 1.5rem;
-  font-size: 0.8rem;
+  margin: 0 0 2rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--rule);
+  font-family: var(--ui);
+  font-size: 0.875rem;
   color: var(--ink-dim);
 }
 
@@ -466,21 +1333,22 @@ pre {
 }
 
 .prose h1 {
-  font-size: clamp(1.8rem, 4vw, 2.4rem);
-  letter-spacing: -0.02em;
+  font-size: clamp(1.6rem, 3.4vw, 2.2rem);
+  line-height: 1.2;
+  letter-spacing: -0.035em;
   margin: 0 0 1.25rem;
 }
 
 .prose h2 {
-  margin: 2.5rem 0 0.9rem;
-  padding-top: 0.4rem;
-  font-size: 1.3rem;
-  border-top: 1px solid var(--line);
+  margin: 2.75rem 0 0.9rem;
+  padding-top: 1rem;
+  font-size: 1.15rem;
+  border-top: 1px solid var(--rule);
 }
 
 .prose h3 {
-  margin: 1.75rem 0 0.5rem;
-  font-size: 1.05rem;
+  margin: 1.85rem 0 0.4rem;
+  font-size: 1rem;
 }
 
 .prose p,
@@ -493,12 +1361,19 @@ pre {
   font-weight: 600;
 }
 
+.prose a {
+  color: var(--ink);
+  text-decoration-color: var(--signal);
+}
+
+.prose code {
+  color: var(--ink);
+}
+
 .prose blockquote {
-  margin: 1.5rem 0;
-  padding: 0.85rem 1.15rem;
-  border-left: 3px solid var(--warn);
-  background: color-mix(in srgb, var(--warn) 7%, transparent);
-  border-radius: 0 var(--radius) var(--radius) 0;
+  margin: 1.75rem 0;
+  padding: 0.25rem 0 0.25rem 1.25rem;
+  border-left: 2px solid var(--signal);
 }
 
 .prose blockquote p {
@@ -506,44 +1381,138 @@ pre {
   color: var(--ink);
 }
 
-.prose table {
+.prose pre {
   margin: 1.5rem 0;
+  padding-right: 1.2rem;
+}
+
+.prose table {
+  margin: 1.75rem 0;
+}
+
+/* A table is data, not prose, and it should not be squeezed into a reading
+ * measure that exists for sentences. Only where the column has room for it. */
+@media (min-width: 62rem) {
+  .prose > table {
+    width: calc(100% + 7rem);
+    max-width: none;
+  }
 }
 
 .prose hr {
   border: 0;
-  border-top: 1px solid var(--line);
-  margin: 2.5rem 0;
+  border-top: 1px solid var(--rule);
+  margin: 2.75rem 0;
 }
 
 .doc-nav {
   display: flex;
   justify-content: space-between;
   gap: 1rem;
-  margin-top: 3.5rem;
+  margin-top: 4rem;
   padding-top: 1.5rem;
-  border-top: 1px solid var(--line);
-  font-size: 0.93rem;
+  border-top: 1px solid var(--rule);
+  font-family: var(--ui);
+  font-size: 0.9375rem;
 }
 
 .doc-nav .right {
   margin-left: auto;
+  text-align: right;
 }
 
 .doc-nav button {
-  color: var(--accent);
+  color: var(--ink-dim);
+}
+
+.doc-nav button:hover {
+  color: var(--ink);
 }
 
 /* Footer ------------------------------------------------------------------ */
 
 .site-footer {
-  border-top: 1px solid var(--line);
-  padding: 2rem 1.5rem 3rem;
-  font-size: 0.85rem;
+  border-top: 1px solid var(--rule);
+  padding-block: 2.5rem 3.5rem;
+  font-family: var(--ui);
+  font-size: 0.875rem;
   color: var(--ink-dim);
 }
 
+.site-footer .wrap {
+  display: grid;
+  gap: 1.5rem 3rem;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
 .site-footer p {
-  max-width: var(--measure);
-  margin: 0 auto 0.75rem;
+  max-width: 54ch;
+  margin: 0;
+}
+
+.site-footer ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.4rem;
+  justify-items: start;
+}
+
+.site-footer a {
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+}
+
+.site-footer a:hover {
+  color: var(--ink);
+  border-bottom-color: var(--signal);
+}
+
+.site-footer .key {
+  color: var(--ink-dim);
+  opacity: 0.7;
+}
+
+@media (max-width: 46rem) {
+  .site-footer .wrap {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Narrow ------------------------------------------------------------------ */
+
+@media (max-width: 52rem) {
+  .site-header .wrap {
+    flex-wrap: wrap;
+    gap: 0.5rem 1rem;
+    padding-block: 0.6rem;
+  }
+
+  .site-nav {
+    order: 3;
+    width: 100%;
+    margin-left: 0;
+    gap: 1.1rem;
+    overflow-x: auto;
+    padding-bottom: 0.15rem;
+  }
+
+  .site-nav .install {
+    margin-left: auto;
+  }
+
+  .readout {
+    gap: 0.75rem 1.5rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
 }

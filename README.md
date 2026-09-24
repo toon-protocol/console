@@ -651,6 +651,61 @@ CI deploys, and nothing in this repository touches a box's settlement key.
 npm run dev:site          # the public site, against the bundled Markdown
 ```
 
+### What the site looks like, and why
+
+The landing page sells a lease, so a lease is the first thing on it: the hero is a meter
+you can press, with the devnet provider's own prices on it. Paying lights another interval
+and buys another hour; stopping darkens the whole strip and says what actually happened —
+the workload stopped, nobody cancelled it, and nothing further was owed. It is the one
+moving thing on the page, it only moves when somebody moves it, and it is labelled a
+drawing rather than a live lease.
+
+The rest follows from that. A **mission** band states what the project is for and is the
+one surface that inverts, because it is the one claim everything under it is evidence for.
+Sections are a meter's parts — hairline rules, graduation ticks and a readout — and not a
+grid of identical cards; a section's heading sits in the margin the way a clause heading
+does in a specification. Two accents carry meaning and nothing else is coloured: **amber**
+is money and time (prices, paid intervals, commands), **steel** is a live or published fact
+(the network chip in the nav bar, a gateway hostname).
+
+The console is opened as an Omarchy web app, so the site is dressed like one, taking its
+cues from [omarchy.us][om]: square corners, interface type set in a monospace, blocks
+rather than pills, and a thin dither of squares over the page. That dither is
+`src/dither.svg`, generated once from a seeded grid and checked in, and it is the same
+grid the lease meter's intervals sit on and the same grid the **hero banner** is drawn on
+— the wordmark is a seven-row bitmap face, one square per pixel, coming apart into the
+dither at its right-hand end. Nothing in it is random at runtime: which pixel dims and
+which comes loose is a hash of its position, so the banner is identical in every browser.
+The bar itself carries no mark — the banner is the wordmark, and a second one above it was
+one too many. What the bar carries instead is the project: its **source** on GitHub and
+where it **posts** on X, both as their own marks, beside the install button and the theme
+control. The specification is one line further down every page, in the footer.
+
+**The palette is Omarchy's.** A theme there is `themes/<name>/colors.toml` — a background,
+a selection, a muted line, four foregrounds and the sixteen terminal colours — and the
+desktop is re-dressed from it. `site.css` carries eleven of those files as
+`[data-theme='<name>']` blocks, mapped onto this site's roles: `background` is the page,
+`selection` and `muted` are its rules, the theme's yellow is money and time, its accent or
+cyan is a live fact. The inverted mission band is derived rather than written down
+(`--paper: var(--ink)`), so every theme gets one for free, and a light theme inverts it the
+other way without a second rule. The nav bar has the same palette button Omarchy's site
+has, bound to the same key: **T** steps through the themes. The choice is remembered, and
+with no choice stored `prefers-color-scheme` picks between Tokyo Night and Rosé Pine Dawn.
+A swatch in that menu is painted by putting the theme's id on a `<span>` and letting its
+own block colour it — no palette is written twice, so a theme cannot be listed in colours
+it does not have.
+
+Type has two faces and three roles: IBM Plex Mono is the machine speaking and anything you
+could copy (headings, controls, prices, commands); IBM Plex Serif is what you read at
+length — the prose, and the mission, which is the one claim made in a human voice rather
+than a machine's. The faces are served from this build (`packages/site/src/fonts`,
+[OFL][ofl]) — a page whose whole boast is that it needs no network should not fetch its
+typeface from Google.
+
+[om]: https://omarchy.us/
+
+[ofl]: packages/site/src/fonts/OFL.txt
+
 ## `smoke-console`: the whole thing, on a live network
 
 One command drives everything above end to end against a real network ([#101][i101]): it

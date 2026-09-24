@@ -3,20 +3,51 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>TOON Network — a compute marketplace with nobody in the middle</title>
+    <title>TOON Network — rent a machine from somebody you have never met</title>
     <meta
       name="description"
-      content="Lease a workload from an independent provider, pay for it over a payment channel, and manage it from a console that runs on your own machine. Running on devnet today."
+      content="A compute marketplace with nobody in the middle. Take a lease on a workload from an independent provider, pay for it packet by packet over a payment channel, and run the whole thing from a console on your own machine. Devnet today."
     />
+    <meta name="theme-color" content="#1a1b26" />
     <meta property="og:title" content="TOON Network" />
     <meta
       property="og:description"
-      content="A decentralized compute marketplace. Providers sell leases on workloads, tenants buy them over TOON payment channels."
+      content="Compute should be something you buy, not something you sign up for. Providers sell leases on workloads; tenants buy them over TOON payment channels, with no account and no identity."
     />
     <meta property="og:type" content="website" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <!--
+      The two faces the first screen is set in, fetched with the HTML rather
+      than after the stylesheet has been parsed. The other four are swapped in
+      when they arrive; these two are what the headline and the prose are.
+    -->
+    <link
+      rel="preload"
+      as="font"
+      type="font/woff2"
+      href="/src/fonts/plex-mono-600.woff2"
+      crossorigin
+    />
+    <link
+      rel="preload"
+      as="font"
+      type="font/woff2"
+      href="/src/fonts/plex-serif-400.woff2"
+      crossorigin
+    />
   </head>
   <body>
+    <!--
+      The stored theme goes on before anything is painted. Without this the
+      first frame is the default theme and the second is the chosen one, which
+      is a flash of somebody else's desktop.
+    -->
+    <script>
+      try {
+        var t = localStorage.getItem('toon-site-theme');
+        if (t) document.documentElement.setAttribute('data-theme', t);
+      } catch (e) {}
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
