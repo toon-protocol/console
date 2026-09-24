@@ -26,7 +26,8 @@ use toon_console_tui::app::{handle_key, handle_mouse, now_ms, App, Command, Daem
 use toon_console_tui::client::DaemonClient;
 use toon_console_tui::desktop;
 use toon_console_tui::launch::{launch_file_path, LaunchError};
-use toon_console_tui::types::{Directory, DirectoryFilters, Health};
+use toon_console_tui::markdown;
+use toon_console_tui::types::{Directory, DirectoryFilters, DocsIndex, DocsPage, Health};
 use toon_console_tui::ui;
 use toon_console_tui::views::directory::directory_query;
 
@@ -45,6 +46,14 @@ enum RuntimeEvent {
     HealthLoaded(Box<Result<Health, String>>),
     DirectoryLoaded(Box<Result<Directory, String>>),
     SwitchView(View),
+    /// `GET /api/docs`, on connect and again on `Command::RefreshDocs` while
+    /// no article is open.
+    DocsIndexLoaded(Box<Result<DocsIndex, String>>),
+    /// `GET /api/docs/<d>`, on `Command::OpenDoc` and again on
+    /// `Command::RefreshDocs` while one is.
+    DocsPageLoaded(Box<Result<DocsPage, String>>),
+    /// `xdg-open` did not open `Command::OpenDocsLink`'s href.
+    DocsLinkOpenFailed(String),
 }
 
 #[tokio::main]
@@ -121,6 +130,26 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()
                                     app.loading_directory = true;
                                 }
                             }
+                            Command::RefreshDocs => {
+                                if let Some(client) = &client {
+                                    match app.docs_page.as_ref().map(|page| page.doc.d.clone()) {
+                                        Some(d) => {
+                                            spawn_docs_page_fetch(client.clone(), tx.clone(), d, true)
+                                        }
+                                        None => spawn_docs_index_fetch(client.clone(), tx.clone(), true),
+                                    }
+                                    app.loading_docs = true;
+                                }
+                            }
+                            Command::OpenDoc(d) => {
+                                if let Some(client) = &client {
+                                    spawn_docs_page_fetch(client.clone(), tx.clone(), d, false);
+                                    app.loading_docs = true;
+                                }
+                            }
+                            Command::OpenDocsLink(href) => {
+                                spawn_open_link(href, tx.clone());
+                            }
                             Command::None => {}
                         }
                     }
@@ -138,6 +167,8 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()
                         app.loading_health = true;
                         spawn_directory_fetch(connected.clone(), tx.clone(), DirectoryFilters::default());
                         app.loading_directory = true;
+                        spawn_docs_index_fetch(connected.clone(), tx.clone(), false);
+                        app.loading_docs = true;
                         spawn_desktop(connected.clone(), tx.clone());
                         client = Some(connected);
                     }
@@ -168,6 +199,41 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()
                     },
                     RuntimeEvent::SwitchView(view) => {
                         app.view = view;
+                    }
+                    RuntimeEvent::DocsIndexLoaded(result) => match *result {
+                        Ok(index) => {
+                            app.docs_selected = app
+                                .docs_selected
+                                .min(index.docs.len().saturating_sub(1));
+                            app.docs_index = Some(index);
+                            app.loading_docs = false;
+                            app.docs_error = None;
+                        }
+                        Err(message) => {
+                            app.loading_docs = false;
+                            app.docs_error = Some(message);
+                        }
+                    },
+                    RuntimeEvent::DocsPageLoaded(result) => match *result {
+                        Ok(page) => {
+                            app.docs_link_hrefs = markdown::render(&page.doc.markdown, None)
+                                .links
+                                .into_iter()
+                                .map(|link| link.href)
+                                .collect();
+                            app.docs_link_index = 0;
+                            app.docs_scroll = 0;
+                            app.docs_page = Some(page);
+                            app.loading_docs = false;
+                            app.docs_open_error = None;
+                        }
+                        Err(message) => {
+                            app.loading_docs = false;
+                            app.docs_open_error = Some(message);
+                        }
+                    },
+                    RuntimeEvent::DocsLinkOpenFailed(message) => {
+                        app.docs_open_error = Some(message);
                     }
                 }
             }
@@ -245,6 +311,78 @@ fn spawn_directory_fetch(
             .await
             .map_err(|err| err.to_string());
         let _ = tx.send(RuntimeEvent::DirectoryLoaded(Box::new(result)));
+    });
+}
+
+/// `GET /api/docs`, on connect and again on `r` while no article is open —
+/// `refresh` is the daemon's own `?refresh=1`, the same query `docs-view.tsx`'s
+/// "Re-read from relays" button sends.
+fn spawn_docs_index_fetch(
+    client: Arc<DaemonClient>,
+    tx: UnboundedSender<RuntimeEvent>,
+    refresh: bool,
+) {
+    tokio::spawn(async move {
+        let path = if refresh {
+            "/api/docs?refresh=1"
+        } else {
+            "/api/docs"
+        };
+        let result = client
+            .get::<DocsIndex>(path)
+            .await
+            .map_err(|err| err.to_string());
+        let _ = tx.send(RuntimeEvent::DocsIndexLoaded(Box::new(result)));
+    });
+}
+
+/// `GET /api/docs/<d>`, on `Enter` in the reading list and again on `r` while
+/// this page is the one open. `d` is a doc's own slug (`docs-content.ts`'s
+/// `SLUG` pattern: lower-case words joined by single hyphens), so unlike the
+/// web client's `encodeURIComponent(d)` there is nothing here that needs
+/// percent-encoding.
+fn spawn_docs_page_fetch(
+    client: Arc<DaemonClient>,
+    tx: UnboundedSender<RuntimeEvent>,
+    d: String,
+    refresh: bool,
+) {
+    tokio::spawn(async move {
+        let path = if refresh {
+            format!("/api/docs/{d}?refresh=1")
+        } else {
+            format!("/api/docs/{d}")
+        };
+        let result = client
+            .get::<DocsPage>(&path)
+            .await
+            .map_err(|err| err.to_string());
+        let _ = tx.send(RuntimeEvent::DocsPageLoaded(Box::new(result)));
+    });
+}
+
+/// `o` on a focused link. Runs `xdg-open` directly — no shell, so nothing in
+/// an `href` that came off a relay-published article is ever interpreted by
+/// one.
+fn spawn_open_link(href: String, tx: UnboundedSender<RuntimeEvent>) {
+    tokio::spawn(async move {
+        match tokio::process::Command::new("xdg-open")
+            .arg(&href)
+            .status()
+            .await
+        {
+            Ok(status) if status.success() => {}
+            Ok(status) => {
+                let _ = tx.send(RuntimeEvent::DocsLinkOpenFailed(format!(
+                    "xdg-open exited with {status} for {href}"
+                )));
+            }
+            Err(err) => {
+                let _ = tx.send(RuntimeEvent::DocsLinkOpenFailed(format!(
+                    "could not run xdg-open: {err}"
+                )));
+            }
+        }
     });
 }
 

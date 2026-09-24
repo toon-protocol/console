@@ -1,0 +1,35 @@
+---
+source: src/views/docs.rs
+assertion_line: 332
+expression: render(&app)
+---
+Concepts   bundled                                                                                  
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│These are the pages that shipped with this console.                                               │
+│                                                                                                  │
+│# Concepts                                                                                        │
+│                                                                                                  │
+│A Provider sells a Lease. See Funding or Gateways.                                                │
+│                                                                                                  │
+│• one                                                                                             │
+│• two                                                                                             │
+│                                                                                                  │
+│```bash                                                                                           │
+│echo hi                                                                                           │
+│```                                                                                               │
+│                                                                                                  │
+│[1/2] Funding → funding                                                                           │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘

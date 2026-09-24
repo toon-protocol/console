@@ -1,0 +1,112 @@
+{
+  "relays": [],
+  "readAt": "2026-09-24T11:50:39.512Z",
+  "read": [],
+  "fallback": "These are the pages that shipped with this console. No documentation npub is configured, so nothing was read from a relay. Set TOON_CONSOLE_DOCS_NPUB to read the published articles.",
+  "docs": [
+    {
+      "d": "concepts",
+      "title": "Concepts",
+      "summary": "Provider, Tenant, Lease, Workload, Listing, Liveness — the nine words the rest of the documentation is written in.",
+      "order": 1,
+      "publishedAt": "2026-09-23",
+      "tags": [
+        "toon-network",
+        "concepts",
+        "getting-started"
+      ],
+      "source": "bundled"
+    },
+    {
+      "d": "first-workload",
+      "title": "Your first workload",
+      "summary": "Install the Console, sign in, fund a channel, and lease a real machine on devnet in about fifteen minutes.",
+      "order": 2,
+      "publishedAt": "2026-09-23",
+      "tags": [
+        "toon-network",
+        "getting-started",
+        "workload"
+      ],
+      "source": "bundled"
+    },
+    {
+      "d": "funding",
+      "title": "Funding",
+      "summary": "Deposit addresses, payment channels, what a relay write costs — and the one thing no faucet on this network gives you.",
+      "order": 3,
+      "publishedAt": "2026-09-23",
+      "tags": [
+        "toon-network",
+        "funding",
+        "payments"
+      ],
+      "source": "bundled"
+    },
+    {
+      "d": "gateways",
+      "title": "Gateways",
+      "summary": "A Workload Gateway fronts your workload at a stable hostname on TLS, and follows it when it moves.",
+      "order": 4,
+      "publishedAt": "2026-09-23",
+      "tags": [
+        "toon-network",
+        "gateway",
+        "networking"
+      ],
+      "source": "bundled"
+    },
+    {
+      "d": "failover",
+      "title": "Failover",
+      "summary": "Warm standbys, takeover on liveness expiry, and why a standby cannot impersonate you to the primary.",
+      "order": 5,
+      "publishedAt": "2026-09-23",
+      "tags": [
+        "toon-network",
+        "failover",
+        "standby"
+      ],
+      "source": "bundled"
+    },
+    {
+      "d": "hidden-providers",
+      "title": "Hidden Providers",
+      "summary": "A provider whose network location nothing it publishes or serves reveals — and what that costs on both sides.",
+      "order": 6,
+      "publishedAt": "2026-09-23",
+      "tags": [
+        "toon-network",
+        "privacy",
+        "hidden-provider"
+      ],
+      "source": "bundled"
+    },
+    {
+      "d": "spec",
+      "title": "The specification",
+      "summary": "Where the normative rules live, what each numbered section covers, and which decisions are written down as ADRs.",
+      "order": 7,
+      "publishedAt": "2026-09-23",
+      "tags": [
+        "toon-network",
+        "specification",
+        "reference"
+      ],
+      "source": "bundled"
+    }
+  ],
+  "doc": {
+    "d": "first-workload",
+    "title": "Your first workload",
+    "summary": "Install the Console, sign in, fund a channel, and lease a real machine on devnet in about fifteen minutes.",
+    "publishedAt": "2026-09-23",
+    "tags": [
+      "toon-network",
+      "getting-started",
+      "workload"
+    ],
+    "markdown": "# Your first workload\n\nThis is the whole path, end to end, on **devnet**. There is no mainnet yet — see\n[What exists today](#what-exists-today) at the bottom before you plan anything around it.\n\n## 1. Install the Console\n\nOn Omarchy:\n\n```bash\nyay -S toon-console\ntoon-console-install\n```\n\n`toon-console-install` registers the `systemd --user` service, adds the Omarchy web-app\nlauncher and puts an entry in the Omarchy menu. Launch it from the menu, or:\n\n```bash\nsystemctl --user start toon-console.service\ntoon-console\n```\n\nOn another Linux desktop the same package installs a plain `.desktop` file. The Console is\na local daemon on `127.0.0.1` plus a web UI — it is not a website, and nothing about your\naccount reaches a server anyone else operates.\n\nFrom a checkout instead:\n\n```bash\ngit clone https://github.com/toon-protocol/console\ncd console && npm install && npm run build && npm start\n```\n\nIt prints an `open:` URL carrying this launch's token. Open that.\n\n## 2. Sign in\n\nThe Console signs in with a **Nostr signer**. Three work today:\n\n- a **NIP-46 remote signer** — Amber, nsec.app, or `nak bunker`. Your key never touches the\n  Console.\n- the Console's **local keystore**, in gnome-keyring, holding an nsec you import.\n- a **NIP-06 mnemonic**, imported into the same keystore.\n\nYour npub is your **Account**. It is how your records find you again on another machine.\n\n## 3. Seal a Chain Seed\n\nOn first sign-in the Console mints a **Chain Seed**: a BIP-39 mnemonic, sealed to your own\nNostr key with NIP-44 and published as a record on your relays. Your payer keys on Base and\non Solana are derived from it.\n\nThe Chain Seed is never revealed. There is no export and no reveal-at-mint. Recovery is\nyour Nostr key and nothing else, which means:\n\n> **Anyone who holds your Nostr key holds your funds.** An Account that loses its Nostr key\n> loses everything at its payer addresses. The Console says this once, before it shows you\n> an address to deposit to.\n\n## 4. Fund it\n\nThe Funds tab shows two deposit addresses — one on **Base Sepolia**, one on **Solana\ndevnet** — with QR codes, and a link to the devnet faucet for mock USDC.\n\nThen you need **native gas**, and this is the part nobody can solve for you:\n\n> The devnet faucet gives you mock USDC. It does not give you Base Sepolia ETH or Solana\n> devnet SOL. Opening a payment channel is an on-chain transaction and it costs native gas.\n> You have to get that from a public faucet yourself.\n\n[Funding](funding) says exactly which faucets and what to do when they are dry.\n\nWith gas and USDC in hand, open a channel to the connector from the Funds tab. That locks\ncollateral on chain. Everything after it is off-chain and instant.\n\n## 5. Pick a listing\n\nThe Providers tab is the **Provider Directory**, read live off the relays. Filter by\nisolation, architecture, GPU, capabilities and whether the provider is hidden. Each row\nshows **Liveness** counting down.\n\nOn devnet you will find one provider with two listings, `basic` and `ci`. Take `basic`\nunless you need Docker inside your workload.\n\n## 6. Spawn\n\nOpen **New workload**. Either pick a **Template** — a signed, published description of a\nspawn, with its image named by content address — or name an image yourself. Set the\nenvironment, the ports and an SSH public key.\n\nPress spawn. What happens:\n\n1. The Console mints a **Root Secret** for this lease and derives a continuation token.\n2. It writes the root secret to your **Lease Vault** — one sealed record on your relays,\n   one paid relay write at 1 µUSDC.\n3. It sends the paid spawn request to the provider: 1000 µUSDC for the first hour on\n   `basic`.\n4. The provider answers with the workload's access details.\n\nThe card that appears shows the lease, its liveness, and its **runway**: how long your\nfunds and your extension budget keep it alive.\n\n## 7. Reach it\n\nHand the workload to the **Workload Gateway** from its card. It comes back with a hostname\nunder `gw.devnet.toonprotocol.dev`, on TLS, that resolves to whichever provider is running\nyour workload right now. See [Gateways](gateways).\n\nSSH works directly at the provider's address, with the key you gave at spawn.\n\n## 8. Keep it alive, or let it go\n\nExtend by hand, or set an automatic extension with a budget you choose. Terminate when you\nare done — that ends the lease before expiry and stops the charges.\n\n## What exists today\n\nBe clear-eyed about what you are using:\n\n- **This is a devnet.** There is no public mainnet provider. The Console ships a mainnet\n  profile with no endpoints behind it, because pointing it at a guess would be worse than\n  admitting there is nothing there.\n- **The money is mock money.** Devnet USDC is a mock token on Base Sepolia and Solana\n  devnet. The gas is real testnet gas, which is why the faucets matter.\n- **It really runs.** The devnet provider sells real leases on real hardware, the Console\n  bought one, and the workload answered on its gateway hostname. It is small, and it works.\n\n## Next\n\n- [Funding](funding) — deposits, channels, and the gas problem in detail.\n- [Gateways](gateways) — how a hostname finds a workload.\n- [Failover](failover) — standby sets, and what happens when a provider goes silent.",
+    "source": "bundled"
+  }
+}

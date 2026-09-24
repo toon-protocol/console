@@ -8,8 +8,13 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
-use crate::types::Health;
+use crate::types::{DocsIndex, DocsPage, Health};
 use crate::views::directory::{self, DirectoryCommand, DirectoryViewState};
+
+/// How many lines `PageUp`/`PageDown` scroll the Docs article — arbitrary,
+/// but big enough that a page key visibly moves a full screen's worth on a
+/// typical terminal height.
+const DOCS_PAGE_SCROLL: u16 = 10;
 
 /// The seven views of the sidebar (ADR 0028), in the order `1`-`7` select
 /// them. `Health` is sixth, matching the spec's own numbering and the web
@@ -114,6 +119,29 @@ pub struct App {
     /// (`views::directory::liveness_now`) — every other view reads the
     /// daemon's own timestamps instead.
     pub now_ms: i64,
+    /// The Docs reading list (TOON_Network#148): `GET /api/docs`.
+    pub docs_index: Option<DocsIndex>,
+    /// The article open, if any: `GET /api/docs/<d>`. `Some` is what puts the
+    /// view into "reading an article" mode rather than "picking one".
+    pub docs_page: Option<DocsPage>,
+    pub loading_docs: bool,
+    /// `GET /api/docs` failed. Shown in the reading list.
+    pub docs_error: Option<String>,
+    /// Reused for two failures that never happen at once, since only one is
+    /// ever showable at a time: `GET /api/docs/<d>` failed (shown in the
+    /// reading list, mirroring `use-docs.ts`'s `openError`), or `xdg-open`
+    /// failed on a focused link (shown over the open article instead).
+    pub docs_open_error: Option<String>,
+    /// Which row of the reading list `j`/`k` has selected.
+    pub docs_selected: usize,
+    /// How far `j`/`k`/`PageUp`/`PageDown` have scrolled the open article.
+    pub docs_scroll: u16,
+    /// The open article's links, in reading order — just the hrefs, so `o`
+    /// can open one without re-parsing the Markdown on every keypress. Set
+    /// alongside `docs_page` and cleared when it closes.
+    pub docs_link_hrefs: Vec<String>,
+    /// Which of `docs_link_hrefs` `n`/`N` has focused; `o` opens this one.
+    pub docs_link_index: usize,
 }
 
 impl App {
@@ -128,6 +156,15 @@ impl App {
             directory: DirectoryViewState::new(),
             loading_directory: false,
             now_ms: now_ms(),
+            docs_index: None,
+            docs_page: None,
+            loading_docs: false,
+            docs_error: None,
+            docs_open_error: None,
+            docs_selected: 0,
+            docs_scroll: 0,
+            docs_link_hrefs: Vec::new(),
+            docs_link_index: 0,
         }
     }
 }
@@ -151,7 +188,10 @@ impl Default for App {
 /// What a keypress asks the runtime to do, once `handle_key` has already
 /// applied the parts of it that are pure state (switching views, opening
 /// help). The runtime owns quitting, redrawing and network calls.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Not `Copy`: `OpenDoc` and `OpenDocsLink` carry an owned `String` (a `d`
+/// and an `href` respectively), which a `Copy` type cannot hold.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     None,
     Quit,
@@ -159,6 +199,13 @@ pub enum Command {
     /// `views::directory::DirectoryCommand::Refresh`, translated: re-read
     /// `GET /api/directory` with `app.directory.filters`.
     RefreshDirectory,
+    /// Re-read the Docs index, or the open article if one is open — the
+    /// runtime decides which by checking `App::docs_page`.
+    RefreshDocs,
+    /// Fetch `GET /api/docs/<d>` for the article at this `d`.
+    OpenDoc(String),
+    /// Open this URL with `xdg-open`.
+    OpenDocsLink(String),
 }
 
 /// The one place a keypress becomes a decision.
@@ -223,6 +270,83 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> Command {
         KeyCode::Char('r') | KeyCode::Char('R') if app.view == View::Health => {
             Command::RefreshHealth
         }
+        KeyCode::Char('r') | KeyCode::Char('R') if app.view == View::Docs => Command::RefreshDocs,
+        // Reading list (no article open): `j`/`k` move the selection, `Enter`
+        // opens it.
+        KeyCode::Char('j') | KeyCode::Down if app.view == View::Docs && app.docs_page.is_none() => {
+            if let Some(len) = app.docs_index.as_ref().map(|index| index.docs.len()) {
+                if len > 0 {
+                    app.docs_selected = (app.docs_selected + 1).min(len - 1);
+                }
+            }
+            Command::None
+        }
+        KeyCode::Char('k') | KeyCode::Up if app.view == View::Docs && app.docs_page.is_none() => {
+            app.docs_selected = app.docs_selected.saturating_sub(1);
+            Command::None
+        }
+        KeyCode::Enter if app.view == View::Docs && app.docs_page.is_none() => {
+            match app
+                .docs_index
+                .as_ref()
+                .and_then(|index| index.docs.get(app.docs_selected))
+            {
+                Some(doc) => Command::OpenDoc(doc.d.clone()),
+                None => Command::None,
+            }
+        }
+        // An open article: `j`/`k`/`PageUp`/`PageDown` scroll it, `n`/`N`
+        // cycle which link is focused, `o` opens the focused one, and
+        // `Backspace` goes back to the reading list.
+        KeyCode::Char('j') | KeyCode::Down if app.view == View::Docs && app.docs_page.is_some() => {
+            app.docs_scroll = app.docs_scroll.saturating_add(1);
+            Command::None
+        }
+        KeyCode::Char('k') | KeyCode::Up if app.view == View::Docs && app.docs_page.is_some() => {
+            app.docs_scroll = app.docs_scroll.saturating_sub(1);
+            Command::None
+        }
+        KeyCode::PageDown if app.view == View::Docs && app.docs_page.is_some() => {
+            app.docs_scroll = app.docs_scroll.saturating_add(DOCS_PAGE_SCROLL);
+            Command::None
+        }
+        KeyCode::PageUp if app.view == View::Docs && app.docs_page.is_some() => {
+            app.docs_scroll = app.docs_scroll.saturating_sub(DOCS_PAGE_SCROLL);
+            Command::None
+        }
+        KeyCode::Char('n') if app.view == View::Docs && app.docs_page.is_some() => {
+            let len = app.docs_link_hrefs.len();
+            if len > 0 {
+                app.docs_link_index = (app.docs_link_index + 1) % len;
+            }
+            Command::None
+        }
+        KeyCode::Char('N') if app.view == View::Docs && app.docs_page.is_some() => {
+            let len = app.docs_link_hrefs.len();
+            if len > 0 {
+                app.docs_link_index = (app.docs_link_index + len - 1) % len;
+            }
+            Command::None
+        }
+        KeyCode::Char('o') if app.view == View::Docs && app.docs_page.is_some() => {
+            match app.docs_link_hrefs.get(app.docs_link_index) {
+                Some(href) => Command::OpenDocsLink(href.clone()),
+                None => Command::None,
+            }
+        }
+        KeyCode::Backspace if app.view == View::Docs && app.docs_page.is_some() => {
+            app.docs_page = None;
+            app.docs_link_hrefs.clear();
+            app.docs_link_index = 0;
+            app.docs_scroll = 0;
+            app.docs_open_error = None;
+            Command::None
+        }
+        // Directory has no forms of its own — every key it does not want
+        // itself (its filter toggles, `j`/`k`/`Enter` in the picker) falls
+        // to this catch, placed last among the guarded arms so the global
+        // keys above (quit, help, view switching, digits) still win even
+        // while Directory is the current view.
         _ if app.view == View::Directory => match directory::handle_key(&mut app.directory, key) {
             DirectoryCommand::Refresh => Command::RefreshDirectory,
             DirectoryCommand::None => Command::None,
@@ -341,7 +465,7 @@ mod tests {
     }
 
     #[test]
-    fn r_refreshes_health_only_on_the_health_view() {
+    fn r_refreshes_health_on_the_health_view_and_docs_on_the_docs_view() {
         let mut app = App::new();
         app.view = View::Health;
         assert_eq!(
@@ -350,6 +474,14 @@ mod tests {
         );
 
         app.view = View::Docs;
+        assert_eq!(
+            handle_key(&mut app, key(KeyCode::Char('r'))),
+            Command::RefreshDocs
+        );
+
+        // Neither fires on a view with no refresh of its own (TOON_Network#148
+        // added Docs' case; every other still-unbuilt view has none yet).
+        app.view = View::Workloads;
         assert_eq!(handle_key(&mut app, key(KeyCode::Char('r'))), Command::None);
     }
 

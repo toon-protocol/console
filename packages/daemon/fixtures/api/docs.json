@@ -1,0 +1,99 @@
+{
+  "relays": [],
+  "readAt": "2026-09-24T11:50:39.505Z",
+  "read": [],
+  "fallback": "These are the pages that shipped with this console. No documentation npub is configured, so nothing was read from a relay. Set TOON_CONSOLE_DOCS_NPUB to read the published articles.",
+  "docs": [
+    {
+      "d": "concepts",
+      "title": "Concepts",
+      "summary": "Provider, Tenant, Lease, Workload, Listing, Liveness — the nine words the rest of the documentation is written in.",
+      "order": 1,
+      "publishedAt": "2026-09-23",
+      "tags": [
+        "toon-network",
+        "concepts",
+        "getting-started"
+      ],
+      "source": "bundled"
+    },
+    {
+      "d": "first-workload",
+      "title": "Your first workload",
+      "summary": "Install the Console, sign in, fund a channel, and lease a real machine on devnet in about fifteen minutes.",
+      "order": 2,
+      "publishedAt": "2026-09-23",
+      "tags": [
+        "toon-network",
+        "getting-started",
+        "workload"
+      ],
+      "source": "bundled"
+    },
+    {
+      "d": "funding",
+      "title": "Funding",
+      "summary": "Deposit addresses, payment channels, what a relay write costs — and the one thing no faucet on this network gives you.",
+      "order": 3,
+      "publishedAt": "2026-09-23",
+      "tags": [
+        "toon-network",
+        "funding",
+        "payments"
+      ],
+      "source": "bundled"
+    },
+    {
+      "d": "gateways",
+      "title": "Gateways",
+      "summary": "A Workload Gateway fronts your workload at a stable hostname on TLS, and follows it when it moves.",
+      "order": 4,
+      "publishedAt": "2026-09-23",
+      "tags": [
+        "toon-network",
+        "gateway",
+        "networking"
+      ],
+      "source": "bundled"
+    },
+    {
+      "d": "failover",
+      "title": "Failover",
+      "summary": "Warm standbys, takeover on liveness expiry, and why a standby cannot impersonate you to the primary.",
+      "order": 5,
+      "publishedAt": "2026-09-23",
+      "tags": [
+        "toon-network",
+        "failover",
+        "standby"
+      ],
+      "source": "bundled"
+    },
+    {
+      "d": "hidden-providers",
+      "title": "Hidden Providers",
+      "summary": "A provider whose network location nothing it publishes or serves reveals — and what that costs on both sides.",
+      "order": 6,
+      "publishedAt": "2026-09-23",
+      "tags": [
+        "toon-network",
+        "privacy",
+        "hidden-provider"
+      ],
+      "source": "bundled"
+    },
+    {
+      "d": "spec",
+      "title": "The specification",
+      "summary": "Where the normative rules live, what each numbered section covers, and which decisions are written down as ADRs.",
+      "order": 7,
+      "publishedAt": "2026-09-23",
+      "tags": [
+        "toon-network",
+        "specification",
+        "reference"
+      ],
+      "source": "bundled"
+    }
+  ]
+}

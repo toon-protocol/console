@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use toon_console_tui::types::{Directory, Health};
+use toon_console_tui::types::{Directory, DocsIndex, DocsPage, Health};
 
 type Check = fn(&str) -> Result<(), String>;
 
@@ -36,6 +36,8 @@ fn registry() -> BTreeMap<&'static str, Check> {
     let mut map: BTreeMap<&'static str, Check> = BTreeMap::new();
     map.insert("health", check::<Health> as Check);
     map.insert("directory", check::<Directory> as Check);
+    map.insert("docs", check::<DocsIndex> as Check);
+    map.insert("doc", check::<DocsPage> as Check);
     map
 }
 
