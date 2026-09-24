@@ -146,6 +146,7 @@ else
   ICON_SOURCE="$REPO/packaging/icons/toon-console.png"
   DAEMON_ENTRY="$REPO/packages/daemon/dist/main.js"
   UI_ROOT="$REPO/packages/ui/dist"
+  TUI_BUILD="$REPO/tui/target/release/toon-console-tui"
   DOCS_DIR="$REPO/docs"
 fi
 
@@ -278,6 +279,7 @@ fi
 if [[ $LAYOUT == checkout ]]; then
   [[ -f $DAEMON_ENTRY ]] || die "no built daemon at $DAEMON_ENTRY — run 'npm run build' first"
   [[ -d $UI_ROOT ]] || die "no built UI at $UI_ROOT — run 'npm run build' first"
+  [[ -x $TUI_BUILD ]] || die "no built TUI at $TUI_BUILD — run 'cargo build --release --locked' in tui/ first"
 
   NODE_BIN="$(command -v node)" || die "node is not on PATH"
 
@@ -285,6 +287,12 @@ if [[ $LAYOUT == checkout ]]; then
 
   # The launcher, on PATH.
   install -m 0755 "$REPO/packaging/bin/toon-console" "$BIN"
+
+  # The TUI (ADR 0028), on PATH beside it: the launcher hands the bare name
+  # `toon-console-tui` to omarchy-launch-or-focus-tui, so it has to be found
+  # there. The package installs it into $PREFIX/bin; a checkout has to be
+  # built first, like the daemon and the UI.
+  install -m 0755 "$TUI_BUILD" "$BIN_DIR/toon-console-tui"
 
   # The unit, with this checkout's absolute paths substituted in. systemd does
   # not expand $PATH or relative paths in ExecStart, so they have to be

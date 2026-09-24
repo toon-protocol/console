@@ -757,3 +757,17 @@ test('.SRCINFO says what the PKGBUILD says', () => {
   }
   assert.equal(field('install')[0], 'toon-console.install');
 });
+
+test('a checkout install puts the TUI on PATH beside the launcher, and uninstall takes it away', () => {
+  // The launcher hands the bare name to omarchy-launch-or-focus-tui, so a
+  // checkout install that left the binary in tui/target would open a terminal
+  // that fails at once (TOON_Network#140).
+  const launcher = read('bin/toon-console');
+  assert.match(launcher, /^TUI_BIN="toon-console-tui"$/m);
+  const installer = read('bin/toon-console-install');
+  assert.match(installer, /TUI_BUILD="\$REPO\/tui\/target\/release\/toon-console-tui"/);
+  assert.match(installer, /install -m 0755 "\$TUI_BUILD" "\$BIN_DIR\/toon-console-tui"/);
+  assert.match(installer, /\[\[ -x \$TUI_BUILD \]\] \|\| die/);
+  const uninstall = read('bin/toon-console-uninstall');
+  assert.match(uninstall, /"\$BIN_DIR\/toon-console-tui"/);
+});
