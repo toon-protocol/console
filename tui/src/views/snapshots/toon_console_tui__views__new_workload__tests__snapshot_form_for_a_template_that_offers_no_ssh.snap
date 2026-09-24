@@ -1,0 +1,34 @@
+---
+source: src/views/new_workload.rs
+expression: render(&state)
+---
+┌ smoke-http ──────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Fixed by the publisher:                                                                                               │
+│  MODE=production                                                                                                     │
+│                                                                                                                      │
+│SITE_TITLE: ▏                                                                                                         │
+│smoke-http does not offer SSH, so no key is asked for.                                                                │
+│Volume (GB, optional): …                                                                                              │
+│                                                                                                                      │
+│ Preview the spawn                                                                                                    │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘

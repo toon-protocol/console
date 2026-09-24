@@ -409,5 +409,6 @@ export function notifying(port: WorkloadPort, notifier: DesktopNotifier): Worklo
     card: (workloadId, options) => port.card(workloadId, options),
     extend: (workloadId, options) => port.extend(workloadId, options),
     terminate: (workloadId, options) => port.terminate(workloadId, options),
+    forget: (workloadId) => port.forget(workloadId),
   };
 }

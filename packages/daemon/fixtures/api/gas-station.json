@@ -1,0 +1,38 @@
+{
+  "state": "ready",
+  "station": {
+    "connectorUrl": "http://gas.test:3220/ilp",
+    "selfEndpoint": "http://gas.test:3220/ilp",
+    "doors": [
+      "g.toon.gastation"
+    ],
+    "reachable": true
+  },
+  "chains": [
+    {
+      "chain": "evm:31337",
+      "kind": "evm",
+      "recipient": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
+      "verdict": "unsupported",
+      "reason": "A gas station will not sell native ETH on evm:31337, and that is a decision rather than a gap. Its EVM job (kind:5098) relays a call you signed and pays the gas for it — its `to` must be the connector's own TokenNetwork, its native `value` cap is zero, and it will only relay a deposit, a close or a settle. An EVM gas station that sent coin to an address that asked would be a faucet, and would be emptied by the first caller. So this chain's coin still has to come from a wallet that holds some."
+    },
+    {
+      "chain": "solana",
+      "kind": "solana",
+      "recipient": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
+      "verdict": "buyable",
+      "payer": {
+        "chain": "evm:31337",
+        "channelId": "0xchannel",
+        "available": "1000000",
+        "payAt": "http://localhost:3200/ilp",
+        "via": "forwarded"
+      },
+      "destination": "g.toon.gastation",
+      "price": "1100",
+      "lamports": "10000000",
+      "reason": "This console can buy 10000000 lamports of SOL for this address, paid from the channel it already holds on evm:31337 — a claim signed against a channel costs no gas on any chain, which is the whole of why this works. One packet on g.toon.gastation costs 1100 base units, quoted by the connector, and a purchase is two: the quote you will be shown, and the execute."
+    }
+  ],
+  "checkedAt": "2026-01-01T00:00:00.000Z"
+}

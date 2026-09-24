@@ -1,0 +1,150 @@
+{
+  "ok": true,
+  "problems": [],
+  "workloadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
+  "members": [
+    {
+      "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001",
+      "index": 0,
+      "role": "primary",
+      "view": {
+        "ok": true,
+        "problems": [],
+        "provider": {
+          "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001",
+          "ilpAddress": "g.toon.provider",
+          "connectorUrl": "https://provider.example/ilp",
+          "hidden": false,
+          "liveness": "live"
+        },
+        "listing": {
+          "name": "basic",
+          "version": 1,
+          "leaseIntervalSeconds": 3600,
+          "price": 1000,
+          "capabilities": []
+        },
+        "route": "g.toon.provider.basic.v1.spawn",
+        "payment": {
+          "connectorUrl": "https://provider.example/ilp",
+          "via": "provider-connector",
+          "reason": "Local sandbox's connector publishes no route carrying g.toon.provider.basic.v1.spawn, so the packet is paid at the provider's own connector, which terminates it (spec §4.1, §5).",
+          "chain": "evm:31337",
+          "channelId": "0xchannel"
+        },
+        "vault": {
+          "localOnly": false,
+          "writes": {
+            "relays": [
+              "wss://own.relay.test"
+            ],
+            "plan": [
+              {
+                "url": "wss://own.relay.test",
+                "ready": true,
+                "destination": "g.toon.relay",
+                "payAt": "https://connector.test/ilp",
+                "price": "1",
+                "chain": "evm:31337",
+                "channelId": "0xchannel",
+                "via": "document"
+              }
+            ],
+            "destination": "g.toon.relay",
+            "payAt": "https://connector.test/ilp",
+            "price": "1",
+            "totalPrice": "1",
+            "chain": "evm:31337",
+            "channelId": "0xchannel",
+            "ready": true
+          }
+        }
+      }
+    },
+    {
+      "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0002",
+      "index": 1,
+      "role": "standby",
+      "view": {
+        "ok": true,
+        "problems": [],
+        "provider": {
+          "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0002",
+          "ilpAddress": "g.toon.provider2",
+          "connectorUrl": "https://provider.example/ilp",
+          "hidden": false,
+          "liveness": "live"
+        },
+        "listing": {
+          "name": "basic",
+          "version": 1,
+          "leaseIntervalSeconds": 3600,
+          "price": 1000,
+          "capabilities": []
+        },
+        "route": "g.toon.provider2.basic.v1.standby",
+        "payment": {
+          "connectorUrl": "https://provider.example/ilp",
+          "via": "provider-connector",
+          "reason": "Local sandbox's connector publishes no route carrying g.toon.provider2.basic.v1.standby, so the packet is paid at the provider's own connector, which terminates it (spec §4.1, §5).",
+          "chain": "evm:31337",
+          "channelId": "0xchannel"
+        },
+        "vault": {
+          "localOnly": false,
+          "writes": {
+            "relays": [
+              "wss://own.relay.test"
+            ],
+            "plan": [
+              {
+                "url": "wss://own.relay.test",
+                "ready": true,
+                "destination": "g.toon.relay",
+                "payAt": "https://connector.test/ilp",
+                "price": "1",
+                "chain": "evm:31337",
+                "channelId": "0xchannel",
+                "via": "document"
+              }
+            ],
+            "destination": "g.toon.relay",
+            "payAt": "https://connector.test/ilp",
+            "price": "1",
+            "totalPrice": "1",
+            "chain": "evm:31337",
+            "channelId": "0xchannel",
+            "ready": true
+          }
+        }
+      }
+    }
+  ],
+  "vault": {
+    "localOnly": false,
+    "writes": {
+      "relays": [
+        "wss://own.relay.test"
+      ],
+      "plan": [
+        {
+          "url": "wss://own.relay.test",
+          "ready": true,
+          "destination": "g.toon.relay",
+          "payAt": "https://connector.test/ilp",
+          "price": "1",
+          "chain": "evm:31337",
+          "channelId": "0xchannel",
+          "via": "document"
+        }
+      ],
+      "destination": "g.toon.relay",
+      "payAt": "https://connector.test/ilp",
+      "price": "1",
+      "totalPrice": "1",
+      "chain": "evm:31337",
+      "channelId": "0xchannel",
+      "ready": true
+    }
+  }
+}

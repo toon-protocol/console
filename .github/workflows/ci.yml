@@ -7,6 +7,13 @@
 # `npm run test:packaging` is its own step and not another glob on `npm test`
 # because it is `node --test` over bash and INI files rather than vitest over
 # TypeScript — the same reason gateway keeps its deploy-bundle guard apart.
+#
+# `tui` is its own job, beside `build` and not inside it: it is a different
+# toolchain (Rust, not Node) building a different crate (TOON_Network#139,
+# ADR 0028), and its fixture contract (`tui/tests/fixture_contract.rs`) reads
+# the fixtures `build`'s `npm test` writes from the COMMITTED copy in
+# `packages/daemon/fixtures/api/`, not a live daemon — so it needs no Node
+# setup and no dependency on `build` finishing first.
 
 name: CI
 
@@ -49,6 +56,33 @@ jobs:
       # Tailwind 4 or shadcn wiring mistake shows up.
       - run: npm run build
 
+  tui:
+    name: tui
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tui -> target
+
+      - name: cargo fmt --check
+        working-directory: tui
+        run: cargo fmt --check
+
+      - name: cargo clippy --all-targets -- -D warnings
+        working-directory: tui
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: cargo test
+        working-directory: tui
+        run: cargo test
+
   # Fleet no-op merge guard (toon-meta#405), wired INTO this repo's aggregate
   # required check so it blocks a human merge and not only the auto-merge pass
   # (toon-meta#408). No `if:` — this workflow also runs on push, where the
@@ -61,7 +95,7 @@ jobs:
   ci-ok:
     name: CI OK
     runs-on: ubuntu-latest
-    needs: [build, no-op-merge]
+    needs: [build, tui, no-op-merge]
     if: always()
     steps:
       # Fleet-wide aggregate required check per toon-meta#279: this single job
@@ -71,12 +105,18 @@ jobs:
         run: |
           echo "event: ${{ github.event_name }}"
           echo "build: ${{ needs.build.result }}"
+          echo "tui: ${{ needs.tui.result }}"
           echo "no-op: ${{ needs.no-op-merge.result }}"
 
           ok=true
 
           if [ "${{ needs.build.result }}" != "success" ]; then
             echo "::error::build did not succeed (result: ${{ needs.build.result }})"
+            ok=false
+          fi
+
+          if [ "${{ needs.tui.result }}" != "success" ]; then
+            echo "::error::tui did not succeed (result: ${{ needs.tui.result }})"
             ok=false
           fi
 

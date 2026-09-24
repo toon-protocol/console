@@ -28,11 +28,33 @@ export interface ProfileView {
   gatewayDomain: string;
   /** The Workload Gateway's own connector, where a handover is sealed (§12.1). */
   gatewayConnectorUrl: string;
+  /** The gas station's own connector (TOON_Network#119). */
+  gasConnectorUrl: string;
   faucetUrl?: string;
   rpc: { evm?: string; solana?: string };
   origin: 'built-in' | 'user';
   configured: boolean;
   active: boolean;
+  /** Which endpoint fields a person has overridden (or, for a profile with
+   * no built-in, simply set) — `"connectorUrl"`, `"rpc.evm"`, etc. Empty for
+   * a built-in nobody has touched (TOON_Network#150). */
+  overriddenFields: string[];
+}
+
+/** `PUT /api/profiles/<id>`'s body (TOON_Network#150) — every endpoint field
+ * the WHOLE override for this call (a field left out falls through to the
+ * built-in), plus the label a brand-new id needs. Mirrors
+ * `profile-store.ts`'s `ProfileEndpointsInput`. */
+export interface ProfileEndpointsInput {
+  label?: string;
+  description?: string;
+  connectorUrl?: string;
+  relayUrl?: string;
+  gatewayDomain?: string;
+  gatewayConnectorUrl?: string;
+  gasConnectorUrl?: string;
+  faucetUrl?: string;
+  rpc?: { evm?: string; solana?: string };
 }
 
 export interface SettlementView {
@@ -279,6 +301,8 @@ export interface TemplateView {
   envFixed: Record<string, string>;
   envTenant: string[];
   minResources?: TemplateResources;
+  /** Informational, not part of §8.3's shape: see `templates.ts`'s own field. */
+  sshOffered: boolean;
   availability: TemplateAvailability;
   warnings: string[];
   publishedAt: string;
@@ -317,6 +341,8 @@ export interface SpawnContent {
 export interface ExpandedTemplate {
   template: string;
   spawn: SpawnContent;
+  /** `template.sshOffered`, echoed: whether `spawn.ssh_public_key` is real. */
+  sshOffered: boolean;
   warnings: string[];
 }
 
@@ -850,6 +876,8 @@ export interface LeaseView {
   image: LeaseImage;
   ports: LeasePort[];
   envKeys: string[];
+  /** Whether `access.ssh_port` is worth showing: see `lease-vault.ts`'s own field. */
+  sshOffered: boolean;
   createdAt: string;
   /** Marked local only: this lease's record is on this machine and nowhere else. */
   localOnly: boolean;
@@ -1058,7 +1086,15 @@ export interface DocsPage extends DocsIndex {
  * one.
  */
 
-export type LeaseEnding = 'expiry' | 'termination' | 'eviction' | 'unstated';
+/**
+ * §6.7's endings, plus `expired` — this console's OWN word, not the
+ * provider's (TOON_Network#138). It is shown when a provider no longer even
+ * holds a lease (`unknown_workload`) and this account's own Lease Vault
+ * record says the paid time was already up: a real ending, just not one any
+ * provider stated, which is why it is spelled differently from `expiry`
+ * (the provider's own word for the same fact, told while it still answers).
+ */
+export type LeaseEnding = 'expiry' | 'termination' | 'eviction' | 'unstated' | 'expired';
 
 export type LeaseLife =
   | { phase: 'provisioning' | 'reserved' | 'running' | 'stopped' }
@@ -1262,6 +1298,19 @@ export interface TerminateResult {
   providerError?: string;
   message?: string;
   card: WorkloadCard;
+}
+
+/**
+ * `DELETE /api/workloads/<id>`'s answer (TOON_Network#138). The daemon
+ * refuses the route outright on anything still live, so a successful answer
+ * always means the card is already gone from the account's own list;
+ * `forgotten: false` here means only that a best-effort relay tombstone did
+ * not confirm.
+ */
+export interface ForgetResult {
+  workloadId: string;
+  forgotten: boolean;
+  reason?: string;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1540,6 +1589,18 @@ export const daemon = {
   },
   setProfile: (id: string) =>
     call<Profiles>('/api/profiles/active', { method: 'POST', body: JSON.stringify({ id }) }),
+  /** Overrides a subset of a built-in's endpoints, or adds a profile under a
+   * new id (TOON_Network#150). Answers the updated profile list, the same
+   * shape `profiles()` does. */
+  updateProfile: (id: string, input: ProfileEndpointsInput) =>
+    call<Profiles>(`/api/profiles/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    }),
+  /** Resets a built-in's override, or removes a profile added under a new
+   * id — the daemon refuses this while that profile is the active one. */
+  resetProfile: (id: string) =>
+    call<Profiles>(`/api/profiles/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   directory: (filters: DirectoryFilters = {}) =>
     call<Directory>(`/api/directory${directoryQuery(filters)}`),
 
@@ -1711,6 +1772,16 @@ export const daemon = {
       `/api/workloads/${encodeURIComponent(workloadId)}/terminate`,
       options
     ),
+  /**
+   * Forget an ENDED workload: drop this account's Lease Vault entry for it,
+   * so it leaves the list (TOON_Network#138). Refused on anything still
+   * live — a lease this console has not seen end holds the only Root Secret
+   * that could ever stop it.
+   */
+  forgetWorkload: (workloadId: string) =>
+    call<ForgetResult>(`/api/workloads/${encodeURIComponent(workloadId)}`, {
+      method: 'DELETE',
+    }),
   /**
    * Arm a budget: a standing instruction to keep extending while nobody is
    * watching. `confirm` is the whole of the consent, and `agreedPrice` is

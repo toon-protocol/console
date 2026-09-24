@@ -140,3 +140,17 @@ export function launchFilePath(paths: ConsolePaths): string {
 export function activeProfileFilePath(paths: ConsolePaths): string {
   return join(paths.config, 'profile.json');
 }
+
+/**
+ * Where a person's own network profiles live — a built-in overridden in
+ * part, or a profile added outright (TOON_Network#150).
+ *
+ * Beside {@link activeProfileFilePath} and nothing like it: the active-profile
+ * file is one id, small enough to rewrite whole on every switch, while this
+ * one holds whatever endpoints a person has typed in, atomically, at mode
+ * `0600` (`profile-store.ts` is what writes it — see that module for why the
+ * built-ins themselves are never copied here).
+ */
+export function userProfilesFilePath(paths: ConsolePaths): string {
+  return join(paths.config, 'profiles.json');
+}

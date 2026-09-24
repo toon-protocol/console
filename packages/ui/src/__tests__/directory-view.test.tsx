@@ -118,6 +118,8 @@ const health: Health = {
     relayUrl: RELAY,
     gatewayDomain: 'gw.test',
     gatewayConnectorUrl: 'https://gateway.test/ilp',
+    gasConnectorUrl: 'https://gas.test/ilp',
+    overriddenFields: [] as string[],
     rpc: {},
     origin: 'built-in',
     configured: true,

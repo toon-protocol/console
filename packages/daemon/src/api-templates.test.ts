@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { AccountSession } from './account-session.js';
 import { handleApi, type ApiDeps, type ApiResponse } from './api.js';
+import { writeApiFixture } from './api-fixtures.testkit.js';
 import { ChainSeedStore } from './chain-seed.js';
 import { InMemoryChainSeedCache } from './chain-seed-cache.js';
 import type { ConnectorHealth } from './connector-health.js';
@@ -20,6 +21,7 @@ import { ProfileStore } from './profile-store.js';
 import { DEVNET } from './profiles.js';
 import { queryRelays } from './relay-pool.js';
 import { SignerIndex, signerIndexPath } from './signer-index.js';
+import { NO_SSH_PLACEHOLDER_KEY } from './spawn-content.js';
 import type { TemplateSpawnRequest } from './template-spawn.js';
 import { readTemplates } from './templates.js';
 import { fakePublisher, imageEntryEvent, templateEvent } from './templates.testkit.js';
@@ -121,6 +123,9 @@ describe('the Template routes', () => {
     const body = response.body as { state: string; templates: { name: string }[] };
     expect(body.state).toBe('ok');
     expect(body.templates.map((template) => template.name)).toEqual(['static-site']);
+    // TOON_Network#146's Gallery stage checks its Rust type against this
+    // real answer.
+    writeApiFixture('templates', response.body);
   });
 
   it('expands a Template into a spawn', async () => {
@@ -133,6 +138,9 @@ describe('the Template routes', () => {
     const body = response.body as { spawn: { env: Record<string, string>; template: string } };
     expect(body.spawn.env).toEqual({ MODE: 'production', SITE_TITLE: 'a small site' });
     expect(body.spawn.template).toBe(address);
+    // TOON_Network#146's Form stage builds its spawn request straight from
+    // this answer's `spawn` — checked against its Rust type here too.
+    writeApiFixture('template-expand', response.body);
   });
 
   it('refuses a setting the Template did not mark tenant-settable', async () => {
@@ -154,10 +162,15 @@ describe('the Template routes', () => {
     expect(response.body).toMatchObject({ error: 'unknown_template' });
   });
 
-  it('asks for the SSH key rather than spawning without one', async () => {
+  it('asks for the SSH key rather than spawning without one, for a Template that offers SSH', async () => {
+    // `static-site` names no `ssh_offered` at all, which reads as "offers
+    // SSH" (`templates.ts`): the field is required, and `expandTemplate` is
+    // what says so now — this route no longer refuses a blank key itself, so
+    // a Template that says nothing still ends up refused, for the same
+    // reason but a more specific code (TOON_Network#138).
     const response = await call('POST', '/api/templates/expand', { template: address });
     expect(response.status).toBe(400);
-    expect(response.body).toMatchObject({ error: 'invalid_request' });
+    expect(response.body).toMatchObject({ error: 'invalid_ssh_key' });
   });
 
   it('answers 501 and the expansion while the paid spawn is unwired', async () => {
@@ -172,7 +185,7 @@ describe('the Template routes', () => {
     const body = response.body as { error: string; expansion: { spawn: { image: unknown } } };
     expect(body.error).toBe('spawn_unwired');
     expect(body.expansion.spawn.image).toMatchObject({
-      registry_entry: { address: `30434:${publisher.pubkey}:web:1.0` },
+      registry_entry: { address: `30434:${publisher.pubkey}:web:1.0`, relay: 'wss://relay.toon.test' },
     });
   });
 
@@ -202,6 +215,37 @@ describe('the Template routes', () => {
       MODE: 'production',
       SITE_TITLE: 'a small site',
     });
+  });
+
+  it('expands with no key at all for a Template that offers no SSH (TOON_Network#138)', async () => {
+    const noSshAddress = `30436:${publisher.pubkey}:smoke-http`;
+    const { dial } = fakeRelays([
+      {
+        url: RELAY,
+        events: [
+          ...relayEvents,
+          templateEvent(publisher, {
+            name: 'smoke-http',
+            ports: [{ containerPort: 80 }],
+            sshOffered: false,
+          }),
+        ],
+      },
+    ]);
+    deps = {
+      ...deps,
+      readTemplates: () =>
+        readTemplates({
+          profile: { ...DEVNET, relayUrl: RELAY },
+          timeoutMs: 200,
+          query: (query) => queryRelays({ ...query, dial }),
+        }),
+    };
+
+    const response = await call('POST', '/api/templates/expand', { template: noSshAddress });
+    expect(response.status).toBe(200);
+    const body = response.body as { spawn: { ssh_public_key: string } };
+    expect(body.spawn.ssh_public_key).toBe(NO_SSH_PLACEHOLDER_KEY);
   });
 
   it('will not sell a lease for an image it could not resolve', async () => {

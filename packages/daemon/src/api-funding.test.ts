@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { handleApi, type ApiDeps, type ApiResponse } from './api.js';
+import { writeApiFixture } from './api-fixtures.testkit.js';
 import { ChainSeedStore } from './chain-seed.js';
 import { InMemoryChainSeedCache } from './chain-seed-cache.js';
 import {
@@ -100,6 +101,34 @@ describe('the funding routes', () => {
     expect(answer.status).toBe(200);
     expect(status(answer).state).toBe('ready');
     expect(status(answer).chains.map((chain) => chain.chain)).toEqual(['evm:31337', 'solana']);
+
+    // The TUI's fixture contract (TOON_Network#139, ADR 0028; console TUI
+    // Funds, TOON_Network#147): the REAL response this assertion just
+    // checked, committed so `tui/`'s hand-kept Rust types are checked
+    // against it without running this daemon.
+    writeApiFixture('funding', status(answer));
+  });
+
+  it('answers the funding view scoped to a named connector, not just the profile’s own', async () => {
+    // TOON_Network#138 (console TUI New workload, "open a channel with this
+    // connector"): a spawn's preflight can name a connector that is not the
+    // active profile's own (the provider's own connector, spec §4.1), and
+    // `GET /api/funding?connector=<url>` is how the TUI reads that
+    // connector's own chains, decimals and `canOpen` before offering to open
+    // a channel with it.
+    const answer = await handleApi(deps, {
+      method: 'GET',
+      path: '/api/funding',
+      query: new URLSearchParams({ connector: 'https://provider.example/ilp' }),
+      body: undefined,
+    });
+    expect(answer.status).toBe(200);
+    expect(status(answer).state).toBe('ready');
+
+    // Same `FundingStatus` shape `funding` above reads for the profile's own
+    // connector — `tui/`'s hand-kept Rust type is checked against this real
+    // answer too, not just the un-scoped one.
+    writeApiFixture('funding-connector', status(answer));
   });
 
   it('carries no key material, in any answer, ever', async () => {

@@ -1,0 +1,200 @@
+{
+  "workloadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
+  "lease": {
+    "workloadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
+    "state": "live",
+    "standbySet": [
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001"
+    ],
+    "members": [
+      {
+        "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001",
+        "index": 0,
+        "role": "standalone",
+        "provider": {
+          "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001",
+          "ilp_address": "g.toon.provider",
+          "connector_url": "https://provider.example/ilp",
+          "connector_seal_key": "0x04aa"
+        },
+        "listing": {
+          "name": "basic",
+          "version": 1,
+          "address": "30432:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001:basic",
+          "lease_interval_s": 3600,
+          "price": 1000
+        },
+        "paidAt": "https://provider.example/ilp",
+        "paidChain": "evm:31337",
+        "state": "live",
+        "answeredRole": "standalone",
+        "expiresAt": 1893456000,
+        "access": {
+          "host": "203.0.113.7",
+          "ssh_port": 40000,
+          "ports": [
+            {
+              "container_port": 80,
+              "host_port": 41000
+            }
+          ]
+        },
+        "known": true
+      }
+    ],
+    "provider": {
+      "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001",
+      "ilp_address": "g.toon.provider",
+      "connector_url": "https://provider.example/ilp",
+      "connector_seal_key": "0x04aa"
+    },
+    "paidAt": "https://provider.example/ilp",
+    "paidChain": "evm:31337",
+    "listing": {
+      "name": "basic",
+      "version": 1,
+      "address": "30432:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001:basic",
+      "lease_interval_s": 3600,
+      "price": 1000
+    },
+    "profileId": "sandbox",
+    "image": {
+      "digest": "sha256:1474027c316661cdec87df2623e13a41e7e1ce0ba99c24917631de8f300b5420",
+      "reference": "traefik/whoami"
+    },
+    "ports": [
+      {
+        "container_port": 80,
+        "protocol": "tcp"
+      }
+    ],
+    "envKeys": [],
+    "sshOffered": true,
+    "createdAt": "2026-01-01T00:00:00.000Z",
+    "localOnly": false,
+    "role": "standalone",
+    "expiresAt": 1893456000,
+    "access": {
+      "host": "203.0.113.7",
+      "ssh_port": 40000,
+      "ports": [
+        {
+          "container_port": 80,
+          "host_port": 41000
+        }
+      ]
+    },
+    "source": "relays",
+    "relays": [
+      "wss://own.relay.test"
+    ],
+    "recordId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0002"
+  },
+  "provider": {
+    "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001",
+    "ilpAddress": "g.toon.provider",
+    "connectorUrl": "https://provider.example/ilp",
+    "hidden": false,
+    "liveness": "live",
+    "inDirectory": true
+  },
+  "status": {
+    "kind": "read",
+    "life": {
+      "phase": "ended",
+      "ending": "expired"
+    },
+    "expiresAt": 1893456000,
+    "readAt": "2026-01-01T00:00:00.000Z"
+  },
+  "runway": {
+    "listingPrice": 1000,
+    "leaseIntervalSeconds": 3600,
+    "memberRunways": [
+      {
+        "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001",
+        "index": 0,
+        "leaseIntervalSeconds": 3600,
+        "op": "extend",
+        "ended": true
+      }
+    ],
+    "readAt": "2026-01-01T00:00:00.000Z",
+    "state": "unknown",
+    "reason": "This lease has ended, so it has no runway. Money in the channel is still yours; it is simply not keeping this workload alive any more.",
+    "paidUntil": "2026-01-01T00:00:00.000Z",
+    "expirySource": "provider",
+    "paidSeconds": 0
+  },
+  "extend": {
+    "ok": false,
+    "problems": [
+      "This lease has ended (Expired: the paid time ran out with nothing extending it, and the provider has removed it. Extend it — or auto-extend — before the paid time runs out to keep one alive; spawning again is the only way to get it back.). §6.3 refuses an extension on an ended lease as `expired` and bills for the answer, and there is no way to restart one — a new workload is a new spawn."
+    ],
+    "route": {
+      "route": "g.toon.provider.basic.v1.extend",
+      "payAt": "https://provider.example/ilp",
+      "via": "provider-connector",
+      "reason": "Local sandbox's connector publishes no route carrying g.toon.provider.basic.v1.extend, so the packet is paid at the provider's own connector, which terminates it (spec §4.1, §5).",
+      "price": "1000",
+      "chain": "evm:31337",
+      "channelId": "0xchannel"
+    }
+  },
+  "members": [
+    {
+      "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001",
+      "index": 0,
+      "role": "standalone",
+      "provider": {
+        "ilpAddress": "g.toon.provider",
+        "connectorUrl": "https://provider.example/ilp",
+        "hidden": false,
+        "liveness": "live",
+        "inDirectory": true
+      },
+      "listing": {
+        "name": "basic",
+        "version": 1,
+        "address": "30432:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001:basic",
+        "lease_interval_s": 3600,
+        "price": 1000
+      },
+      "status": {
+        "kind": "read",
+        "life": {
+          "phase": "ended",
+          "ending": "expired"
+        },
+        "expiresAt": 1893456000,
+        "readAt": "2026-01-01T00:00:00.000Z"
+      },
+      "extend": {
+        "ok": false,
+        "op": "extend",
+        "problems": [
+          "This lease has ended (Expired: the paid time ran out with nothing extending it, and the provider has removed it. Extend it — or auto-extend — before the paid time runs out to keep one alive; spawning again is the only way to get it back.). §6.3 refuses an extension on an ended lease as `expired` and bills for the answer, and there is no way to restart one — a new workload is a new spawn."
+        ],
+        "route": {
+          "route": "g.toon.provider.basic.v1.extend",
+          "payAt": "https://provider.example/ilp",
+          "via": "provider-connector",
+          "reason": "Local sandbox's connector publishes no route carrying g.toon.provider.basic.v1.extend, so the packet is paid at the provider's own connector, which terminates it (spec §4.1, §5).",
+          "price": "1000",
+          "chain": "evm:31337",
+          "channelId": "0xchannel"
+        }
+      },
+      "runningNow": false,
+      "selfStopped": false,
+      "vaultState": "live",
+      "known": true
+    }
+  ],
+  "set": {
+    "members": 1,
+    "warm": false,
+    "pricePerInterval": "0"
+  },
+  "endedAs": "expired"
+}

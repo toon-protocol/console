@@ -329,6 +329,20 @@ export class ChainSeedStore {
    * What the UI shows. Addresses and event metadata only — by construction
    * there is no field here a mnemonic could be reached through.
    */
+  /**
+   * `status()`, with what a write costs read afresh first. Nothing on these
+   * routes hears about a channel the account opens on the Funds tab, so a
+   * `writes` kept from the last action would go on saying "no channel" until
+   * something else happened to recompute it. `GET /api/chain-seed` answers
+   * this; it is read on a view's load, not polled.
+   */
+  async read(): Promise<ChainSeedStatus> {
+    if (this.#signerOrReset()) {
+      this.#writes = await this.#deps.writer().targets();
+    }
+    return this.status();
+  }
+
   status(): ChainSeedStatus {
     const signer = this.#signerOrReset();
     const checkedAt = this.#at().toISOString();

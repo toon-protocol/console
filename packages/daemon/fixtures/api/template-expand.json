@@ -1,0 +1,27 @@
+{
+  "template": "30436:141418103fdd4f1badfe103a378c07b152d24046f9b2ce024a2612b34dd3d70b:static-site",
+  "spawn": {
+    "workload_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
+    "image": {
+      "digest": "sha256:c0a665205c6d8d1f4ee8e2e217efd7a467527df34100ca78f11cca5c17486126",
+      "registry_entry": {
+        "address": "30434:141418103fdd4f1badfe103a378c07b152d24046f9b2ce024a2612b34dd3d70b:web:1.0",
+        "relay": "wss://relay.toon.test"
+      }
+    },
+    "env": {
+      "MODE": "production",
+      "SITE_TITLE": "a small site"
+    },
+    "ports": [
+      {
+        "container_port": 8080,
+        "protocol": "tcp"
+      }
+    ],
+    "ssh_public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGxvbmdlbm91Z2hmb3JhdGVzdGtleQ tenant@fixture",
+    "template": "30436:141418103fdd4f1badfe103a378c07b152d24046f9b2ce024a2612b34dd3d70b:static-site"
+  },
+  "sshOffered": true,
+  "warnings": []
+}

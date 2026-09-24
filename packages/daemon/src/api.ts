@@ -37,7 +37,18 @@ import {
 } from './keystore.js';
 import type { ConsolePaths } from './paths.js';
 import { isConfigured, type NetworkProfile } from './profiles.js';
-import { UnknownProfileError, type ProfileStore } from './profile-store.js';
+import {
+  ActiveProfileError,
+  InvalidProfileIdError,
+  UnknownProfileError,
+  type ProfileEndpointsInput,
+  type ProfileStore,
+} from './profile-store.js';
+import {
+  isSandboxLike,
+  validateProfileEndpoints,
+  type ProfileEndpointInput,
+} from './profile-validation.js';
 import { RelayListError, type RelayMode } from './relay-list.js';
 import { RotationError, type RotationResult, type RotationView } from './rotation.js';
 import { RelayWriteError } from './relay-write.js';
@@ -49,12 +60,19 @@ import {
   type TemplateSettings,
   type TemplateSpawnPort,
 } from './template-spawn.js';
+import {
+  ConsoleTemplatePublishError,
+  type ConsoleTemplatePublishPreview,
+  type ConsoleTemplatePublishRequest,
+  type ConsoleTemplatePublishResult,
+} from './template-publish.js';
 import type { TemplateGalleryResult, TemplateView } from './templates.js';
 import type { DaemonVersion } from './version.js';
 import {
   WorkloadError,
   type DashboardView,
   type ExtendResult,
+  type ForgetResult,
   type TerminateResult,
   type WorkloadCard,
 } from './workload.js';
@@ -123,6 +141,13 @@ export interface ApiDeps {
    */
   readonly spawnFromTemplate?: TemplateSpawnPort | undefined;
   /**
+   * Publishing a Template AS the signed-in account, paying from its own
+   * relay channel (TOON_Network#138). Absent only in a build that did not
+   * wire it, and `POST /api/templates/publish(/preview)` say so rather than
+   * pretending.
+   */
+  readonly templatePublish?: TemplatePublishPort | undefined;
+  /**
    * The dashboard (TOON_Network#93). Absent only in a build that wired the
    * vault without it, and the routes say so rather than pretending.
    */
@@ -190,6 +215,8 @@ export interface WorkloadPort {
     workloadId: string,
     options?: { member?: string | undefined }
   ): Promise<TerminateResult>;
+  /** Drop an ended workload's Lease Vault entry (TOON_Network#138). */
+  forget(workloadId: string): Promise<ForgetResult>;
 }
 
 /** What `/api/workloads/<id>/gateway*` needs of `GatewayStore`, and no more. */
@@ -211,6 +238,12 @@ export interface AutoExtendPort {
   disarm(workloadId: string): AutoExtendPolicy | undefined;
 }
 
+/** What `/api/templates/publish(/preview)` needs of `ConsoleTemplatePublisher`. */
+export interface TemplatePublishPort {
+  preview(request: ConsoleTemplatePublishRequest): Promise<ConsoleTemplatePublishPreview>;
+  publish(request: ConsoleTemplatePublishRequest): Promise<ConsoleTemplatePublishResult>;
+}
+
 export interface ApiRequest {
   readonly method: string;
   readonly path: string;
@@ -226,6 +259,10 @@ export interface ApiResponse {
 export interface ProfileView extends NetworkProfile {
   readonly configured: boolean;
   readonly active: boolean;
+  /** Which endpoint fields a person has overridden (or, for a profile with
+   * no built-in, simply set) — `ENDPOINT_FIELD_NAMES`'s own spelling,
+   * `"rpc.evm"` included. Empty for a built-in nobody has touched. */
+  readonly overriddenFields: readonly string[];
 }
 
 export async function handleApi(deps: ApiDeps, request: ApiRequest): Promise<ApiResponse> {
@@ -253,6 +290,18 @@ export async function handleApi(deps: ApiDeps, request: ApiRequest): Promise<Api
       throw error;
     }
     return { status: 200, body: profilesBody(deps) };
+  }
+
+  if (
+    path.startsWith('/api/profiles/') &&
+    path !== '/api/profiles/active' &&
+    (method === 'PUT' || method === 'DELETE')
+  ) {
+    const id = decodeURIComponent(path.slice('/api/profiles/'.length));
+    if (id.length === 0 || id.includes('/')) {
+      return problem(404, 'not_found', 'no route matches this path and method.');
+    }
+    return method === 'PUT' ? putProfile(deps, id, request.body) : deleteProfile(deps, id);
   }
 
   if (path === '/api/desktop' || path.startsWith('/api/desktop/')) {
@@ -539,7 +588,7 @@ async function handleChainSeed(
 ): Promise<ApiResponse> {
   const at = (route: string, verb: string) => path === route && method === verb;
 
-  if (at('/api/chain-seed', 'GET')) return ok(seed.status());
+  if (at('/api/chain-seed', 'GET')) return ok(await seed.read());
 
   if (at('/api/chain-seed/refresh', 'POST')) {
     // Optional `relays`: extra places to LOOK, for a fresh machine whose
@@ -823,6 +872,48 @@ async function handleTemplates(
 
   if (
     method === 'POST' &&
+    (path === '/api/templates/publish/preview' || path === '/api/templates/publish')
+  ) {
+    const parsed = readTemplatePublishRequest(body);
+    if ('error' in parsed) return problem(400, 'invalid_request', parsed.error);
+
+    if (deps.templatePublish === undefined) {
+      // Not an error in the request: publishing AS the signed-in account is
+      // TOON_Network#138's own paid hop, same shape as #92's spawn above.
+      return problem(
+        501,
+        'template_publish_unwired',
+        'This console cannot yet publish a Template from the gallery. Use ' +
+          '`npm run template:publish` instead, or ask for TOON_Network#138 to be wired.'
+      );
+    }
+
+    try {
+      return ok(
+        path === '/api/templates/publish/preview'
+          ? await deps.templatePublish.preview(parsed.value)
+          : await deps.templatePublish.publish(parsed.value)
+      );
+    } catch (error) {
+      if (error instanceof ConsoleTemplatePublishError) {
+        return problem(error.status, error.code, error.message);
+      }
+      if (error instanceof RelayWriteError) {
+        return {
+          status: error.status,
+          body: {
+            error: error.code,
+            message: error.message,
+            ...(error.writes ? { relays: error.writes } : {}),
+          },
+        };
+      }
+      throw error;
+    }
+  }
+
+  if (
+    method === 'POST' &&
     (path === '/api/templates/expand' || path === '/api/templates/spawn')
   ) {
     const fields = asRecord(body);
@@ -1049,6 +1140,13 @@ async function handleWorkloads(
   try {
     if (action === undefined && method === 'GET') {
       return ok(await workloads.card(workloadId, { refresh }));
+    }
+    // Forgets an ENDED workload's Lease Vault entry, so it leaves the list
+    // (TOON_Network#138). `WorkloadStore.forget` refuses anything this
+    // console has not seen end — a live lease's Root Secret is the only
+    // thing that could ever stop it, and this route never touches one.
+    if (action === undefined && method === 'DELETE') {
+      return ok(await workloads.forget(workloadId));
     }
     if (action === 'status' && method === 'POST') {
       return ok(await workloads.card(workloadId, { refresh: true }));
@@ -1385,10 +1483,11 @@ function strings(fields: Record<string, unknown>, key: string): string[] | undef
 function readTemplateSettings(
   fields: Record<string, unknown>
 ): { value: TemplateSettings } | { error: string } {
-  const sshPublicKey = string(fields, 'sshPublicKey');
-  if (sshPublicKey === undefined) {
-    return { error: 'Body must carry the tenant’s `sshPublicKey`.' };
-  }
+  // Left blank here is not automatically wrong: a Template that does not
+  // offer SSH (`templates.ts`'s `sshOffered`) is expanded with none at all,
+  // and `expandTemplate` is what decides that — one place, so a check here
+  // cannot disagree with the one that actually matters (TOON_Network#138).
+  const sshPublicKey = string(fields, 'sshPublicKey') ?? '';
 
   let env: Record<string, string> | undefined;
   if (fields.env !== undefined) {
@@ -1529,6 +1628,31 @@ function asRecord(body: unknown): Record<string, unknown> {
   return typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : {};
 }
 
+/**
+ * `POST /api/templates/publish(/preview)`'s body: `{ template, image }`, where
+ * `template` is the `template.json` content itself (the TUI reads the file;
+ * this route never does) and `image` is the digest-pinned reference to build
+ * the Image Registry entry from.
+ */
+function readTemplatePublishRequest(
+  body: unknown
+): { value: ConsoleTemplatePublishRequest } | { error: string } {
+  const fields = asRecord(body);
+  const template = fields.template;
+  if (typeof template !== 'object' || template === null || Array.isArray(template)) {
+    return {
+      error: 'Body must include `template`, the template.json content, as a JSON object.',
+    };
+  }
+  const image = string(fields, 'image');
+  if (image === undefined) {
+    return {
+      error: 'Body must include `image`, the image to publish, by digest: `registry/repo@sha256:…`.',
+    };
+  }
+  return { value: { template, image } };
+}
+
 function string(fields: Record<string, unknown>, key: string): string | undefined {
   const value = fields[key];
   return typeof value === 'string' && value.length > 0 ? value : undefined;
@@ -1573,7 +1697,7 @@ async function healthBody(deps: ApiDeps, request: ApiRequest) {
         Math.round((now.getTime() - deps.startedAt.getTime()) / 1000)
       ),
     },
-    profile: toProfileView(profile, profile),
+    profile: toProfileView(profile, profile, deps.profiles.overriddenFields(profile.id)),
     connector,
     ...(anon === undefined ? {} : { anon }),
     storage: {
@@ -1590,12 +1714,143 @@ function profilesBody(deps: ApiDeps) {
   const active = deps.profiles.active();
   return {
     activeId: active.id,
-    profiles: deps.profiles.list().map((profile) => toProfileView(profile, active)),
+    profiles: deps.profiles
+      .list()
+      .map((profile) =>
+        toProfileView(profile, active, deps.profiles.overriddenFields(profile.id))
+      ),
   };
 }
 
-function toProfileView(profile: NetworkProfile, active: NetworkProfile): ProfileView {
-  return { ...profile, configured: isConfigured(profile), active: profile.id === active.id };
+function toProfileView(
+  profile: NetworkProfile,
+  active: NetworkProfile,
+  overriddenFields: readonly string[]
+): ProfileView {
+  return {
+    ...profile,
+    configured: isConfigured(profile),
+    active: profile.id === active.id,
+    overriddenFields: [...overriddenFields],
+  };
+}
+
+/**
+ * `PUT /api/profiles/<id>` (TOON_Network#150): overrides a subset of a
+ * built-in's endpoints, or adds a profile under a new id. Every URL is
+ * validated per field before anything is stored — `putProfile` never calls
+ * `ProfileStore.setEndpoints` with something `validateProfileEndpoints` has
+ * not already looked at, so a bad field never reaches disk even for the one
+ * `catch` below (`InvalidProfileIdError`, which is about the id, not a URL).
+ */
+function putProfile(deps: ApiDeps, id: string, body: unknown): ApiResponse {
+  const parsed = readProfileEndpointsBody(body);
+  if ('error' in parsed) return problem(400, 'invalid_request', parsed.error);
+
+  const endpoints: ProfileEndpointInput = {
+    connectorUrl: parsed.value.connectorUrl,
+    relayUrl: parsed.value.relayUrl,
+    gatewayDomain: parsed.value.gatewayDomain,
+    gatewayConnectorUrl: parsed.value.gatewayConnectorUrl,
+    gasConnectorUrl: parsed.value.gasConnectorUrl,
+    faucetUrl: parsed.value.faucetUrl,
+    rpc: parsed.value.rpc,
+  };
+  const errors = validateProfileEndpoints(endpoints, { sandboxLike: isSandboxLike(id) });
+  if (Object.keys(errors).length > 0) {
+    return problem(400, 'invalid_profile', 'One or more endpoints are invalid.', { errors });
+  }
+
+  // A brand-new id needs a label — the only thing a switcher would have to
+  // show for it otherwise. An id already known (built-in, or already added)
+  // needs none: it already has one.
+  const known = deps.profiles.list().some((profile) => profile.id === id);
+  if (!known && (parsed.value.label === undefined || parsed.value.label.trim().length === 0)) {
+    return problem(400, 'invalid_profile', 'A new profile needs a label.', {
+      errors: { label: 'A new profile needs a label.' },
+    });
+  }
+
+  try {
+    deps.profiles.setEndpoints(id, parsed.value);
+  } catch (error) {
+    if (error instanceof InvalidProfileIdError) {
+      return problem(400, 'invalid_profile_id', error.message);
+    }
+    throw error;
+  }
+  return { status: 200, body: profilesBody(deps) };
+}
+
+/**
+ * `DELETE /api/profiles/<id>`: resets a built-in's override, or removes a
+ * profile added under a new id — refused while that profile is the active
+ * one, so a person is never left with the active profile switched out from
+ * under them.
+ */
+function deleteProfile(deps: ApiDeps, id: string): ApiResponse {
+  try {
+    deps.profiles.resetOrRemove(id);
+  } catch (error) {
+    if (error instanceof UnknownProfileError)
+      return problem(404, 'unknown_profile', error.message);
+    if (error instanceof ActiveProfileError)
+      return problem(409, 'active_profile', error.message);
+    throw error;
+  }
+  return { status: 200, body: profilesBody(deps) };
+}
+
+/** `PUT /api/profiles/<id>`'s body: every field a string if present at all —
+ * `profile-store.ts#ProfileEndpointsInput`'s own shape, read defensively out
+ * of `unknown`. */
+function readProfileEndpointsBody(
+  body: unknown
+): { value: ProfileEndpointsInput } | { error: string } {
+  if (typeof body !== 'object' || body === null) {
+    return { error: 'Body must be a JSON object of profile fields.' };
+  }
+  const value = body as Record<string, unknown>;
+  const stringFields = [
+    'label',
+    'description',
+    'connectorUrl',
+    'relayUrl',
+    'gatewayDomain',
+    'gatewayConnectorUrl',
+    'gasConnectorUrl',
+    'faucetUrl',
+  ] as const;
+  const out: Record<string, string> = {};
+  for (const field of stringFields) {
+    const raw = value[field];
+    if (raw === undefined) continue;
+    if (typeof raw !== 'string') return { error: `\`${field}\` must be a string.` };
+    out[field] = raw;
+  }
+
+  let rpc: { evm?: string; solana?: string } | undefined;
+  if (value.rpc !== undefined) {
+    if (typeof value.rpc !== 'object' || value.rpc === null) {
+      return { error: '`rpc` must be an object.' };
+    }
+    const rpcValue = value.rpc as Record<string, unknown>;
+    const rpcOut: { evm?: string; solana?: string } = {};
+    for (const field of ['evm', 'solana'] as const) {
+      const raw = rpcValue[field];
+      if (raw === undefined) continue;
+      if (typeof raw !== 'string') return { error: `\`rpc.${field}\` must be a string.` };
+      rpcOut[field] = raw;
+    }
+    rpc = rpcOut;
+  }
+
+  return {
+    value: {
+      ...out,
+      ...(rpc !== undefined ? { rpc } : {}),
+    } as ProfileEndpointsInput,
+  };
 }
 
 /**

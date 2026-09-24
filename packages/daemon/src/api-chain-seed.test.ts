@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { AccountSession } from './account-session.js';
+import { writeApiFixture } from './api-fixtures.testkit.js';
 import { handleApi, type ApiDeps, type ApiResponse } from './api.js';
 import { CHAIN_SEED_KIND, ChainSeedStore, type ChainSeedStatus } from './chain-seed.js';
 import { InMemoryChainSeedCache } from './chain-seed-cache.js';
@@ -37,6 +38,13 @@ import { SignerIndex, signerIndexPath } from './signer-index.js';
  * The second rule is #120's ordering, seen from the outside: a mint answers
  * `not_yet_recoverable`, and only `POST /api/chain-seed/publish` — one paid
  * write — turns that into `ready`.
+ *
+ * This file is also the TUI's fixture source for the Chain Seed view
+ * (TOON_Network#142, ADR 0020): every state `ChainSeedCard` distinguishes —
+ * `unknown` (not looked for yet), `absent` before and after the custody
+ * warning is acknowledged, `not_yet_recoverable` ready to publish and
+ * blocked on payment, `ready`, and `unreadable` — gets a real response
+ * written via `writeApiFixture` at the point a test already asserts on it.
  */
 
 const PASSPHRASE = 'a passphrase for the test';
@@ -53,6 +61,13 @@ describe('the chain seed routes', () => {
   let toon: FakeRelayServer;
   let writer: FakeWriter;
   let session: AccountSession;
+  /**
+   * Kept by reference (rather than built inline in `deps`) so the
+   * `unreadable` test below can seed a stranger's cache directly — the same
+   * shortcut `chain-seed.test.ts`'s `seededCache` uses, since the API has no
+   * route that writes a raw event into another account's cache.
+   */
+  let cache: InMemoryChainSeedCache;
 
   const call = (method: string, path: string, body?: unknown): Promise<ApiResponse> =>
     handleApi(deps, { method, path, query: new URLSearchParams(), body });
@@ -66,6 +81,7 @@ describe('the chain seed routes', () => {
     own = fakeRelayServer(OWN);
     toon = fakeRelayServer(PROFILE_RELAY);
     writer = fakePaidWriter(toon);
+    cache = new InMemoryChainSeedCache();
     session = new AccountSession({
       keystore: new PassphraseFileKeystore(keystoreFilePath(paths)),
       signers: new SignerIndex(signerIndexPath(paths)),
@@ -77,7 +93,7 @@ describe('the chain seed routes', () => {
       chainSeed: new ChainSeedStore({
         signer: () => session.signingPort(),
         seedRelays: () => [PROFILE_RELAY],
-        cache: new InMemoryChainSeedCache(),
+        cache,
         writer: () => writer,
         dial: fakeRelayNetwork([own, toon]),
         timeoutMs: 200,
@@ -125,6 +141,7 @@ describe('the chain seed routes', () => {
     const before = await status();
     expect(before.state).toBe('signed_out');
     expect(before.warning.text).toMatch(/holds its funds/u);
+    writeApiFixture('chain-seed-signed-out', before);
 
     const minted = await call('POST', '/api/chain-seed/mint');
     expect(minted.status).toBe(409);
@@ -134,7 +151,22 @@ describe('the chain seed routes', () => {
   it('mints, holds, and publishes on a route of its own', async () => {
     const pubkey = await signIn();
 
+    // Signed in, but nothing has looked for a seed yet — `unknown`, not
+    // `absent`: the two must render differently (ADR 0020).
+    const freshlySignedIn = await status();
+    expect(freshlySignedIn.state).toBe('unknown');
+    writeApiFixture('chain-seed-unknown', freshlySignedIn);
+
     expect((await call('POST', '/api/chain-seed/acknowledge')).status).toBe(200);
+
+    // Acknowledged, then looked for and found nothing: `absent`, warning
+    // already acknowledged — the state the Mint/Import buttons render for.
+    const lookedAndAbsent = (await call('POST', '/api/chain-seed/refresh'))
+      .body as ChainSeedStatus;
+    expect(lookedAndAbsent.state).toBe('absent');
+    expect(lookedAndAbsent.warning.acknowledgedAt).toBeDefined();
+    writeApiFixture('chain-seed-absent-acknowledged', lookedAndAbsent);
+
     const minted = (await call('POST', '/api/chain-seed/mint')).body as ChainSeedStatus;
 
     expect(minted.state).toBe('not_yet_recoverable');
@@ -143,12 +175,14 @@ describe('the chain seed routes', () => {
     expect(minted.addresses?.evm.address).toMatch(/^0x/u);
     expect(minted.record).toBeUndefined();
     expect(toon.events).toEqual([]);
+    writeApiFixture('chain-seed-not-yet-recoverable', minted);
 
     const published = (await call('POST', '/api/chain-seed/publish')).body as ChainSeedStatus;
     expect(published.state).toBe('ready');
     expect(published.held).toBeUndefined();
     expect(published.lastPublish?.cost).toBe('1');
     expect(toon.events.some((event) => event.kind === CHAIN_SEED_KIND)).toBe(true);
+    writeApiFixture('chain-seed-ready', published);
   });
 
   it('imports a mnemonic and never echoes it back', async () => {
@@ -174,6 +208,22 @@ describe('the chain seed routes', () => {
     expect(JSON.stringify(bad.body)).not.toMatch(/horse/u);
   });
 
+  it('reads what a write costs afresh, so a channel opened since shows on the next read', async () => {
+    writer = brokeWriter(toon);
+    await signIn();
+    await call('POST', '/api/chain-seed/acknowledge');
+    const imported = await call('POST', '/api/chain-seed/import', { mnemonic: VECTOR });
+    expect((imported.body as ChainSeedStatus).writes.ready).toBe(false);
+
+    // The account opens a channel on the Funds tab. Nothing on the Chain Seed
+    // routes is told; a plain read must still stop saying "no channel".
+    writer = fakePaidWriter(toon);
+    const after = await status();
+    expect(after.state).toBe('not_yet_recoverable');
+    expect(after.writes.ready).toBe(true);
+    expect(after.writes.blockedBy).toBeUndefined();
+  });
+
   it('answers 402 when the write cannot be paid for, and keeps the seed held', async () => {
     writer = brokeWriter(toon);
     await signIn();
@@ -181,6 +231,10 @@ describe('the chain seed routes', () => {
 
     const imported = await call('POST', '/api/chain-seed/import', { mnemonic: VECTOR });
     expect((imported.body as ChainSeedStatus).state).toBe('not_yet_recoverable');
+    // Held, and `writes.ready` is false: nothing here can be paid for, so
+    // the TUI's Publish button must show why rather than a price.
+    expect((imported.body as ChainSeedStatus).writes.ready).toBe(false);
+    writeApiFixture('chain-seed-not-yet-recoverable-blocked', imported.body);
 
     const refused = await call('POST', '/api/chain-seed/publish');
     expect(refused.status).toBe(402);
@@ -196,9 +250,48 @@ describe('the chain seed routes', () => {
 
   it('refuses to mint before the warning has been read', async () => {
     await signIn();
+
+    // Looked for, found nothing, warning still unread: the custody warning
+    // must show, not the Mint/Import form (ADR 0020) — distinct from
+    // `chain-seed-absent-acknowledged` above only in `warning.acknowledgedAt`.
+    const lookedNotAcknowledged = (await call('POST', '/api/chain-seed/refresh'))
+      .body as ChainSeedStatus;
+    expect(lookedNotAcknowledged.state).toBe('absent');
+    expect(lookedNotAcknowledged.warning.acknowledgedAt).toBeUndefined();
+    writeApiFixture('chain-seed-absent', lookedNotAcknowledged);
+
     const refused = await call('POST', '/api/chain-seed/mint');
     expect(refused.status).toBe(409);
     expect(refused.body).toMatchObject({ error: 'warning_not_acknowledged' });
+  });
+
+  it('shows a record this signer cannot open as unreadable, rather than guessing', async () => {
+    // The account that actually seals and publishes the record.
+    const owner = await signIn();
+    await call('POST', '/api/chain-seed/acknowledge');
+    await call('POST', '/api/chain-seed/mint');
+    const published = (await call('POST', '/api/chain-seed/publish')).body as ChainSeedStatus;
+    expect(published.state).toBe('ready');
+    const event = toon.events.find((candidate) => candidate.kind === CHAIN_SEED_KIND);
+    expect(event).toBeDefined();
+    expect(event?.pubkey).toBe(owner);
+    await call('POST', '/api/account/signout');
+
+    // A second account whose cache is seeded — the only way, short of a
+    // second console entirely, that this account's own refresh sees an
+    // event sealed to somebody else's key. `#readRecords` filters by
+    // `authors: [pubkey]`, so no relay read would ever hand this event to a
+    // stranger; the cache does not filter, which is exactly the gap
+    // `chain-seed.test.ts`'s `seededCache` exercises directly.
+    const stranger = await signIn();
+    expect(stranger).not.toBe(owner);
+    cache.writeEvent(stranger, { event: event!, published: true });
+
+    const unreadable = (await call('POST', '/api/chain-seed/refresh'))
+      .body as ChainSeedStatus;
+    expect(unreadable.state).toBe('unreadable');
+    expect(unreadable.reason).toBeTruthy();
+    writeApiFixture('chain-seed-unreadable', unreadable);
   });
 
   it('publishes a relay list on request, and checks what it is given', async () => {

@@ -1,0 +1,40 @@
+[package]
+name = "toon-console-tui"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "The TOON Console, as a terminal UI (TOON_Network#138, ADR 0028)."
+
+[[bin]]
+name = "toon-console-tui"
+path = "src/main.rs"
+
+[dependencies]
+ratatui = "0.29"
+crossterm = { version = "0.28", features = ["event-stream"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "fs", "sync", "process"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+futures-util = "0.3"
+pulldown-cmark = { version = "0.13", default-features = false }
+zeroize = "1"
+qrcode = { version = "0.14.1", default-features = false }
+
+[dev-dependencies]
+image = { version = "0.25.10", default-features = false }
+insta = "1"
+rqrr = { version = "0.11.0", default-features = false, features = ["img"] }
+tempfile = "3"
+
+[features]
+# `cargo test --features smoke`: the TUI smoke (TOON_Network#149), against a
+# live daemon. Off by default, so plain `cargo test` and CI never build it.
+smoke = []
+
+[[test]]
+name = "smoke"
+path = "tests/smoke.rs"
+harness = false
+required-features = ["smoke"]

@@ -1,0 +1,32 @@
+---
+source: src/views/chain_seed.rs
+expression: output
+---
+┌ Chain Seed — not readable ─────────────────────────────────────────────────────────────┐
+│This account has a Chain Seed record, but the signer in use did not open it.            │
+│This account's key does not open that record: invalid MAC                               │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+└────────────────────────────────────────────────────────────────────────────────────────┘

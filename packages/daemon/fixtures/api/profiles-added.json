@@ -1,0 +1,72 @@
+{
+  "activeId": "devnet",
+  "profiles": [
+    {
+      "id": "devnet",
+      "label": "Devnet",
+      "description": "TOON Network's public test network.",
+      "connectorUrl": "https://proxy.relay.devnet.toonprotocol.dev/ilp",
+      "relayUrl": "wss://relay-ws.devnet.toonprotocol.dev",
+      "gatewayDomain": "gw.devnet.toonprotocol.dev",
+      "gatewayConnectorUrl": "https://proxy.gateway.devnet.toonprotocol.dev/ilp",
+      "gasConnectorUrl": "https://proxy.gas.devnet.toonprotocol.dev/ilp",
+      "faucetUrl": "https://faucet.devnet.toonprotocol.dev",
+      "rpc": {},
+      "origin": "built-in",
+      "configured": true,
+      "active": true,
+      "overriddenFields": []
+    },
+    {
+      "id": "sandbox",
+      "label": "Local sandbox",
+      "description": "The docker sandbox in infra/sandbox, on this machine's loopback.",
+      "connectorUrl": "http://localhost:3200/ilp",
+      "relayUrl": "ws://localhost:7100",
+      "gatewayDomain": "gw.localhost:3280",
+      "gatewayConnectorUrl": "http://localhost:3260/ilp",
+      "gasConnectorUrl": "http://localhost:3220/ilp",
+      "rpc": {
+        "evm": "http://localhost:8545",
+        "solana": "http://localhost:8899"
+      },
+      "origin": "built-in",
+      "configured": true,
+      "active": false,
+      "overriddenFields": []
+    },
+    {
+      "id": "mainnet",
+      "label": "Mainnet",
+      "description": "Reserved. No public mainnet connector has been announced yet.",
+      "connectorUrl": "",
+      "relayUrl": "",
+      "gatewayDomain": "",
+      "gatewayConnectorUrl": "",
+      "gasConnectorUrl": "",
+      "rpc": {},
+      "origin": "built-in",
+      "configured": false,
+      "active": false,
+      "overriddenFields": []
+    },
+    {
+      "id": "my-devnet",
+      "label": "My devnet fork",
+      "description": "",
+      "connectorUrl": "https://my-fork.example/ilp",
+      "relayUrl": "wss://my-fork.example",
+      "gatewayDomain": "",
+      "gatewayConnectorUrl": "",
+      "gasConnectorUrl": "",
+      "rpc": {},
+      "origin": "user",
+      "configured": true,
+      "active": false,
+      "overriddenFields": [
+        "connectorUrl",
+        "relayUrl"
+      ]
+    }
+  ]
+}

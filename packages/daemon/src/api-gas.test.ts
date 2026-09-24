@@ -6,6 +6,7 @@ import { base58 } from '@scure/base';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { handleApi, type ApiDeps, type ApiResponse } from './api.js';
+import { writeApiFixture } from './api-fixtures.testkit.js';
 import { ChainSeedStore } from './chain-seed.js';
 import { InMemoryChainSeedCache } from './chain-seed-cache.js';
 import {
@@ -182,6 +183,12 @@ describe('the gas routes', () => {
     expect((solana?.['payer'] as Record<string, unknown>)['chain']).toBe(EVM_SETTLEMENT.chain);
     // The price the PAYING connector quoted, repeated and never recomputed.
     expect(solana?.['price']).toBe('1100');
+
+    // The TUI's fixture contract (TOON_Network#139, ADR 0028; console TUI
+    // Funds, TOON_Network#147): the REAL response this assertion just
+    // checked, committed so `tui/`'s hand-kept Rust types are checked
+    // against it without running this daemon.
+    writeApiFixture('gas-station', body(answer));
   });
 
   it('refuses a body that does not name the chain it is buying FOR', async () => {
@@ -207,6 +214,7 @@ describe('the gas routes', () => {
     expect(body(quoted)['lamports']).toBe('10000000');
     // Both packets, and what each cost.
     expect((body(quoted)['attempts'] as unknown[]).length).toBe(2);
+    writeApiFixture('gas-quote', body(quoted));
 
     const stale = await call('POST', '/api/funding/gas/buy', {
       chain: 'solana',
@@ -241,6 +249,7 @@ describe('the gas routes', () => {
     // The gas landed at this account's own address on the blocked chain.
     expect(body(bought)['recipient']).toBe(seed.status().addresses?.solana.address);
     expect(body(bought)['cost']).toBe('3300');
+    writeApiFixture('gas-purchase', body(bought));
   });
 
   it('carries what a refusal cost out with the refusal', async () => {

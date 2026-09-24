@@ -1,0 +1,58 @@
+{
+  "entryKind": 30434,
+  "entryAddress": "30434:01ba32960d2425cb4cec4ff19dc05da7d983f4633ed1dfca454390f79f70c88e:ssh-box:latest",
+  "entryEvent": {
+    "kind": 30434,
+    "created_at": 1790285147,
+    "tags": [
+      [
+        "d",
+        "ssh-box:latest"
+      ],
+      [
+        "x",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000"
+      ],
+      [
+        "L",
+        "toon.network"
+      ]
+    ],
+    "content": "{\"digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000\",\"media_type\":\"application/vnd.oci.image.manifest.v1+json\",\"blobs\":[{\"digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000\",\"size\":512,\"media_type\":\"application/vnd.oci.image.manifest.v1+json\",\"source\":{\"type\":\"oci\",\"registry\":\"ghcr.io\",\"repository\":\"toon-protocol/ssh-box\"}},{\"digest\":\"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"size\":1234,\"media_type\":\"application/vnd.oci.image.config.v1+json\",\"source\":{\"type\":\"oci\",\"registry\":\"ghcr.io\",\"repository\":\"toon-protocol/ssh-box\"}},{\"digest\":\"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"size\":2226327,\"media_type\":\"application/vnd.oci.image.layer.v1.tar+gzip\",\"source\":{\"type\":\"oci\",\"registry\":\"ghcr.io\",\"repository\":\"toon-protocol/ssh-box\"}}]}"
+  },
+  "templateKind": 30436,
+  "templateAddress": "30436:01ba32960d2425cb4cec4ff19dc05da7d983f4633ed1dfca454390f79f70c88e:ssh-box",
+  "templateEvent": {
+    "kind": 30436,
+    "created_at": 1790285147,
+    "tags": [
+      [
+        "d",
+        "ssh-box"
+      ],
+      [
+        "L",
+        "toon.network"
+      ]
+    ],
+    "content": "{\"version\":1,\"image\":{\"digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000\",\"registry_entry\":{\"address\":\"30434:01ba32960d2425cb4cec4ff19dc05da7d983f4633ed1dfca454390f79f70c88e:ssh-box:latest\",\"relay\":\"wss://relay.toon.test\"}},\"ports\":[{\"container_port\":22,\"protocol\":\"tcp\"}],\"env_fixed\":{},\"env_tenant\":[],\"title\":\"SSH box (Alpine)\",\"summary\":\"An SSH shell with your key and nothing else.\",\"ssh_key\":{\"required\":true,\"note\":\"your own key\"}}"
+  },
+  "imageDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
+  "title": "SSH box (Alpine)",
+  "summary": "An SSH shell with your key and nothing else.",
+  "targets": {
+    "relays": [
+      "wss://relay.toon.test"
+    ],
+    "plan": [
+      {
+        "url": "wss://relay.toon.test",
+        "ready": false,
+        "code": "no_channel",
+        "reason": "This account holds no payment channel with the connector at https://connector.test/ilp, so a write to this network’s relay cannot be paid for."
+      }
+    ],
+    "ready": false,
+    "blockedBy": "This account holds no payment channel with the connector at https://connector.test/ilp, so a write to this network’s relay cannot be paid for."
+  }
+}

@@ -1,0 +1,65 @@
+{
+  "daemon": {
+    "name": "@toon-protocol/console-daemon",
+    "version": "0.1.0",
+    "node": "v26.7.0",
+    "pid": 424242,
+    "startedAt": "2026-01-01T00:00:00.000Z",
+    "uptimeSeconds": 3600
+  },
+  "profile": {
+    "id": "devnet",
+    "label": "Devnet",
+    "description": "TOON Network's public test network.",
+    "connectorUrl": "https://proxy.relay.devnet.toonprotocol.dev/ilp",
+    "relayUrl": "wss://relay-ws.devnet.toonprotocol.dev",
+    "gatewayDomain": "gw.devnet.toonprotocol.dev",
+    "gatewayConnectorUrl": "https://proxy.gateway.devnet.toonprotocol.dev/ilp",
+    "gasConnectorUrl": "https://proxy.gas.devnet.toonprotocol.dev/ilp",
+    "faucetUrl": "https://faucet.devnet.toonprotocol.dev",
+    "rpc": {},
+    "origin": "built-in",
+    "configured": true,
+    "active": true,
+    "overriddenFields": []
+  },
+  "connector": {
+    "state": "ok",
+    "endpoint": "https://connector.example",
+    "selfEndpoint": "https://connector.example",
+    "ilpAddresses": [
+      "g.toon.relay"
+    ],
+    "settlements": [
+      {
+        "chain": "evm:84532",
+        "kind": "evm",
+        "settlementAddress": "0x3f43",
+        "tokenAddress": "0x49be",
+        "decimals": 6
+      }
+    ],
+    "routes": [
+      {
+        "prefix": "g.toon.relay",
+        "price": "1"
+      }
+    ],
+    "peerCarriages": [],
+    "supportedVersions": [
+      1
+    ]
+  },
+  "anon": {
+    "state": "ready",
+    "socksProxy": "socks5h://127.0.0.1:9050",
+    "reason": "A SOCKS5h proxy answered at socks5h://127.0.0.1:9050, so a `.anyone` address can be dialled."
+  },
+  "storage": {
+    "data": "/tmp/toon-console-fixture/.local/share/toon-console",
+    "config": "/tmp/toon-console-fixture/.config/toon-console",
+    "runtime": "/tmp/toon-console-fixture/.local/share/toon-console/toon-console",
+    "channels": "/tmp/toon-console-fixture/.local/share/toon-console/profiles/devnet/channels/channels.json"
+  },
+  "checkedAt": "2026-01-01T00:00:00.000Z"
+}

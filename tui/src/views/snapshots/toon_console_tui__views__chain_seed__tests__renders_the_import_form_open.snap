@@ -1,0 +1,32 @@
+---
+source: src/views/chain_seed.rs
+expression: output
+---
+┌ Chain Seed — none yet ─────────────────────────────────────────────────────────────────┐
+│This account has no Chain Seed yet. Mint a new one, or import a phrase you already use. │
+│                                                                                        │
+│ Mint a Chain Seed                                                                      │
+│ Import a mnemonic                                                                      │
+│                                                                                        │
+│12 or 24 BIP-39 words: •••••••••••••••••••••                                            │
+│Sealed to this account and held on this machine until you publish it; never shown again.│
+│ Import as the Chain Seed                                                               │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+│                                                                                        │
+└────────────────────────────────────────────────────────────────────────────────────────┘

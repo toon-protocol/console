@@ -1,0 +1,35 @@
+//! The TOON Console TUI's library surface, so both `main.rs` and the
+//! `tests/` integration tests can reach every module.
+//!
+//! Module layout, for later view tickets:
+//! - `app`       — `View`, `App`, the keymap (`handle_key`, `handle_mouse`).
+//! - `api`       — one function per daemon route the TUI calls, shared by
+//!   `main.rs` and the smoke (`tests/smoke.rs`).
+//! - `client`    — `DaemonClient`: the one place an HTTP request is made.
+//! - `launch`    — the launch-record reader.
+//! - `types`     — hand-kept API types, mirroring `packages/ui/src/lib/daemon.ts`.
+//! - `desktop`   — the `/api/desktop` long poll.
+//! - `ui`        — the shell (header, sidebar, footer, help overlay).
+//! - `views::*`  — one module per sidebar view.
+//! - `widgets::*` — reusable pieces a view's own module draws with: a masked
+//!   text field (`widgets::input`), a filterable list's key handling
+//!   (`widgets::list`) and a confirmation modal that one keypress cannot
+//!   pass (`widgets::confirm`) — Workloads (extend/terminate/auto-extend/
+//!   rotate/gateway), Funds (open channel/buy gas) and Chain Seed (publish)
+//!   all reuse the last one rather than growing their own.
+//! - `format`    — small display formatters shared by views.
+//! - `markdown`  — Markdown -> ratatui `Text`, for the Docs view.
+//! - `clipboard` — `wl-copy`, or a message saying it is not there.
+
+pub mod api;
+pub mod app;
+pub mod client;
+pub mod clipboard;
+pub mod desktop;
+pub mod format;
+pub mod launch;
+pub mod markdown;
+pub mod types;
+pub mod ui;
+pub mod views;
+pub mod widgets;

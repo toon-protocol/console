@@ -1,0 +1,104 @@
+name: ssh-box image
+
+# Builds images/ssh-box — an image that serves SSH on port 22 with the key the
+# provider hands it in SSH_PUBLIC_KEY (TOON_Network#138) — proves it with
+# images/ssh-box/test.sh against a real Docker daemon, and pushes it to GHCR.
+#
+# A Template references the image by DIGEST, never by tag, so the tags here are
+# only handles for finding a digest: `sha-<short sha>` on every push, and
+# `latest` on main. The pushed digest is printed in the job summary.
+#
+# Not part of ci.yml's `ci-ok` aggregate: this workflow is path-filtered, so it
+# does not run at all for a pull request that leaves images/ssh-box alone, and
+# a required check that never starts would block every such pull request.
+
+on:
+  pull_request:
+    paths:
+      - 'images/ssh-box/**'
+      - '.github/workflows/ssh-box.yml'
+  push:
+    branches: [main, m9-tui-integration]
+    paths:
+      - 'images/ssh-box/**'
+      - '.github/workflows/ssh-box.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      # Builds the image itself, runs it with the provider's own flags, logs in
+      # over SSH with a throwaway key, and checks that a missing key and a
+      # password are both refused.
+      - run: images/ssh-box/test.sh
+
+  publish:
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/ssh-box
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha
+
+      # Two architectures: nothing here compiles, so the arm64 leg is cheap,
+      # and a provider on an arm64 host can run it as-is.
+      - name: Build and push
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: images/ssh-box
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summary
+        run: |
+          {
+            echo "### ssh-box pushed"
+            echo
+            echo "Digest: \`${{ steps.push.outputs.digest }}\`"
+            echo
+            echo "Reference for a Template: \`ghcr.io/${{ github.repository_owner }}/ssh-box@${{ steps.push.outputs.digest }}\`"
+            echo
+            echo "Tags:"
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

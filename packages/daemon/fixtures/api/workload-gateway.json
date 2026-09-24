@@ -1,0 +1,19 @@
+{
+  "workloadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
+  "hostname": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000.gw.example",
+  "gateway": {
+    "connectorUrl": "https://gateway.example/ilp",
+    "ilpAddress": "g.toon.workload-gateway",
+    "route": "g.toon.workload-gateway.handover",
+    "price": "0",
+    "domain": "gw.example"
+  },
+  "held": false,
+  "problems": [],
+  "ok": true,
+  "ports": [
+    80
+  ],
+  "httpPort": 80,
+  "checkedAt": "2026-01-01T00:00:00.000Z"
+}

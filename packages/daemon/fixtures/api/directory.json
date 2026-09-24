@@ -1,0 +1,207 @@
+{
+  "state": "ok",
+  "relays": {
+    "seed": [
+      "wss://seed.test"
+    ],
+    "read": [
+      {
+        "url": "wss://seed.test",
+        "state": "read",
+        "events": 9
+      },
+      {
+        "url": "wss://acme.relay.test",
+        "state": "failed",
+        "events": 0,
+        "reason": "no relay at wss://acme.relay.test"
+      }
+    ]
+  },
+  "filters": {},
+  "providers": [
+    {
+      "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
+      "profile": {
+        "ilpAddress": "g.test.provider",
+        "connectorUrl": "https://connector.test/ilp",
+        "connectorSealKey": "0x04",
+        "relays": [
+          "wss://seed.test",
+          "wss://acme.relay.test"
+        ],
+        "settlement": [
+          {
+            "chain": "evm:84532",
+            "token": "0xtoken",
+            "decimals": 6
+          }
+        ],
+        "isolation": "shared-kernel",
+        "hidden": false,
+        "host": "203.0.113.7",
+        "livenessCadenceSeconds": 60,
+        "publishedAt": "2026-01-01T00:00:00.000Z",
+        "eventId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001"
+      },
+      "liveness": {
+        "state": "live",
+        "publishedAt": "2026-01-01T00:00:00.000Z",
+        "expiresAt": "2026-01-01T00:00:00.000Z",
+        "secondsUntilExpiry": 120,
+        "cadenceSeconds": 60
+      },
+      "listings": [
+        {
+          "name": "arm",
+          "address": "30432:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000:arm",
+          "version": 1,
+          "resources": {
+            "cpuMillicores": 1000,
+            "memoryMb": 1024,
+            "storageGb": 10
+          },
+          "arch": "arm64",
+          "isolation": "shared-kernel",
+          "hidden": false,
+          "leaseIntervalSeconds": 3600,
+          "price": 800,
+          "capabilities": [],
+          "unspecifiedCapabilities": [],
+          "publishedAt": "2026-01-01T00:00:00.000Z",
+          "eventId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0002",
+          "available": 2
+        },
+        {
+          "name": "basic",
+          "address": "30432:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000:basic",
+          "version": 1,
+          "resources": {
+            "cpuMillicores": 1000,
+            "memoryMb": 1024,
+            "storageGb": 10
+          },
+          "arch": "amd64",
+          "isolation": "shared-kernel",
+          "hidden": false,
+          "leaseIntervalSeconds": 3600,
+          "price": 1000,
+          "standbyPrice": 400,
+          "capabilities": [],
+          "unspecifiedCapabilities": [],
+          "publishedAt": "2026-01-01T00:00:00.000Z",
+          "eventId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0003",
+          "available": 3
+        },
+        {
+          "name": "ci",
+          "address": "30432:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000:ci",
+          "version": 1,
+          "resources": {
+            "cpuMillicores": 1000,
+            "memoryMb": 1024,
+            "storageGb": 10
+          },
+          "arch": "amd64",
+          "isolation": "shared-kernel",
+          "hidden": false,
+          "leaseIntervalSeconds": 3600,
+          "price": 5000,
+          "capabilities": [
+            "docker"
+          ],
+          "unspecifiedCapabilities": [],
+          "publishedAt": "2026-01-01T00:00:00.000Z",
+          "eventId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0004",
+          "available": 1
+        },
+        {
+          "name": "gpu",
+          "address": "30432:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000:gpu",
+          "version": 1,
+          "resources": {
+            "cpuMillicores": 1000,
+            "memoryMb": 1024,
+            "storageGb": 10,
+            "gpu": "nvidia-a100-80gb"
+          },
+          "arch": "amd64",
+          "isolation": "shared-kernel",
+          "hidden": false,
+          "leaseIntervalSeconds": 3600,
+          "price": 20000,
+          "capabilities": [],
+          "unspecifiedCapabilities": [],
+          "publishedAt": "2026-01-01T00:00:00.000Z",
+          "eventId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0005",
+          "available": 0
+        }
+      ],
+      "relaysRead": [
+        "wss://seed.test"
+      ],
+      "supersededListings": 0,
+      "rejectedListings": []
+    },
+    {
+      "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0006",
+      "profile": {
+        "ilpAddress": "g.test.provider",
+        "connectorUrl": "https://connector.test/ilp",
+        "connectorSealKey": "0x04",
+        "relays": [
+          "wss://seed.test"
+        ],
+        "settlement": [
+          {
+            "chain": "evm:84532",
+            "token": "0xtoken",
+            "decimals": 6
+          }
+        ],
+        "isolation": "shared-kernel",
+        "hidden": true,
+        "livenessCadenceSeconds": 60,
+        "publishedAt": "2026-01-01T00:00:00.000Z",
+        "eventId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0007"
+      },
+      "liveness": {
+        "state": "live",
+        "publishedAt": "2026-01-01T00:00:00.000Z",
+        "expiresAt": "2026-01-01T00:00:00.000Z",
+        "secondsUntilExpiry": 90,
+        "cadenceSeconds": 60
+      },
+      "listings": [
+        {
+          "name": "quiet",
+          "address": "30432:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0006:quiet",
+          "version": 1,
+          "resources": {
+            "cpuMillicores": 1000,
+            "memoryMb": 1024,
+            "storageGb": 10
+          },
+          "arch": "amd64",
+          "isolation": "shared-kernel",
+          "hidden": true,
+          "leaseIntervalSeconds": 3600,
+          "price": 9000,
+          "capabilities": [],
+          "unspecifiedCapabilities": [],
+          "publishedAt": "2026-01-01T00:00:00.000Z",
+          "eventId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0008",
+          "available": 1
+        }
+      ],
+      "relaysRead": [
+        "wss://seed.test"
+      ],
+      "supersededListings": 0,
+      "rejectedListings": []
+    }
+  ],
+  "listingsWithoutProfile": 0,
+  "rejectedEvents": 0,
+  "readAt": "2026-01-01T00:00:00.000Z"
+}

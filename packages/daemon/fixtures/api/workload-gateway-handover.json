@@ -1,0 +1,49 @@
+{
+  "sent": true,
+  "problems": [],
+  "route": {
+    "route": "g.toon.workload-gateway.handover",
+    "payAt": "https://gateway.example/ilp",
+    "via": "provider-connector",
+    "reason": "https://gateway.example/ilp prices g.toon.workload-gateway.handover at nothing, so this packet is bought where it is free (spec §5, §12). A connector that merely forwards charges its own fee to carry it.",
+    "price": "0",
+    "chain": "evm:31337",
+    "channelId": "0xchannel"
+  },
+  "hostname": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000.gw.example",
+  "expectedHostname": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000.gw.example",
+  "matches": true,
+  "expiresAt": 1893456000,
+  "view": {
+    "workloadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
+    "hostname": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000.gw.example",
+    "gateway": {
+      "connectorUrl": "https://gateway.example/ilp",
+      "ilpAddress": "g.toon.workload-gateway",
+      "route": "g.toon.workload-gateway.handover",
+      "price": "0",
+      "domain": "gw.example"
+    },
+    "handover": {
+      "hostname": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000.gw.example",
+      "expiresAt": 1893456000,
+      "httpPort": 80,
+      "name": "blog",
+      "standbySet": [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001"
+      ],
+      "connectorUrl": "https://gateway.example/ilp",
+      "route": "g.toon.workload-gateway.handover",
+      "at": "2026-01-01T00:00:00.000Z"
+    },
+    "held": true,
+    "expired": false,
+    "problems": [],
+    "ok": true,
+    "ports": [
+      80
+    ],
+    "httpPort": 80,
+    "checkedAt": "2026-01-01T00:00:00.000Z"
+  }
+}

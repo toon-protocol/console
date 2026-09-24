@@ -1,0 +1,34 @@
+---
+source: src/views/directory.rs
+expression: "render(&state, NOW_MS, false)"
+---
+┌ Directory ───────────────────────────────────────────────────────────────────────────────────────┐
+│Isolation any  Arch any  GPU any  Hidden both  Grants none                                        │
+│i isolation  a arch  g gpu  d/n capability  H hidden  x clear  r refresh  Enter detail            │
+│Read free over NIP-01 from 2 relays at 2026-09-22T12:00:00.000Z — wss://acme.relay.test (failed)  │
+│g.acme  [shared-kernel]   live · 2m left                                                          │
+│▶ basic    ┌ basic — g.acme ──────────────────────────────────────────────────────────┐           │
+│  ci       │Price: 1,000 µUSDC / 1h                                                   │ 3 avail   │
+│  gpu      │Standby: no warm standby                                                  │a-a100-80gb│
+│g.shady  [s│Resources: 1000 mCPU · 1024 MB · 10 GB                                    │           │
+│  quiet    │Arch / Isolation: amd64 / shared-kernel                                   │           │
+│           │Capabilities: none                                                        │           │
+│           │Available now: 3                                                          │           │
+│           │                                                                          │           │
+│           │Provider Profile                                                          │           │
+│           │Pubkey: acme                                                              │           │
+│           │Connector: https://connector.test/ilp                                     │           │
+│           │Host: 203.0.113.7                                                         │           │
+│           │Relay Set: wss://seed.test                                                │           │
+│           │Settles: evm:84532                                                        │           │
+│           │Liveness: live · 2m left                                                  │           │
+│           │                                                                          │           │
+│           │Enter / Esc / q closes                                                    │           │
+│           │                                                                          │           │
+│           │                                                                          │           │
+│           └──────────────────────────────────────────────────────────────────────────┘           │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘

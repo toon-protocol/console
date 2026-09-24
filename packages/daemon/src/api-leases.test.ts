@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { handleApi, type ApiDeps, type ApiResponse } from './api.js';
+import { writeApiFixture } from './api-fixtures.testkit.js';
 import { ChainSeedStore } from './chain-seed.js';
 import { InMemoryChainSeedCache } from './chain-seed-cache.js';
 import {
@@ -27,7 +28,12 @@ import {
 } from './lease.testkit.js';
 import { fakeProviderPort } from './lease.testkit.js';
 import type { LeaseVaultStatus } from './lease-vault.js';
-import { activeProfileFilePath, consolePaths, type ConsolePaths } from './paths.js';
+import {
+  activeProfileFilePath,
+  consolePaths,
+  profileDataDir,
+  type ConsolePaths,
+} from './paths.js';
 import { ProfileStore } from './profile-store.js';
 import { SANDBOX } from './profiles.js';
 
@@ -127,6 +133,10 @@ describe('the lease routes', () => {
   it('spawns, and lists the workload afterwards', async () => {
     const spawned = await call('POST', '/api/leases/spawn', GOOD_SPAWN);
     expect(spawned.status).toBe(200);
+    // TOON_Network#146's New workload view spawns through this exact route;
+    // its preflight confirmation and post-spawn "select the new workload"
+    // hook are checked against this real answer's shape.
+    writeApiFixture('leases-spawn', spawned.body);
 
     const listed = (await call('GET', '/api/leases')).body as LeaseVaultStatus;
     expect(listed.leases).toHaveLength(1);
@@ -153,6 +163,37 @@ describe('the lease routes', () => {
     expect(answer.status).toBe(200);
     expect(answer.body).toMatchObject({ ok: true, route: 'g.toon.provider.basic.v1.spawn' });
     expect(port.sent).toHaveLength(0);
+    // TOON_Network#146's Preflight stage checks its Rust type against this
+    // real answer.
+    writeApiFixture('leases-preflight', answer.body);
+  });
+
+  it('names the connector to open a channel with, and no channel id, when none is bound yet', async () => {
+    // TOON_Network#138 (console TUI New workload, "open a channel with this
+    // connector"): a rebuild starts from no channel at all — the same rule
+    // `lease.test.ts`'s own `build()` states — so this is the exact preflight
+    // the TUI's Preflight stage detects `o` on: `payment.channelId` absent,
+    // structurally, never by matching `problems`' prose.
+    rmSync(join(profileDataDir(paths, SANDBOX.id), 'channels'), {
+      recursive: true,
+      force: true,
+    });
+
+    const answer = await call('POST', '/api/leases/preflight', GOOD_SPAWN);
+    expect(answer.status).toBe(200);
+    const body = answer.body as {
+      ok: boolean;
+      problems: string[];
+      payment?: { connectorUrl: string; channelId?: string; chain?: string };
+    };
+    expect(body.ok).toBe(false);
+    expect(body.problems.join(' ')).toMatch(/No payment channel/u);
+    expect(body.payment?.connectorUrl).toBe(PROVIDER_CONNECTOR);
+    expect(body.payment?.channelId).toBeUndefined();
+
+    // `tui/`'s Rust type is checked against this real "no channel" answer
+    // too, not only the "already open" one `leases-preflight` fixes.
+    writeApiFixture('leases-preflight-no-channel', answer.body);
   });
 
   it('surfaces the provider’s OWN code when a spawn is refused', async () => {

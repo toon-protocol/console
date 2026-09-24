@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { writeApiFixture } from './api-fixtures.testkit.js';
 import {
   ANY_GPU,
   K_LISTING,
@@ -315,9 +316,16 @@ describe('filters', () => {
   });
 
   it('shows Hidden Providers alongside the rest, only them, or none of them', async () => {
-    expect(names((await read(everything())).view)).toContain('quiet');
+    const { view } = await read(everything());
+    expect(names(view)).toContain('quiet');
     expect(names((await read(everything(), { hidden: true })).view)).toEqual(['quiet']);
     expect(names((await read(everything(), { hidden: false })).view)).not.toContain('quiet');
+
+    // The TUI's fixture contract (TOON_Network#139, ADR 0028): the REAL,
+    // unfiltered answer this assertion just checked — a mixed network with a
+    // GPU tier, a capability, an arch tier and a Hidden Provider together —
+    // committed so `tui/`'s hand-kept Rust types are checked against it.
+    writeApiFixture('directory', view);
   });
 
   it('never publishes a host for a Hidden Provider, even if its Profile carried one', async () => {

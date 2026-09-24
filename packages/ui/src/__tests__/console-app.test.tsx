@@ -41,6 +41,8 @@ const profile = (id: string, label: string, active: boolean, configured = true) 
   relayUrl: '',
   gatewayDomain: '',
   gatewayConnectorUrl: 'https://gateway.test/ilp',
+  gasConnectorUrl: 'https://gas.test/ilp',
+  overriddenFields: [] as string[],
   rpc: {},
   origin: 'built-in' as const,
   configured,

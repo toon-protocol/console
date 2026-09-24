@@ -213,17 +213,60 @@ test('--theme-changed posts and does nothing else', () => {
   assert.doesNotMatch(clause, /ensure_daemon|open_window/);
 });
 
-test('a menu entry tells the daemon the view before it focuses the window', () => {
+test('a menu entry tells the daemon the view before it opens the tui', () => {
   // Focusing is all Omarchy can do to a window that is already open, so a
-  // menu entry that only focused would open whatever tab was last used.
+  // menu entry that only focused would open whatever view was last used. A
+  // TUI that is not open yet needs the post to land before it starts, too --
+  // its own first poll of GET /api/desktop is what picks the view up
+  // (tui/src/desktop.rs).
   const launcher = read('bin/toon-console');
+  const mainBody = launcher.slice(launcher.indexOf('main() {'));
   assert.ok(
-    launcher.indexOf('post_api /api/desktop/view') < launcher.indexOf('open_window "$url"'),
-    'the launcher focuses the window before it says which view to open'
+    mainBody.indexOf('post_api /api/desktop/view') < mainBody.indexOf('open_tui'),
+    'the launcher opens the tui before it says which view to open'
   );
   for (const view of ['workloads', 'new-workload', 'funds']) {
     assert.ok(read('omarchy/menu.jsonc').includes(`--view ${view}`), `no menu entry for ${view}`);
   }
+});
+
+/* -------------------------------------------------------------------------- */
+/* The TUI launcher (TOON_Network#140, ADR 0028)                              */
+/* -------------------------------------------------------------------------- */
+
+test('with no arguments the launcher opens the tui, not the web app', () => {
+  const launcher = read('bin/toon-console');
+  const mainBody = launcher.slice(launcher.indexOf('main() {'));
+  // The `--web` branch is the only place open_window runs; everything else
+  // (no arguments, --view) falls to open_tui.
+  assert.match(mainBody, /if \[\[ \$web == true \]\]; then\s*\n\s*open_window "\$url"\s*\n\s*else\s*\n\s*open_tui/);
+});
+
+test('the tui opens through omarchy-launch-or-focus-tui with a stable app id', () => {
+  // The app id is what lets a second launch find and focus the SAME
+  // terminal window rather than opening another one -- so it has to be a
+  // literal, not derived from argv the way omarchy-launch-or-focus-tui's own
+  // default naming would.
+  const launcher = read('bin/toon-console');
+  assert.match(
+    launcher,
+    /exec omarchy-launch-or-focus-tui "--app-id=\$TUI_APP_ID" "\$TUI_BIN"/
+  );
+  assert.match(launcher, /^TUI_APP_ID="org\.toon\.console"$/m);
+  assert.match(launcher, /^TUI_BIN="toon-console-tui"$/m);
+});
+
+test('off Omarchy the tui falls back to xdg-terminal-exec, then $TERMINAL', () => {
+  const launcher = read('bin/toon-console');
+  const openTui = launcher.slice(launcher.indexOf('open_tui() {'), launcher.indexOf('main() {'));
+  assert.match(openTui, /exec xdg-terminal-exec -- "\$TUI_BIN"/);
+  assert.match(openTui, /exec "\$TERMINAL" -e "\$TUI_BIN"/);
+  // In that order: xdg-terminal-exec is tried and used before $TERMINAL is
+  // ever run.
+  assert.ok(
+    openTui.indexOf('exec xdg-terminal-exec') < openTui.indexOf('exec "$TERMINAL"'),
+    'xdg-terminal-exec must be tried before $TERMINAL'
+  );
 });
 
 test('every menu action names the launcher absolutely', () => {
@@ -390,7 +433,11 @@ test('the PKGBUILD substitutes every placeholder the unit and the desktop entry 
   // The same contract the checkout installer is held to: a placeholder nobody
   // replaces reaches systemd as a literal `@NODE@` and the unit never starts.
   const pkgbuild = read(PKGBUILD);
-  const sources = [read('systemd/toon-console.service'), read('desktop/toon-console.desktop')];
+  const sources = [
+    read('systemd/toon-console.service'),
+    read('desktop/toon-console.desktop'),
+    read('desktop/toon-console-web.desktop'),
+  ];
   for (const source of sources) {
     for (const placeholder of source.match(/@[A-Z_]+@/g) ?? []) {
       assert.ok(
@@ -423,6 +470,24 @@ test('the package installs every file the console needs, from this tree', () => 
   // And the two it can only have after a build are the two the build makes.
   assert.ok(pkgbuild.includes('packages/daemon/dist/.'));
   assert.ok(pkgbuild.includes('packages/ui/dist'));
+});
+
+test('the PKGBUILD builds and installs the TUI (TOON_Network#140, ADR 0028)', () => {
+  const pkgbuild = read(PKGBUILD);
+  assert.match(
+    pkgbuild,
+    /\(cd tui && cargo build --release --locked\)/,
+    'the tui crate is built with --locked, pinned to its own Cargo.lock'
+  );
+  assert.match(pkgbuild, /^makedepends=\(.*'rust'.*\)$/m);
+  assert.match(pkgbuild, /^makedepends=\(.*'cargo'.*\)$/m);
+  // Runtime `depends` names none of it: the crate is compiled away by the
+  // time the package is built, and nothing at runtime needs a toolchain.
+  assert.doesNotMatch(read(PKGBUILD).match(/^depends=\([^)]*\)/m)[0], /rust|cargo/);
+  assert.match(
+    pkgbuild,
+    /install -Dm755 tui\/target\/release\/toon-console-tui "\$pkgdir\/usr\/bin\/toon-console-tui"/
+  );
 });
 
 test('the package ships the runtime tree only, with no link into the build directory', () => {
@@ -465,6 +530,15 @@ test('the desktop entry is one file, used by the package and by a checkout', () 
   // it in a heredoc.
   assert.match(read('bin/toon-console-install'), /packaging\/desktop\/toon-console\.desktop/);
   assert.doesNotMatch(read('bin/toon-console-install'), /\[Desktop Entry\]/);
+});
+
+test('a second desktop entry opens the web app (TOON_Network#140)', () => {
+  const entry = read('desktop/toon-console-web.desktop');
+  assert.match(entry, /^\[Desktop Entry\]$/m);
+  assert.match(entry, /^Name=TOON Console \(web\)$/m);
+  assert.match(entry, /^Exec=@BIN@ --web$/m);
+  assert.match(entry, /^Icon=@ICON@$/m);
+  assert.match(read('bin/toon-console-install'), /packaging\/desktop\/toon-console-web\.desktop/);
 });
 
 test('the launcher entry comes from the package, or from a checkout, never both', () => {
@@ -682,4 +756,18 @@ test('.SRCINFO says what the PKGBUILD says', () => {
     );
   }
   assert.equal(field('install')[0], 'toon-console.install');
+});
+
+test('a checkout install puts the TUI on PATH beside the launcher, and uninstall takes it away', () => {
+  // The launcher hands the bare name to omarchy-launch-or-focus-tui, so a
+  // checkout install that left the binary in tui/target would open a terminal
+  // that fails at once (TOON_Network#140).
+  const launcher = read('bin/toon-console');
+  assert.match(launcher, /^TUI_BIN="toon-console-tui"$/m);
+  const installer = read('bin/toon-console-install');
+  assert.match(installer, /TUI_BUILD="\$REPO\/tui\/target\/release\/toon-console-tui"/);
+  assert.match(installer, /install -m 0755 "\$TUI_BUILD" "\$BIN_DIR\/toon-console-tui"/);
+  assert.match(installer, /\[\[ -x \$TUI_BUILD \]\] \|\| die/);
+  const uninstall = read('bin/toon-console-uninstall');
+  assert.match(uninstall, /"\$BIN_DIR\/toon-console-tui"/);
 });

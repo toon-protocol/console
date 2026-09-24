@@ -7,25 +7,40 @@
 # token on every launch (there is no long-lived credential to put in a
 # .desktop file), and the URL carrying it is written to the runtime directory
 # when the daemon comes up. So: make sure the daemon is running, read the URL
-# it published, and hand that to Omarchy's launch-or-focus.
+# it published, and hand that to whatever opens the window.
+#
+# The TUI (`toon-console-tui`, TOON_Network#138, ADR 0028) is the console's
+# main window: with no arguments this ensures the daemon, then hands the
+# terminal command to `omarchy-launch-or-focus-tui`, so a second launch
+# focuses the terminal that is already open rather than starting a second
+# one. `--web` opens the browser web app the console used to open by default
+# -- still there for anything a person would rather do in a browser. A
+# desktop with no Omarchy falls back to `xdg-terminal-exec`, then `$TERMINAL`.
 #
 # The Omarchy menu and the theme-set hook come in here too (TOON_Network#99):
 #
 #   toon-console --view workloads   a menu entry. Posts the view to the daemon,
-#                                   so an ALREADY OPEN window changes tab —
-#                                   focusing is all Omarchy can do to one —
-#                                   then focuses or opens the window.
+#                                   so an ALREADY OPEN TUI switches to it --
+#                                   focusing is all Omarchy can do to a window
+#                                   that exists -- then focuses or opens the
+#                                   TUI. With no window open, the TUI's own
+#                                   first poll of GET /api/desktop picks up
+#                                   this same post and opens on that view
+#                                   (tui/src/desktop.rs); nothing here has to
+#                                   pass the view to the binary itself.
 #   toon-console --theme-changed    the theme-set hook. One POST, and nothing
 #                                   else: it never starts a daemon and never
 #                                   opens a window, because a theme change is
 #                                   not a reason to open an application.
 #
-# Usage: toon-console [--print-url | --view <view> | --theme-changed]
+# Usage: toon-console [--print-url | --web | --view <view> | --theme-changed]
 
 set -euo pipefail
 
 UNIT="toon-console.service"
 WINDOW_PATTERN="${TOON_CONSOLE_WINDOW_PATTERN:-TOON Console}"
+TUI_BIN="toon-console-tui"
+TUI_APP_ID="org.toon.console"
 RUNTIME_DIR="${XDG_RUNTIME_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}}/toon-console"
 LAUNCH_FILE="$RUNTIME_DIR/launch.json"
 VIEWS="workloads new-workload funds"
@@ -109,6 +124,7 @@ post_api() {
   ' "$LAUNCH_FILE" "$path" "$body" 2>/dev/null || true
 }
 
+# The web app: today's behaviour, kept behind `--web` (TOON_Network#140).
 open_window() {
   local url="$1"
 
@@ -123,6 +139,28 @@ open_window() {
   exec xdg-open "$url"
 }
 
+# The TUI: the console's main window (ADR 0028). `toon-console-tui` reads its
+# own launch record from $XDG_RUNTIME_DIR/toon-console/launch.json, so
+# nothing here has to pass it the URL or the token the way `open_window`
+# does -- only the terminal command needs to reach it.
+open_tui() {
+  if command -v omarchy-launch-or-focus-tui >/dev/null 2>&1; then
+    # <app-id> then the command: focus the terminal if it is already open
+    # under that id, and launch it in Omarchy's own styling if it is not.
+    exec omarchy-launch-or-focus-tui "--app-id=$TUI_APP_ID" "$TUI_BIN"
+  fi
+
+  # No Omarchy: whatever terminal the desktop prefers, then the $TERMINAL a
+  # person set for exactly this case.
+  if command -v xdg-terminal-exec >/dev/null 2>&1; then
+    exec xdg-terminal-exec -- "$TUI_BIN"
+  fi
+
+  [[ -n ${TERMINAL:-} ]] ||
+    die "no omarchy-launch-or-focus-tui, no xdg-terminal-exec, and \$TERMINAL is not set"
+  exec "$TERMINAL" -e "$TUI_BIN"
+}
+
 main() {
   # The theme-set hook, and nothing else. Before ensure_daemon on purpose.
   if [[ ${1:-} == "--theme-changed" ]]; then
@@ -130,13 +168,23 @@ main() {
     return 0
   fi
 
+  local web=false
   local view=""
-  if [[ ${1:-} == "--view" ]]; then
+  case "${1:-}" in
+  --web)
+    web=true
+    ;;
+  --view)
     view="${2:-}"
     [[ -n $view ]] || die "--view needs one of: $VIEWS"
     # shellcheck disable=SC2076
     [[ " $VIEWS " == *" $view "* ]] || die "unknown view '$view' (one of: $VIEWS)"
-  fi
+    ;;
+  --print-url | "") ;;
+  *)
+    die "usage: toon-console [--print-url | --web | --view <view> | --theme-changed]"
+    ;;
+  esac
 
   ensure_daemon
   wait_for_launch_file
@@ -148,13 +196,19 @@ main() {
     return 0
   fi
 
-  # Told before the window is focused, so that a window which is already open
-  # has the answer waiting on the poll it is holding.
+  # Told before the window is focused, so that a TUI which is already open
+  # has the answer waiting on the poll it is holding, and a TUI that is not
+  # open yet picks it up on the very first poll it makes when it starts
+  # (tui/src/desktop.rs).
   if [[ -n $view ]]; then
     post_api /api/desktop/view "{\"view\":\"$view\"}" >/dev/null
   fi
 
-  open_window "$url"
+  if [[ $web == true ]]; then
+    open_window "$url"
+  else
+    open_tui
+  fi
 }
 
 main "$@"

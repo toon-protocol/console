@@ -153,6 +153,16 @@ describe('readTemplates', () => {
     expect(result.templates[0]?.availability.state).toBe('available');
   });
 
+  it('rejects a Template whose registry_entry names no relay, since no spawn could carry it', async () => {
+    const view = await gallery([
+      templateEvent(publisher, { name: 'no-hint', entryRelay: null }),
+      imageEntryEvent(publisher),
+    ]);
+    expect(view.templates).toEqual([]);
+    expect(view.rejected.map((entry) => entry.name)).toEqual(['no-hint']);
+    expect(JSON.stringify(view.rejected)).toMatch(/names no `relay`/u);
+  });
+
   it('shows a Template whose entry is on no relay as unavailable, with the reason', async () => {
     const view = await gallery([templateEvent(publisher, { name: 'static-site' })]);
     const availability = view.templates[0]!.availability;
@@ -314,6 +324,18 @@ describe('readTemplateContent', () => {
       reason: expect.stringMatching(/container_port/u),
     });
   });
+
+  it('offers SSH by default, and by anything other than a literal `false`', () => {
+    const content = read({ name: 'ordinary' });
+    if ('reason' in content) throw new Error('unreachable');
+    expect(content.sshOffered).toBe(true);
+  });
+
+  it('stops offering SSH only when a Template says `ssh_offered: false`', () => {
+    const content = read({ name: 'no-ssh', sshOffered: false });
+    if ('reason' in content) throw new Error('unreachable');
+    expect(content.sshOffered).toBe(false);
+  });
 });
 
 describe('parseCoordinate', () => {
@@ -387,6 +409,9 @@ describe('the spec’s own golden fixtures', () => {
     expect(read.envFixed).toEqual({ MODE: 'production' });
     expect(read.envTenant).toEqual(['SITE_TITLE']);
     expect(read.minResources).toEqual({ cpuMillicores: 500, memoryMb: 256, storageGb: 4 });
+    // §8.3 names no SSH field at all: the spec's own golden Template carries
+    // none, and this console reads that as "cannot say either way, so ask".
+    expect(read.sshOffered).toBe(true);
     expect(read.image.registryEntry?.address).toBe(
       '30434:2c0b7cf95324a07d05398b240174dc0c2be444d96b159aa6c7f7b1e668680991:web:1.0'
     );

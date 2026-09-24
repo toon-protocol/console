@@ -1,0 +1,220 @@
+{
+  "workloadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
+  "lease": {
+    "workloadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
+    "state": "live",
+    "standbySet": [
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001"
+    ],
+    "members": [
+      {
+        "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001",
+        "index": 0,
+        "role": "standalone",
+        "provider": {
+          "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001",
+          "ilp_address": "g.toon.provider",
+          "connector_url": "https://provider.example/ilp",
+          "connector_seal_key": "0x04aa"
+        },
+        "listing": {
+          "name": "basic",
+          "version": 1,
+          "address": "30432:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001:basic",
+          "lease_interval_s": 3600,
+          "price": 1000
+        },
+        "paidAt": "https://provider.example/ilp",
+        "paidChain": "evm:31337",
+        "state": "live",
+        "answeredRole": "standalone",
+        "expiresAt": 1893456000,
+        "access": {
+          "host": "203.0.113.7",
+          "ssh_port": 40000,
+          "ports": [
+            {
+              "container_port": 80,
+              "host_port": 41000
+            }
+          ]
+        },
+        "known": true
+      }
+    ],
+    "provider": {
+      "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001",
+      "ilp_address": "g.toon.provider",
+      "connector_url": "https://provider.example/ilp",
+      "connector_seal_key": "0x04aa"
+    },
+    "paidAt": "https://provider.example/ilp",
+    "paidChain": "evm:31337",
+    "listing": {
+      "name": "basic",
+      "version": 1,
+      "address": "30432:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001:basic",
+      "lease_interval_s": 3600,
+      "price": 1000
+    },
+    "profileId": "sandbox",
+    "image": {
+      "digest": "sha256:1474027c316661cdec87df2623e13a41e7e1ce0ba99c24917631de8f300b5420",
+      "reference": "traefik/whoami"
+    },
+    "ports": [
+      {
+        "container_port": 80,
+        "protocol": "tcp"
+      }
+    ],
+    "envKeys": [],
+    "sshOffered": true,
+    "createdAt": "2026-01-01T00:00:00.000Z",
+    "localOnly": false,
+    "role": "standalone",
+    "expiresAt": 1893456000,
+    "access": {
+      "host": "203.0.113.7",
+      "ssh_port": 40000,
+      "ports": [
+        {
+          "container_port": 80,
+          "host_port": 41000
+        }
+      ]
+    },
+    "source": "relays",
+    "relays": [
+      "wss://own.relay.test"
+    ],
+    "recordId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0002"
+  },
+  "provider": {
+    "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001",
+    "ilpAddress": "g.toon.provider",
+    "connectorUrl": "https://provider.example/ilp",
+    "hidden": false,
+    "liveness": "live",
+    "inDirectory": true
+  },
+  "status": {
+    "kind": "unread",
+    "reason": "This member has not been asked about yet. Asking is free at the provider (§6.5).",
+    "readAt": "2026-01-01T00:00:00.000Z"
+  },
+  "runway": {
+    "listingPrice": 1000,
+    "leaseIntervalSeconds": 3600,
+    "memberRunways": [
+      {
+        "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001",
+        "index": 0,
+        "leaseIntervalSeconds": 3600,
+        "op": "extend",
+        "paidSeconds": 0,
+        "pricePerInterval": "1000",
+        "channelKey": "https://provider.example/ilp|evm:31337|0xchannel",
+        "available": "10000000"
+      }
+    ],
+    "setPricePerInterval": "1000",
+    "rounds": 10000,
+    "boundBy": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001",
+    "readAt": "2026-01-01T00:00:00.000Z",
+    "payAt": "https://provider.example/ilp",
+    "pricePerInterval": "1000",
+    "chain": "evm:31337",
+    "channelId": "0xchannel",
+    "available": "10000000",
+    "paidSeconds": 0,
+    "paidUntil": "2026-01-01T00:00:00.000Z",
+    "expirySource": "vault",
+    "state": "computed",
+    "affordableIntervals": 10000,
+    "seconds": 36000000,
+    "until": "2026-01-01T00:00:00.000Z"
+  },
+  "extend": {
+    "ok": false,
+    "problems": [
+      "This lease's state could not be read, and an extension is only worth buying for a lease that is still there: §6.3 refuses an ended one `expired` and bills for the refusal. This member has not been asked about yet. Asking is free at the provider (§6.5)."
+    ],
+    "route": {
+      "route": "g.toon.provider.basic.v1.extend",
+      "payAt": "https://provider.example/ilp",
+      "via": "provider-connector",
+      "reason": "Local sandbox's connector publishes no route carrying g.toon.provider.basic.v1.extend, so the packet is paid at the provider's own connector, which terminates it (spec §4.1, §5).",
+      "price": "1000",
+      "chain": "evm:31337",
+      "channelId": "0xchannel"
+    }
+  },
+  "members": [
+    {
+      "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001",
+      "index": 0,
+      "role": "standalone",
+      "provider": {
+        "ilpAddress": "g.toon.provider",
+        "connectorUrl": "https://provider.example/ilp",
+        "hidden": false,
+        "liveness": "live",
+        "inDirectory": true
+      },
+      "listing": {
+        "name": "basic",
+        "version": 1,
+        "address": "30432:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001:basic",
+        "lease_interval_s": 3600,
+        "price": 1000
+      },
+      "status": {
+        "kind": "unread",
+        "reason": "This member has not been asked about yet. Asking is free at the provider (§6.5).",
+        "readAt": "2026-01-01T00:00:00.000Z"
+      },
+      "extend": {
+        "ok": false,
+        "op": "extend",
+        "problems": [
+          "This lease's state could not be read, and an extension is only worth buying for a lease that is still there: §6.3 refuses an ended one `expired` and bills for the refusal. This member has not been asked about yet. Asking is free at the provider (§6.5)."
+        ],
+        "route": {
+          "route": "g.toon.provider.basic.v1.extend",
+          "payAt": "https://provider.example/ilp",
+          "via": "provider-connector",
+          "reason": "Local sandbox's connector publishes no route carrying g.toon.provider.basic.v1.extend, so the packet is paid at the provider's own connector, which terminates it (spec §4.1, §5).",
+          "price": "1000",
+          "chain": "evm:31337",
+          "channelId": "0xchannel"
+        }
+      },
+      "runningNow": false,
+      "selfStopped": false,
+      "vaultState": "live",
+      "known": true
+    }
+  ],
+  "set": {
+    "members": 1,
+    "warm": false,
+    "pricePerInterval": "1000"
+  },
+  "autoExtend": {
+    "armed": false,
+    "budget": "3000",
+    "spent": "0",
+    "remaining": "3000",
+    "extensions": 0,
+    "agreedPrice": "1000",
+    "leadSeconds": 900,
+    "armedAt": "2026-01-01T00:00:00.000Z",
+    "lastRun": {
+      "at": "2026-01-01T00:00:00.000Z",
+      "outcome": "stopped",
+      "reason": "It was turned off by hand."
+    },
+    "stoppedBecause": "It was turned off by hand."
+  }
+}

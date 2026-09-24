@@ -1,0 +1,18 @@
+{
+  "outcomes": [
+    {
+      "what": "image-entry",
+      "address": "30434:5c8b81585b34e621bfc93211aff4df17458c6d6b6188222a6fe74090d22ef36c:ssh-box:latest",
+      "eventId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
+      "cost": "1"
+    },
+    {
+      "what": "template",
+      "address": "30436:5c8b81585b34e621bfc93211aff4df17458c6d6b6188222a6fe74090d22ef36c:ssh-box",
+      "eventId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001",
+      "cost": "1"
+    }
+  ],
+  "cost": "2",
+  "templateAddress": "30436:5c8b81585b34e621bfc93211aff4df17458c6d6b6188222a6fe74090d22ef36c:ssh-box"
+}

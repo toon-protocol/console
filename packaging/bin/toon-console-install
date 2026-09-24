@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
 # Install the console for the current user: the systemd --user service, the
-# launcher, the desktop entry and the Omarchy integration.
+# launcher, the two desktop entries (the TUI and, `--web`, the browser app —
+# TOON_Network#140, ADR 0028) and the Omarchy integration.
 #
 # Everything this script writes lands under $HOME. Nothing here needs root,
 # and nothing here is system-wide, because the daemon is a user service
@@ -47,7 +48,11 @@ INSTALL_WEBAPP=true
 INSTALL_OMARCHY=true
 RETHEME=true
 OMARCHY_ONLY=false
-APP_NAME="TOON Console"
+# The primary entry's name comes from packaging/desktop/toon-console.desktop
+# itself (Name=TOON Console); this is only for the SECOND entry, which
+# omarchy-webapp-install needs told to it because it derives the .desktop
+# file's name from this argument.
+WEBAPP_NAME="TOON Console (web)"
 
 usage() {
   echo "usage: toon-console-install [--repo <dir> | --prefix <dir>] [--no-webapp] [--no-omarchy] [--no-retheme] [--omarchy-only]" >&2
@@ -137,9 +142,11 @@ else
   UNINSTALLER="$REPO/packaging/bin/toon-console-uninstall"
   OMARCHY_SRC="$REPO/packaging/omarchy"
   DESKTOP_SOURCE="$REPO/packaging/desktop/toon-console.desktop"
+  DESKTOP_SOURCE_WEB="$REPO/packaging/desktop/toon-console-web.desktop"
   ICON_SOURCE="$REPO/packaging/icons/toon-console.png"
   DAEMON_ENTRY="$REPO/packages/daemon/dist/main.js"
   UI_ROOT="$REPO/packages/ui/dist"
+  TUI_BUILD="$REPO/tui/target/release/toon-console-tui"
   DOCS_DIR="$REPO/docs"
 fi
 
@@ -272,6 +279,7 @@ fi
 if [[ $LAYOUT == checkout ]]; then
   [[ -f $DAEMON_ENTRY ]] || die "no built daemon at $DAEMON_ENTRY — run 'npm run build' first"
   [[ -d $UI_ROOT ]] || die "no built UI at $UI_ROOT — run 'npm run build' first"
+  [[ -x $TUI_BUILD ]] || die "no built TUI at $TUI_BUILD — run 'cargo build --release --locked' in tui/ first"
 
   NODE_BIN="$(command -v node)" || die "node is not on PATH"
 
@@ -279,6 +287,12 @@ if [[ $LAYOUT == checkout ]]; then
 
   # The launcher, on PATH.
   install -m 0755 "$REPO/packaging/bin/toon-console" "$BIN"
+
+  # The TUI (ADR 0028), on PATH beside it: the launcher hands the bare name
+  # `toon-console-tui` to omarchy-launch-or-focus-tui, so it has to be found
+  # there. The package installs it into $PREFIX/bin; a checkout has to be
+  # built first, like the daemon and the UI.
+  install -m 0755 "$TUI_BUILD" "$BIN_DIR/toon-console-tui"
 
   # The unit, with this checkout's absolute paths substituted in. systemd does
   # not expand $PATH or relative paths in ExecStart, so they have to be
@@ -323,6 +337,16 @@ systemctl --user reset-failed toon-console.service >/dev/null 2>&1 || true
 systemctl --user restart toon-console.service
 
 if [[ $LAYOUT == checkout ]]; then
+  # The primary entry always opens the TUI (ADR 0028) with a plain, ordinary
+  # desktop entry (TOON_Network#140) — the same file the package installs
+  # system-wide, with this checkout's paths in it. It is not a webapp entry:
+  # `omarchy-launch-or-focus-tui` already does the window-focusing a webapp
+  # install would give a URL, and this is a terminal command, not one.
+  mkdir -p "$DESKTOP_DIR"
+  sed -e "s|@BIN@|$BIN|g" -e "s|@ICON@|$ICON_SOURCE|g" "$DESKTOP_SOURCE" \
+    >"$DESKTOP_DIR/toon-console.desktop"
+  echo "Installed $DESKTOP_DIR/toon-console.desktop."
+
   if [[ $INSTALL_WEBAPP == true ]] && command -v omarchy-webapp-install >/dev/null 2>&1; then
     # Arguments are: name, url, icon, custom-exec.
     #
@@ -330,30 +354,30 @@ if [[ $LAYOUT == checkout ]]; then
     # is, because the URL that opens the window carries a token minted at
     # launch and cannot be written into a .desktop file at install time.
     # omarchy still requires a valid http(s) URL in that position, so the base
-    # is what it gets.
+    # is what it gets. `--web` is what makes this entry open the browser app
+    # rather than the TUI the primary entry above already covers.
     omarchy-webapp-install \
-      "$APP_NAME" \
+      "$WEBAPP_NAME" \
       "http://127.0.0.1:7797" \
       "$ICON_SOURCE" \
-      "$BIN"
-    echo "Installed the '$APP_NAME' web app. SUPER + SPACE to launch it."
+      "$BIN --web"
+    echo "Installed the '$WEBAPP_NAME' web app. SUPER + SPACE to launch it."
   else
     # Any other desktop gets a plain desktop entry (ADR 0019). Same file the
     # package installs system-wide, with this checkout's paths in it.
-    mkdir -p "$DESKTOP_DIR"
-    sed -e "s|@BIN@|$BIN|g" -e "s|@ICON@|$ICON_SOURCE|g" "$DESKTOP_SOURCE" \
-      >"$DESKTOP_DIR/toon-console.desktop"
-    echo "Installed $DESKTOP_DIR/toon-console.desktop."
+    sed -e "s|@BIN@|$BIN|g" -e "s|@ICON@|$ICON_SOURCE|g" "$DESKTOP_SOURCE_WEB" \
+      >"$DESKTOP_DIR/toon-console-web.desktop"
+    echo "Installed $DESKTOP_DIR/toon-console-web.desktop."
   fi
 else
-  # The package's own /usr/share/applications/toon-console.desktop is the
-  # launcher entry, on Omarchy as much as anywhere else: it runs the same
-  # launcher the menu entries do, and that launcher is what opens the web-app
-  # window. `omarchy-webapp-install` is deliberately not run here — it would
-  # write a SECOND "TOON Console" into ~/.local/share/applications, and the
+  # The package's own two entries — /usr/share/applications/toon-console.desktop
+  # (the TUI) and toon-console-web.desktop (the web app, `--web`) — on Omarchy
+  # as much as anywhere else: each runs the same launcher the menu entries do.
+  # `omarchy-webapp-install` is deliberately not run here — it would write a
+  # SECOND "TOON Console (web)" into ~/.local/share/applications, and the
   # person would have two identical entries, one of which pacman cannot
   # remove.
-  echo "Launcher: $PREFIX/share/applications/toon-console.desktop (from the package)."
+  echo "Launcher: $PREFIX/share/applications/toon-console.desktop and toon-console-web.desktop (from the package)."
 fi
 
 if [[ $INSTALL_OMARCHY == true ]]; then

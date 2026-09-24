@@ -21,8 +21,10 @@ below is one a person types.
 | `/usr/share/toon-console/docs` | the Markdown pages the Help tab falls back to |
 | `/usr/share/toon-console/omarchy` | the theme template, the two hooks and the menu entries, **as sources** |
 | `/usr/bin/toon-console` | the launcher |
+| `/usr/bin/toon-console-tui` | the TUI (TOON_Network#138, ADR 0028), built from `tui/` with `cargo build --release --locked` |
 | `/usr/bin/toon-console-install`, `/usr/bin/toon-console-uninstall` | the per-user half |
-| `/usr/share/applications/toon-console.desktop` | the launcher entry |
+| `/usr/share/applications/toon-console.desktop` | the launcher entry: opens the TUI |
+| `/usr/share/applications/toon-console-web.desktop` | the second entry, "TOON Console (web)": opens the browser app (`--web`) |
 | `/usr/share/icons/hicolor/{scalable,256x256}/apps/toon-console.*` | the icon |
 
 **`$XDG_DATA_HOME/toon-console` appears nowhere in the package.** That is where an
@@ -91,6 +93,9 @@ is not optional.
 - **It builds with the node in `depends`, and ships the tree `npm prune --omit=dev` leaves.**
   The dev dependencies (vite, vitest, typescript, eslint) build the console and are not
   installed.
+- **`rust` and `cargo` are `makedepends`, not `depends`.** `tui/` is a Cargo crate built with
+  `cargo build --release --locked` in `build()`; only the resulting `toon-console-tui` binary
+  ships, so nothing at runtime needs a Rust toolchain.
 - **A `-bin` package would need a release artifact.** If the build time ever becomes the
   problem, the shape is: a GitHub Actions release job that runs `npm ci && npm run build`,
   assembles exactly what `package()` assembles, and uploads it as a tarball on the tag; then

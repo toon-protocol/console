@@ -1,0 +1,107 @@
+{
+  "workloadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
+  "started": true,
+  "rotated": true,
+  "problems": [],
+  "members": [
+    {
+      "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001",
+      "index": 0,
+      "role": "primary",
+      "sent": false,
+      "rotated": true,
+      "already": true,
+      "message": "This member confirmed the new token in an earlier run, so nothing was sent to it. Rotating it again would present a token it no longer holds (`not_tenant`)."
+    },
+    {
+      "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0002",
+      "index": 1,
+      "role": "standby",
+      "sent": true,
+      "rotated": true,
+      "route": {
+        "route": "g.toon.provider2.rotate",
+        "payAt": "https://provider2.example/ilp",
+        "via": "provider-connector",
+        "reason": "https://provider2.example/ilp prices g.toon.provider2.rotate at nothing, so this packet is bought where it is free (spec §5). A connector that merely forwards charges its own fee to carry it.",
+        "price": "0",
+        "chain": "evm:31337",
+        "channelId": "0xchannel2"
+      },
+      "message": "Rotated. From this moment the old token is `not_tenant` at this provider, and every Gateway Grant derived from it is `bad_grant` — there is no grace period and nothing is kept per gateway (spec §6.8, ADR 0018)."
+    }
+  ],
+  "confirmed": 2,
+  "of": 2,
+  "vaultCost": "1",
+  "view": {
+    "workloadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
+    "underWay": false,
+    "ok": true,
+    "problems": [],
+    "members": [
+      {
+        "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001",
+        "index": 0,
+        "role": "primary",
+        "confirmed": false,
+        "ok": true,
+        "problems": [],
+        "route": {
+          "route": "g.toon.provider.rotate",
+          "payAt": "https://provider.example/ilp",
+          "via": "provider-connector",
+          "reason": "https://provider.example/ilp prices g.toon.provider.rotate at nothing, so this packet is bought where it is free (spec §5). A connector that merely forwards charges its own fee to carry it.",
+          "price": "0",
+          "chain": "evm:31337",
+          "channelId": "0xchannel"
+        }
+      },
+      {
+        "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0002",
+        "index": 1,
+        "role": "standby",
+        "confirmed": false,
+        "ok": true,
+        "problems": [],
+        "route": {
+          "route": "g.toon.provider2.rotate",
+          "payAt": "https://provider2.example/ilp",
+          "via": "provider-connector",
+          "reason": "https://provider2.example/ilp prices g.toon.provider2.rotate at nothing, so this packet is bought where it is free (spec §5). A connector that merely forwards charges its own fee to carry it.",
+          "price": "0",
+          "chain": "evm:31337",
+          "channelId": "0xchannel2"
+        }
+      }
+    ],
+    "confirmed": 0,
+    "of": 2,
+    "rotatedAt": "2026-01-01T00:00:00.000Z",
+    "vault": {
+      "relays": [
+        "wss://own.relay.test"
+      ],
+      "plan": [
+        {
+          "url": "wss://own.relay.test",
+          "ready": true,
+          "destination": "g.toon.relay",
+          "payAt": "https://connector.test/ilp",
+          "price": "1",
+          "chain": "evm:31337",
+          "channelId": "0xchannel",
+          "via": "document"
+        }
+      ],
+      "destination": "g.toon.relay",
+      "payAt": "https://connector.test/ilp",
+      "price": "1",
+      "totalPrice": "1",
+      "chain": "evm:31337",
+      "channelId": "0xchannel",
+      "ready": true
+    },
+    "localOnly": false
+  }
+}

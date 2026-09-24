@@ -1,0 +1,28 @@
+---
+source: src/views/health.rs
+assertion_line: 331
+expression: render(&sample_health())
+---
+┌ Daemon ────────────────────────────────────────┐┌ Connector  answering ──────────────────────────┐
+│The service this window is talking to.          ││Devnet — read live from GET /ilp.               │
+│                                                ││                                                │
+│Version: @toon-protocol/console-daemon 0.1.0    ││Endpoint: https://connector.example             │
+│Node: v22.11.0                                  ││ILP addresses: g.toon.relay                     │
+│Uptime: 59h 16m                                 ││                                                │
+│Channel state:                                  ││Settlement chains                               │
+│/home/tester/.local/share/toon-console/profiles/││evm:84532  6 decimals  settles with 0x3f43      │
+│devnet/channels/channels.json                   ││token 0x49be                                    │
+│Checked: 11:16:55                               ││                                                │
+│                                                ││Routes (1)                                      │
+│                                                ││                                                │
+│                                                ││                                                │
+└────────────────────────────────────────────────┘└────────────────────────────────────────────────┘
+┌ Hidden Providers  circuit available ─────────────────────────────────────────────────────────────┐
+│A Hidden Provider is reached over an Anyone Protocol circuit, or not at all.                      │
+│SOCKS proxy: socks5h://127.0.0.1:9050                                                             │
+│A SOCKS5h proxy answered at socks5h://127.0.0.1:9050, so a `.anyone` address can be dialled.      │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘

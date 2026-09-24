@@ -50,7 +50,8 @@ server's port with the same `?t=` the daemon printed.
 Two ways in, and they install the same thing in two different places. A package puts the
 console in `/usr` and pacman owns it; a checkout puts it in your `$HOME` and you own it.
 Either way the daemon is a `systemd --user` service and the console is opened by
-`toon-console`.
+`toon-console`, which opens the TUI (TOON_Network#138, ADR 0028); `toon-console --web`
+opens the browser app instead.
 
 ### From the AUR (Arch, Omarchy)
 
@@ -79,7 +80,7 @@ already open rather than opening a second one.
 | the daemon and its `node_modules` | `/usr/lib/toon-console` |
 | the unit | `/usr/lib/systemd/user/toon-console.service` |
 | the UI, the docs, the Omarchy sources | `/usr/share/toon-console` |
-| the launcher and the two setup commands | `/usr/bin` |
+| the launcher, the TUI and the two setup commands | `/usr/bin` |
 | **your** channel state, Chain Seed, Lease Vault cache and keystore | `~/.local/share/toon-console` |
 | **your** active profile | `~/.config/toon-console` |
 | this login session's launch token | `$XDG_RUNTIME_DIR/toon-console` |
@@ -124,17 +125,22 @@ packaging/bin/toon-console-install
 
 That writes the launcher to `~/.local/bin/toon-console` and the unit to
 `~/.config/systemd/user/toon-console.service`, both pointing at this checkout, enables the
-service and installs a launcher entry: an `omarchy-webapp-install` web app where Omarchy is
-present, and a plain `~/.local/share/applications/toon-console.desktop` where it is not.
+service and installs two launcher entries: a plain
+`~/.local/share/applications/toon-console.desktop` that opens the TUI, and a second, "TOON
+Console (web)", for the browser app (`toon-console --web`) — an `omarchy-webapp-install` web
+app where Omarchy is present, and a plain `toon-console-web.desktop` where it is not.
 It also installs the Omarchy integration below if `~/.config/omarchy` exists, and skips it
 silently if it does not.
 
 `--omarchy-only` installs just that desktop half, leaving a running service and its
-launcher alone; `--no-omarchy` leaves it out; `--no-webapp` forces the plain desktop entry.
+launcher alone; `--no-omarchy` leaves it out; `--no-webapp` forces the web entry to the
+plain desktop form instead of `omarchy-webapp-install`.
 
-On a desktop that is not Omarchy the console opens in your browser through `xdg-open`,
-with the default theme in `packages/daemon/src/theme.ts` rather than your desktop's
-colours. Everything else — the service, the API, the notifications — is the same.
+On a desktop that is not Omarchy the launcher opens the TUI through `xdg-terminal-exec`,
+falling back to `$TERMINAL` if that is not installed either; `--web` opens the browser app
+through `xdg-open` instead, with the default theme in `packages/daemon/src/theme.ts` rather
+than your desktop's colours. Everything else — the service, the API, the notifications — is
+the same.
 
 `packaging/bin/toon-console-uninstall` removes all of it. It never touches
 `~/.local/share/toon-console`, which is where channel state and the Lease Vault cache live,
@@ -189,10 +195,12 @@ fallback it is.
 ### The menu opens a view
 
 Each entry runs `toon-console --view <workloads|new-workload|funds>`, which posts the view to
-the daemon and then hands the window to `omarchy-launch-or-focus-webapp`. The post is what
-makes the entry work on a window that is **already open**: focusing is all Omarchy can do to
-one, so the window is told separately and switches tab. A request older than a minute is
-ignored, so a window opened an hour later opens where it always does.
+the daemon and then hands the TUI to `omarchy-launch-or-focus-tui`. The post is what makes
+the entry work on a window that is **already open**: focusing is all Omarchy can do to one, so
+the window is told separately and switches view. With no window open yet, the TUI's own first
+poll of `GET /api/desktop`, on startup, picks up that same post and opens on that view instead
+of the default one. A request older than a minute is ignored, so a window opened an hour later
+opens where it always does.
 
 ### Three notifications, once per event
 
@@ -820,6 +828,66 @@ policy, the summary's obligations and the image mapping, driven with fixtures. T
 judgement about what counts as proved is tested on every push even though the network is
 not.
 
+### The TUI smoke: the same life, through the terminal's own client
+
+`smoke:console` drives `/api/*` the way the web window does. The TUI has a client of its
+own — `tui/src/api.rs`, one function per route, decoded into `tui/src/types.rs` — and
+[#149][i149] is the proof that *it* can run a workload's whole life too:
+
+```bash
+npm ci && npm run build -w @toon-protocol/console-daemon   # the helper runs from dist/
+
+# A daemon of the smoke's own, on directories nobody else has:
+export SMOKE_HOME=$(mktemp -d)
+export XDG_RUNTIME_DIR=$SMOKE_HOME/run XDG_CONFIG_HOME=$SMOKE_HOME/config \
+       XDG_DATA_HOME=$SMOKE_HOME/data
+mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
+TOON_CONSOLE_PORT=0 TOON_CONSOLE_KEYSTORE=file node packages/daemon/dist/main.js &
+
+cd tui && cargo test --features smoke      # same shell: it reads that daemon's launch record
+kill %1 && rm -rf "$SMOKE_HOME"
+```
+
+It reads the daemon's launch record the way the TUI does, switches it to the sandbox
+profile (`TOON_TUI_SMOKE_PROFILE` picks another), and drives the six steps the ticket names
+— **sign in** with a local key, **spawn** from a Template, **extend**, **rotate**, hand the
+workload to the **gateway** (and withdraw it), **terminate** — through the same `api::`
+calls `tui/src/main.rs` makes for each `Command`, with the spawn bodies built by the New
+workload view's own builders. Between signing in and spawning it does what a spawn needs
+first, under the stage names `smoke:console` uses: `chain-seed`, `directory`, `funds`,
+`publish-seed`, `template`.
+
+- **Each step re-reads the daemon's state** and asserts that, not the 2xx: the account from
+  `GET /api/account`, the card from `GET /api/workloads?refresh=1` (running, the expiry the
+  provider now reports, the Template on the lease's record), the rotation from `GET
+  …/rotation`, the hostname from `GET …/gateway` — held after the handover, withdrawn after
+  the withdrawal.
+- **A skip is read from the network and never counted as a pass.** The gateway step is
+  decided by `smoke-console.ts`'s own `planConditional`, so the two smokes skip it for the
+  same reason, and the ending lists it under NOT PROVED.
+- **It will only drive a fresh daemon of its own.** It refuses to go on when
+  `XDG_RUNTIME_DIR` is the login session's (`/run/user/…`), when an account is already
+  signed in, or when the keystore is not the file — so the console you use is never signed
+  into, switched or spent from.
+- **The chain is read from the network**: the first one the profile's connector settles on
+  in the same token the chosen provider settles in, so nothing converts on the way. On the
+  sandbox that is Solana, which `smoke:console` is told with `--chain solana`.
+  `TOON_TUI_SMOKE_CHAIN` overrides it.
+
+Three things are not the console's to do, and `smoke:console` does them outside the daemon
+too: minting this run's keys, moving test money into the payer address from the funder's
+account 0 (`TOON_SMOKE_FUNDER_MNEMONIC`, as above), and publishing the Template. They are
+one shared copy, `packages/daemon/src/main-smoke-tui.ts`, which the Rust smoke runs with
+`node`.
+
+It is behind the `smoke` cargo feature with `harness = false`, so plain `cargo test` and CI
+never build it, and its report prints whether it passes or not. It spends, like
+`smoke:console`: one lease, one extension and five relay writes, plus every `status`
+re-read the sandbox hub bills for carrying — **2905 base units** on the sandbox the day it
+was written, against `smoke:console`'s 2605.
+
+[i149]: https://github.com/toon-protocol/TOON_Network/issues/149
+
 ## Development
 
 ```bash
@@ -828,6 +896,7 @@ npm run typecheck    # tsc, every package
 npm test             # vitest, every package
 npm run test:packaging  # node --test, guards on the install bundle
 npm run smoke:console   # the end-to-end acceptance test; it SPENDS (see above)
+(cd tui && cargo test --features smoke)  # the same, through the TUI's client (see above)
 ```
 
 The vocabulary — **Console**, **Account**, **Signer**, **Chain Seed**, **Lease Vault** — is
