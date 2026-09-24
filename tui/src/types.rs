@@ -1580,6 +1580,465 @@ pub struct WithdrawalResult {
     pub view: GatewayView,
 }
 
+/* -------------------------------------------------------------------------- */
+/* Templates and the spawn/preflight flow (TOON_Network#146).                 */
+/* -------------------------------------------------------------------------- */
+//
+// A mirror of `packages/ui/src/app/templates-view.tsx`, `hooks/use-templates.ts`
+// and the "Templates" and "Leases" sections of `packages/ui/src/lib/daemon.ts`.
+// A Template GRANTS NO CAPABILITY (ADR 0004) — nothing here has a field for
+// one, on purpose. `GET /api/templates` answers [`TemplateGallery`];
+// `POST /api/templates/expand` answers [`ExpandedTemplate`], the §6.2 spawn
+// content a Template expands to, spending nothing; `POST /api/leases/preflight`
+// and `POST /api/leases/spawn` (or their `standby-set` siblings) take that
+// content plus a chosen Listing and answer [`PreflightView`]/[`SpawnResult`]
+// (or [`StandbySetPreflightView`]/[`StandbySetResult`]).
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct TemplatePort {
+    #[serde(rename = "containerPort")]
+    pub container_port: i64,
+    pub protocol: String,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct TemplateResources {
+    #[serde(rename = "cpuMillicores")]
+    pub cpu_millicores: i64,
+    #[serde(rename = "memoryMb")]
+    pub memory_mb: i64,
+    #[serde(rename = "storageGb")]
+    pub storage_gb: i64,
+    #[serde(default)]
+    pub gpu: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct TemplateImageRegistryEntry {
+    pub address: String,
+    #[serde(default)]
+    pub relay: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct TemplateImage {
+    pub digest: String,
+    #[serde(rename = "registryEntry", default)]
+    pub registry_entry: Option<TemplateImageRegistryEntry>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct PublisherView {
+    pub pubkey: String,
+    pub npub: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(rename = "displayName", default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub picture: Option<String>,
+    #[serde(default)]
+    pub nip05: Option<String>,
+}
+
+/// Only the fields `views::new_workload`'s `WhatItRuns` equivalent shows —
+/// `canonicalName` and how many blobs. `blobs` is kept as raw JSON: its own
+/// shape (§8.1's `ImageBlob`, a discriminated union on a toon-store or an OCI
+/// source) is never read here, only counted.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct TemplateImageEntry {
+    pub address: String,
+    #[serde(rename = "canonicalName")]
+    pub canonical_name: String,
+    #[serde(default)]
+    pub blobs: Vec<serde_json::Value>,
+}
+
+/// `TemplateAvailability` in `daemon.ts`: a Template whose image cannot be
+/// resolved gets no form — shown with the reason instead (see
+/// `views::new_workload`).
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(tag = "state")]
+pub enum TemplateAvailability {
+    #[serde(rename = "available")]
+    Available {
+        /// What was checked — records, not bytes (shown, so it cannot
+        /// overclaim).
+        checked: String,
+        #[serde(default)]
+        entry: Option<TemplateImageEntry>,
+        /// Not shown anywhere today; kept only so a fixture with one still
+        /// deserializes.
+        #[serde(rename = "blobRecord", default)]
+        blob_record: Option<serde_json::Value>,
+    },
+    #[serde(rename = "unavailable")]
+    Unavailable { reason: String },
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct TemplateView {
+    pub name: String,
+    /// `30436:<publisher pubkey>:<name>` — what `POST /api/templates/expand`
+    /// names.
+    pub address: String,
+    pub publisher: PublisherView,
+    pub version: i64,
+    pub image: TemplateImage,
+    #[serde(default)]
+    pub ports: Vec<TemplatePort>,
+    #[serde(rename = "dataPath", default)]
+    pub data_path: Option<String>,
+    #[serde(rename = "envFixed", default)]
+    pub env_fixed: std::collections::BTreeMap<String, String>,
+    /// Every name a tenant may set, fixed ones included (`envFixed`'s keys
+    /// are filtered out where this is used — see `SpawnForm` in
+    /// `templates-view.tsx`, mirrored by `views::new_workload::settable_env`).
+    #[serde(rename = "envTenant", default)]
+    pub env_tenant: Vec<String>,
+    #[serde(rename = "minResources", default)]
+    pub min_resources: Option<TemplateResources>,
+    pub availability: TemplateAvailability,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+    #[serde(rename = "publishedAt")]
+    pub published_at: String,
+    #[serde(rename = "eventId")]
+    pub event_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct RejectedTemplateEntry {
+    pub address: String,
+    pub name: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct TemplateRelays {
+    pub seed: Vec<String>,
+    pub read: Vec<RelayOutcome>,
+}
+
+/// `TemplateGallery` in `daemon.ts` — a discriminated union on `state`, same
+/// pattern as [`Directory`].
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(tag = "state")]
+pub enum TemplateGallery {
+    #[serde(rename = "ok")]
+    Ok {
+        relays: TemplateRelays,
+        templates: Vec<TemplateView>,
+        #[serde(default)]
+        rejected: Vec<RejectedTemplateEntry>,
+        #[serde(rename = "rejectedEvents")]
+        rejected_events: i64,
+        #[serde(rename = "readAt")]
+        read_at: String,
+    },
+    #[serde(rename = "unconfigured")]
+    Unconfigured { reason: String },
+}
+
+/// `POST /api/templates/expand`'s body — `{ template, ...TemplateSettings }`
+/// in `daemon.ts`. Only the fields `views::new_workload`'s form collects;
+/// `workloadId` and `standbySet` are the Standby Set's own naming and are
+/// never sent from this form (the primary/standby-set spawn routes below
+/// carry that instead).
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Default)]
+pub struct ExpandTemplateRequest {
+    pub template: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub env: Option<std::collections::BTreeMap<String, String>>,
+    #[serde(rename = "sshPublicKey")]
+    pub ssh_public_key: String,
+    #[serde(rename = "volumeGb", skip_serializing_if = "Option::is_none")]
+    pub volume_gb: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct SpawnContentImageRegistryEntry {
+    pub address: String,
+    #[serde(default)]
+    pub relay: Option<String>,
+}
+
+/// `SpawnContent['image']` in `daemon.ts` — the wire's own spelling
+/// (snake_case, §6.2), never rewritten here.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct SpawnContentImage {
+    pub digest: String,
+    #[serde(default)]
+    pub reference: Option<String>,
+    #[serde(default)]
+    pub registry_entry: Option<SpawnContentImageRegistryEntry>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct SpawnContentPort {
+    pub container_port: i64,
+    pub protocol: String,
+}
+
+/// `SpawnContent` in `daemon.ts` (spec §6.2's content, verbatim wire
+/// spelling).
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct SpawnContent {
+    pub workload_id: String,
+    pub image: SpawnContentImage,
+    #[serde(default)]
+    pub env: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    pub ports: Vec<SpawnContentPort>,
+    #[serde(default)]
+    pub volume_gb: Option<i64>,
+    pub ssh_public_key: String,
+    #[serde(default)]
+    pub entrypoint: Option<Vec<String>>,
+    #[serde(default)]
+    pub args: Option<Vec<String>>,
+    #[serde(default)]
+    pub standby_set: Option<Vec<String>>,
+    #[serde(default)]
+    pub template: Option<String>,
+}
+
+/// `ExpandedTemplate` in `daemon.ts` — what `POST /api/templates/expand`
+/// answers. Spends nothing: the daemon re-reads the Template and decides
+/// what is settable, so this is the same content a manual spawn of the
+/// expanded image would carry (`views::new_workload` builds
+/// [`SpawnRequestBody`] straight from `spawn`).
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct ExpandedTemplate {
+    pub template: String,
+    pub spawn: SpawnContent,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Default)]
+pub struct SpawnImageRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reference: Option<String>,
+    pub digest: String,
+    #[serde(rename = "registryEntry", skip_serializing_if = "Option::is_none")]
+    pub registry_entry: Option<RegistryEntryRequest>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Default)]
+pub struct RegistryEntryRequest {
+    pub address: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relay: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Default)]
+pub struct SpawnPortRequest {
+    #[serde(rename = "containerPort")]
+    pub container_port: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<String>,
+}
+
+/// `SpawnRequestBody` in `daemon.ts` — what `POST /api/leases/preflight` and
+/// `POST /api/leases/spawn` take. `views::new_workload` builds this from an
+/// [`ExpandedTemplate`]'s `spawn` (the image, env, ports, volume and SSH key
+/// a Template expanded to) and the [`crate::views::directory::ListingPicker`]
+/// selection (`provider`, `listing`) — never typed by hand, the way the
+/// generic Workloads spawn form's fields are.
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Default)]
+pub struct SpawnRequestBody {
+    pub provider: String,
+    pub listing: String,
+    pub image: SpawnImageRequest,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub env: Option<std::collections::BTreeMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ports: Option<Vec<SpawnPortRequest>>,
+    #[serde(rename = "sshPublicKey")]
+    pub ssh_public_key: String,
+    #[serde(rename = "volumeGb", skip_serializing_if = "Option::is_none")]
+    pub volume_gb: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entrypoint: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub args: Option<Vec<String>>,
+    /// The Template this spawn came from (`address`), so the daemon's own
+    /// records say so too.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub template: Option<String>,
+    #[serde(rename = "localOnly", skip_serializing_if = "Option::is_none")]
+    pub local_only: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chain: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Default)]
+pub struct StandbyMemberRequest {
+    pub provider: String,
+    pub listing: String,
+    #[serde(rename = "listingVersion", skip_serializing_if = "Option::is_none")]
+    pub listing_version: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chain: Option<String>,
+}
+
+/// `StandbySetRequestBody` in `daemon.ts` — `SpawnRequestBody` plus
+/// `standbys`, flattened onto the same JSON object on the wire (the TS side
+/// spells this as `extends`).
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Default)]
+pub struct StandbySetRequestBody {
+    #[serde(flatten)]
+    pub base: SpawnRequestBody,
+    /// A Warm Standby per member. Non-empty: the API refuses an empty one —
+    /// a lease with no standby is an ordinary spawn (spec §7).
+    pub standbys: Vec<StandbyMemberRequest>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct PreflightProviderView {
+    pub pubkey: String,
+    #[serde(rename = "ilpAddress")]
+    pub ilp_address: String,
+    #[serde(rename = "connectorUrl")]
+    pub connector_url: String,
+    pub hidden: bool,
+    pub liveness: String,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct PreflightListingView {
+    pub name: String,
+    pub version: i64,
+    #[serde(rename = "leaseIntervalSeconds")]
+    pub lease_interval_seconds: i64,
+    /// µUSDC for one Lease Interval, as the Listing priced it.
+    pub price: i64,
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct PreflightPayment {
+    #[serde(rename = "connectorUrl")]
+    pub connector_url: String,
+    pub via: String,
+    pub reason: String,
+    #[serde(default)]
+    pub chain: Option<String>,
+    #[serde(rename = "channelId", default)]
+    pub channel_id: Option<String>,
+    #[serde(rename = "routePrice", default)]
+    pub route_price: Option<String>,
+    #[serde(rename = "overAnon", default)]
+    pub over_anon: Option<bool>,
+    #[serde(rename = "rpcOverAnon", default)]
+    pub rpc_over_anon: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct PreflightVault {
+    #[serde(rename = "localOnly")]
+    pub local_only: bool,
+    pub writes: RelayWriteTargets,
+}
+
+/// `PreflightView` in `daemon.ts` (`packages/daemon/src/lease.ts`'s own type
+/// of the same name) — what a spawn WOULD do, and everything wrong with it,
+/// before anything is paid.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct PreflightView {
+    pub ok: bool,
+    #[serde(default)]
+    pub problems: Vec<String>,
+    #[serde(default)]
+    pub provider: Option<PreflightProviderView>,
+    #[serde(default)]
+    pub listing: Option<PreflightListingView>,
+    #[serde(default)]
+    pub route: Option<String>,
+    #[serde(default)]
+    pub payment: Option<PreflightPayment>,
+    pub vault: PreflightVault,
+}
+
+/// `SpawnResult` in `daemon.ts`. No field here could carry a Root Secret —
+/// `LeaseView` has none — matching `api-leases.test.ts`'s own rule.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct SpawnResult {
+    #[serde(default)]
+    pub lease: Option<LeaseView>,
+    pub preflight: PreflightView,
+    #[serde(default)]
+    pub answer: Option<serde_json::Value>,
+    /// What the packet cost, in base units of the settlement token.
+    #[serde(default)]
+    pub cost: Option<String>,
+    #[serde(rename = "retractionFailed", default)]
+    pub retraction_failed: Option<String>,
+    #[serde(rename = "confirmationFailed", default)]
+    pub confirmation_failed: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct MemberPlanView {
+    pub pubkey: String,
+    pub index: i64,
+    pub role: String,
+    pub view: PreflightView,
+}
+
+/// `StandbySetPreflightView` in `daemon.ts` (spec §7): one workload id,
+/// priced at every member — the primary AND each Warm Standby, since a set
+/// spends at every one of them.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct StandbySetPreflightView {
+    pub ok: bool,
+    #[serde(default)]
+    pub problems: Vec<String>,
+    #[serde(rename = "workloadId", default)]
+    pub workload_id: Option<String>,
+    pub members: Vec<MemberPlanView>,
+    #[serde(default)]
+    pub cost: Option<String>,
+    pub vault: PreflightVault,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct MemberSpawnResult {
+    pub pubkey: String,
+    pub index: i64,
+    pub role: String,
+    #[serde(default)]
+    pub route: Option<String>,
+    pub sent: bool,
+    pub ok: bool,
+    #[serde(default)]
+    pub cost: Option<String>,
+    #[serde(rename = "expiresAt", default)]
+    pub expires_at: Option<i64>,
+    #[serde(default)]
+    pub access: Option<LeaseAccess>,
+    #[serde(rename = "providerError", default)]
+    pub provider_error: Option<String>,
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+/// `StandbySetResult` in `daemon.ts` — every member reported separately,
+/// including one that refused and was billed anyway (ADR 0003).
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct StandbySetResult {
+    #[serde(default)]
+    pub lease: Option<LeaseView>,
+    pub preflight: StandbySetPreflightView,
+    pub members: Vec<MemberSpawnResult>,
+    #[serde(default)]
+    pub cost: Option<String>,
+    #[serde(rename = "confirmationFailed", default)]
+    pub confirmation_failed: Option<String>,
+}
+
 /// The Chain Seed (TOON_Network#142, ADR 0020), a mirror of `daemon.ts`'s
 /// `ChainSeedStatus` and its neighbours.
 ///
@@ -2016,5 +2475,93 @@ mod tests {
         let purchase: GasPurchase = serde_json::from_value(purchase_json).unwrap();
         assert_eq!(purchase.state, "delivered");
         assert_eq!(purchase.signature.as_deref(), Some("5sig"));
+    }
+
+    /// TOON_Network#146: what the New workload view actually posts. Checked
+    /// here at the wire level, not just built and inspected in Rust, since
+    /// there is no committed daemon fixture for a Standby Set's own routes
+    /// (see `tui/tests/fixture_contract.rs`'s note on `templates`/
+    /// `leases-*`) — this is what proves the flattened `extends
+    /// SpawnRequestBody` shape `daemon.ts`'s `StandbySetRequestBody`
+    /// describes.
+    #[test]
+    fn spawn_request_body_serializes_to_the_shape_the_daemon_reads() {
+        let request = SpawnRequestBody {
+            provider: "d".repeat(64),
+            listing: "basic".to_string(),
+            image: SpawnImageRequest {
+                reference: Some("traefik/whoami".to_string()),
+                digest: "sha256:aa".to_string(),
+                registry_entry: None,
+            },
+            env: Some(std::collections::BTreeMap::from([(
+                "SITE_TITLE".to_string(),
+                "hello".to_string(),
+            )])),
+            ports: Some(vec![SpawnPortRequest {
+                container_port: 8080,
+                protocol: Some("tcp".to_string()),
+            }]),
+            ssh_public_key: "ssh-ed25519 AAAA".to_string(),
+            volume_gb: Some(5),
+            entrypoint: None,
+            args: None,
+            template: Some("30436:aa:static-site".to_string()),
+            local_only: Some(true),
+            chain: None,
+        };
+        let value = serde_json::to_value(&request).unwrap();
+        assert_eq!(value["provider"], "d".repeat(64));
+        assert_eq!(value["listing"], "basic");
+        assert_eq!(value["image"]["digest"], "sha256:aa");
+        assert_eq!(value["sshPublicKey"], "ssh-ed25519 AAAA");
+        assert_eq!(value["volumeGb"], 5);
+        assert_eq!(value["localOnly"], true);
+        assert_eq!(value["ports"][0]["containerPort"], 8080);
+        // Fields left `None` are OMITTED, not sent as `null` — the same
+        // "only what changed" shape `readSpawnRequest` expects (`api.ts`).
+        assert!(value.get("chain").is_none());
+        assert!(value.get("entrypoint").is_none());
+        assert!(value.get("args").is_none());
+    }
+
+    #[test]
+    fn standby_set_request_body_flattens_the_primary_and_carries_standbys() {
+        let base = SpawnRequestBody {
+            provider: "d".repeat(64),
+            listing: "basic".to_string(),
+            image: SpawnImageRequest {
+                reference: None,
+                digest: "sha256:aa".to_string(),
+                registry_entry: None,
+            },
+            env: None,
+            ports: None,
+            ssh_public_key: "ssh-ed25519 AAAA".to_string(),
+            volume_gb: None,
+            entrypoint: None,
+            args: None,
+            template: Some("30436:aa:static-site".to_string()),
+            local_only: None,
+            chain: None,
+        };
+        let request = StandbySetRequestBody {
+            base,
+            standbys: vec![StandbyMemberRequest {
+                provider: "e".repeat(64),
+                listing: "basic".to_string(),
+                listing_version: None,
+                chain: None,
+            }],
+        };
+        let value = serde_json::to_value(&request).unwrap();
+        // Flattened: `provider`/`listing`/... sit beside `standbys` on the
+        // SAME object, not nested under a `base` key — `daemon.ts`'s own
+        // `extends SpawnRequestBody`, mirrored.
+        assert_eq!(value["provider"], "d".repeat(64));
+        assert_eq!(value["listing"], "basic");
+        assert!(value.get("base").is_none());
+        assert_eq!(value["standbys"][0]["provider"], "e".repeat(64));
+        assert_eq!(value["standbys"][0]["listing"], "basic");
     }
 }

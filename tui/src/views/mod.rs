@@ -7,5 +7,6 @@ pub mod directory;
 pub mod docs;
 pub mod funds;
 pub mod health;
+pub mod new_workload;
 pub mod placeholder;
 pub mod workloads;

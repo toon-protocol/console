@@ -9,11 +9,13 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
 use crate::types::{
-    ChainSeedStatus, DocsIndex, DocsPage, Health, LocalSignerRequest, Profiles, SessionStatus,
+    ChainSeedStatus, DocsIndex, DocsPage, ExpandTemplateRequest, Health, LocalSignerRequest,
+    Profiles, SessionStatus, SpawnRequestBody, StandbySetRequestBody,
 };
 use crate::views::account::{self, AccountViewState};
 use crate::views::directory::{self, DirectoryCommand, DirectoryViewState};
 use crate::views::funds::FundsState;
+use crate::views::new_workload::{self, NewWorkloadViewState};
 use crate::views::workloads::{self, WorkloadsViewState};
 
 /// How many lines `PageUp`/`PageDown` scroll the Docs article — arbitrary,
@@ -193,6 +195,12 @@ pub struct App {
     /// drawing to itself — `handle_key` only ever reaches into it through
     /// `views::workloads::handle_key`.
     pub workloads: WorkloadsViewState,
+    /// The New workload view's own state (TOON_Network#146): the wizard
+    /// stage, the Template gallery, the form, the Listing and Standbys
+    /// pickers, and any open preflight or spawn confirmation. Kept as one
+    /// field the same way `workloads` is — `handle_key` only ever reaches
+    /// into it through `views::new_workload::handle_key`.
+    pub new_workload: NewWorkloadViewState,
 }
 
 impl App {
@@ -228,6 +236,7 @@ impl App {
             docs_link_index: 0,
             funds: FundsState::default(),
             workloads: WorkloadsViewState::new(),
+            new_workload: NewWorkloadViewState::new(),
         }
     }
 }
@@ -364,6 +373,28 @@ pub enum Command {
         workload_id: String,
     },
     CopyToClipboard(String),
+    // -- New workload (TOON_Network#146) --
+    /// `GET /api/templates` — read once on connect and on a profile switch
+    /// (a Template gallery is per network, like the Directory), and again
+    /// on `r` while the Gallery stage is showing.
+    RefreshTemplates,
+    /// `POST /api/templates/expand` — free; the Form stage's "Preview the
+    /// spawn" once it has validated.
+    ExpandTemplate(ExpandTemplateRequest),
+    /// `POST /api/leases/preflight` — free; sent once a Listing is chosen
+    /// and the Standbys stage is left with no standby added.
+    PreflightSpawn(SpawnRequestBody),
+    /// `POST /api/leases/standby-set/preflight` — free; the same moment as
+    /// `PreflightSpawn`, but with at least one Warm Standby added.
+    PreflightStandbySet(StandbySetRequestBody),
+    /// `POST /api/leases/spawn` — **spends money** (spec §5, ADR 0003).
+    /// Only ever reached after `widgets::confirm::Confirm`'s typed-`yes`
+    /// dance (see `views::new_workload`); nothing in this module's keymap
+    /// can produce it from a single keypress.
+    SpawnWorkload(SpawnRequestBody),
+    /// `POST /api/leases/standby-set` — **spends at every member** (ADR
+    /// 0003). Same confirmation gate as `SpawnWorkload`.
+    SpawnStandbySet(StandbySetRequestBody),
 }
 
 /// The one place a keypress becomes a decision.
@@ -429,6 +460,17 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> Command {
     // Workloads view is merely showing its list.
     if app.view == View::Workloads {
         if let Some(command) = workloads::handle_key(&mut app.workloads, key) {
+            return command;
+        }
+    }
+
+    // New workload (TOON_Network#146) gets first refusal the same way: its
+    // own confirm modal, its Form stage's text fields, and its three
+    // pickers each need to swallow keys a global binding would otherwise
+    // claim (a digit while typing an env value, `Enter` while a listing is
+    // highlighted, ...).
+    if app.view == View::New {
+        if let Some(command) = new_workload::handle_key(&mut app.new_workload, key) {
             return command;
         }
     }

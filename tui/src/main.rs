@@ -32,12 +32,15 @@ use toon_console_tui::launch::{launch_file_path, LaunchError};
 use toon_console_tui::markdown;
 use toon_console_tui::types::{
     BunkerSignerRequest, ChainSeedStatus, Dashboard, Directory, DirectoryFilters, DocsIndex,
-    DocsPage, ExtendResult, FundingStatus, GasPurchase, GasQuote, GasStationStatus, GatewayView,
-    HandoverResult, Health, ImportChainSeedRequest, ProfileSwitchRequest, Profiles, RotationResult,
-    RotationView, SessionStatus, SignInRequest, TerminateResult, WithdrawalResult, WorkloadCard,
+    DocsPage, ExpandTemplateRequest, ExpandedTemplate, ExtendResult, FundingStatus, GasPurchase,
+    GasQuote, GasStationStatus, GatewayView, HandoverResult, Health, ImportChainSeedRequest,
+    PreflightView, ProfileSwitchRequest, Profiles, RotationResult, RotationView, SessionStatus,
+    SignInRequest, SpawnRequestBody, SpawnResult, StandbySetPreflightView, StandbySetRequestBody,
+    StandbySetResult, TemplateGallery, TerminateResult, WithdrawalResult, WorkloadCard,
 };
 use toon_console_tui::ui;
 use toon_console_tui::views::directory::directory_query;
+use toon_console_tui::views::new_workload;
 use toon_console_tui::views::workloads as workloads_view;
 
 /// How long to wait between attempts to find the daemon while it is down —
@@ -108,6 +111,19 @@ enum RuntimeEvent {
     /// (acknowledge, mint, import, publish, refresh) — every one of those
     /// routes answers with the same `ChainSeedStatus` (TOON_Network#142).
     ChainSeedLoaded(Box<Result<ChainSeedStatus, String>>),
+    // -- New workload (TOON_Network#146) --
+    /// `GET /api/templates`, on connect, on a profile switch, and on `r`.
+    TemplatesLoaded(Box<Result<TemplateGallery, String>>),
+    /// `POST /api/templates/expand` — moves the wizard on to
+    /// [`new_workload::Stage::Listing`] on success; stays on the Form stage,
+    /// with the error beside "Preview the spawn", on failure.
+    TemplateExpanded(Box<Result<ExpandedTemplate, String>>),
+    SpawnPreflighted(Box<Result<PreflightView, String>>),
+    StandbySetPreflighted(Box<Result<StandbySetPreflightView, String>>),
+    /// `POST /api/leases/spawn` — on success, `run` switches to the
+    /// Workloads view with the new lease selected (see the handler below).
+    WorkloadSpawned(Box<Result<SpawnResult, String>>),
+    StandbySetSpawned(Box<Result<StandbySetResult, String>>),
 }
 
 #[tokio::main]
@@ -397,6 +413,41 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()
                             Command::CopyToClipboard(text) => {
                                 spawn_clipboard_copy(text, tx.clone());
                             }
+                            // -- New workload (TOON_Network#146) --
+                            Command::RefreshTemplates => {
+                                if let Some(client) = &client {
+                                    spawn_templates_fetch(client.clone(), tx.clone());
+                                    app.new_workload.loading_gallery = true;
+                                }
+                            }
+                            Command::ExpandTemplate(request) => {
+                                if let Some(client) = &client {
+                                    spawn_expand_template(client.clone(), tx.clone(), request);
+                                }
+                            }
+                            Command::PreflightSpawn(request) => {
+                                if let Some(client) = &client {
+                                    spawn_preflight_spawn(client.clone(), tx.clone(), request);
+                                }
+                            }
+                            Command::PreflightStandbySet(request) => {
+                                if let Some(client) = &client {
+                                    spawn_preflight_standby_set(client.clone(), tx.clone(), request);
+                                }
+                            }
+                            // Only ever produced by New workload's own
+                            // typed-`yes`-then-`Enter` confirmation — see
+                            // `views::new_workload::handle_key`.
+                            Command::SpawnWorkload(request) => {
+                                if let Some(client) = &client {
+                                    spawn_workload_spawn(client.clone(), tx.clone(), request);
+                                }
+                            }
+                            Command::SpawnStandbySet(request) => {
+                                if let Some(client) = &client {
+                                    spawn_standby_set_spawn(client.clone(), tx.clone(), request);
+                                }
+                            }
                             Command::None => {}
                         }
                     }
@@ -436,6 +487,11 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()
                         spawn_workloads_fetch(connected.clone(), tx.clone(), true);
                         app.workloads.loading = true;
                         spawn_workloads_poll(connected.clone(), tx.clone());
+                        // The Template gallery (TOON_Network#146) is read
+                        // eagerly too, the same as Directory and Docs: reading
+                        // is free and needs no account (`use-templates.ts`).
+                        spawn_templates_fetch(connected.clone(), tx.clone());
+                        app.new_workload.loading_gallery = true;
                         spawn_desktop(connected.clone(), tx.clone());
                         client = Some(connected);
                     }
@@ -455,6 +511,10 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()
                     },
                     RuntimeEvent::DirectoryLoaded(result) => match *result {
                         Ok(directory) => {
+                            // New workload's Listing picker (TOON_Network#146)
+                            // shares this exact read rather than fetching its
+                            // own — see `views::new_workload`'s module doc.
+                            new_workload::apply_directory(&mut app.new_workload, &directory);
                             app.directory.apply(directory);
                             app.loading_directory = false;
                             app.daemon_status = DaemonStatus::Connected;
@@ -532,6 +592,11 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()
                             app.funds.gas_busy = true;
                             spawn_workloads_fetch(client.clone(), tx.clone(), true);
                             app.workloads.loading = true;
+                            // A Template gallery is per network, like the
+                            // Directory (TOON_Network#146,
+                            // `use-templates.ts`'s own `profileId` key).
+                            spawn_templates_fetch(client.clone(), tx.clone());
+                            app.new_workload.loading_gallery = true;
                             // `writes` (what a Chain Seed publish would cost)
                             // is quoted by the active profile's connector, so
                             // it re-reads here too, not only on a pubkey
@@ -613,6 +678,18 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()
                                         .as_ref()
                                         .map_or(0, |d| d.cards.len()),
                                 );
+                                // TOON_Network#146: land on a workload a New
+                                // workload spawn just bought, the first
+                                // dashboard read that has it. One attempt per
+                                // refresh, cleared either way — a lease still
+                                // provisioning a moment after the spawn simply
+                                // shows up selected on the NEXT poll instead.
+                                if let Some(workload_id) = app.workloads.pending_select.take() {
+                                    workloads_view::select_workload(
+                                        &mut app.workloads,
+                                        &workload_id,
+                                    );
+                                }
                             }
                             Err(message) => app.workloads.error = Some(message),
                         }
@@ -708,6 +785,94 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()
                             _ => app.workloads.status = Some(message),
                         }
                     }
+                    // -- New workload (TOON_Network#146) --
+                    RuntimeEvent::TemplatesLoaded(result) => {
+                        app.new_workload.loading_gallery = false;
+                        match *result {
+                            Ok(gallery) => {
+                                app.new_workload.gallery = Some(gallery);
+                                app.new_workload.gallery_error = None;
+                            }
+                            Err(message) => app.new_workload.gallery_error = Some(message),
+                        }
+                    }
+                    RuntimeEvent::TemplateExpanded(result) => {
+                        app.new_workload.expanding = false;
+                        match *result {
+                            Ok(expansion) => {
+                                app.new_workload.expansion = Some(expansion);
+                                app.new_workload.expand_error = None;
+                                // The daemon re-read the Template and built
+                                // the §6.2 content itself — only now is there
+                                // anything to spawn, so only now does the
+                                // wizard move on.
+                                app.new_workload.stage = new_workload::Stage::Listing;
+                            }
+                            Err(message) => app.new_workload.expand_error = Some(message),
+                        }
+                    }
+                    RuntimeEvent::SpawnPreflighted(result) => {
+                        app.new_workload.preflight_loading = false;
+                        match *result {
+                            Ok(preflight) => {
+                                app.new_workload.preflight = Some(preflight);
+                                app.new_workload.set_preflight = None;
+                                app.new_workload.preflight_error = None;
+                            }
+                            Err(message) => app.new_workload.preflight_error = Some(message),
+                        }
+                    }
+                    RuntimeEvent::StandbySetPreflighted(result) => {
+                        app.new_workload.preflight_loading = false;
+                        match *result {
+                            Ok(preflight) => {
+                                app.new_workload.set_preflight = Some(preflight);
+                                app.new_workload.preflight = None;
+                                app.new_workload.preflight_error = None;
+                            }
+                            Err(message) => app.new_workload.preflight_error = Some(message),
+                        }
+                    }
+                    RuntimeEvent::WorkloadSpawned(result) => {
+                        app.new_workload.spawning = false;
+                        match *result {
+                            Ok(spawn) => {
+                                let workload_id =
+                                    spawn.lease.as_ref().map(|lease| lease.workload_id.clone());
+                                new_workload::reset_wizard(
+                                    &mut app.new_workload,
+                                    "Spawned. Landed on the new workload in Workloads.",
+                                );
+                                app.view = View::Workloads;
+                                app.workloads.pending_select = workload_id;
+                                if let Some(client) = &client {
+                                    spawn_workloads_fetch(client.clone(), tx.clone(), true);
+                                    app.workloads.loading = true;
+                                }
+                            }
+                            Err(message) => app.new_workload.spawn_error = Some(message),
+                        }
+                    }
+                    RuntimeEvent::StandbySetSpawned(result) => {
+                        app.new_workload.spawning = false;
+                        match *result {
+                            Ok(spawn) => {
+                                let workload_id =
+                                    spawn.lease.as_ref().map(|lease| lease.workload_id.clone());
+                                new_workload::reset_wizard(
+                                    &mut app.new_workload,
+                                    "Spawned. Landed on the new workload in Workloads.",
+                                );
+                                app.view = View::Workloads;
+                                app.workloads.pending_select = workload_id;
+                                if let Some(client) = &client {
+                                    spawn_workloads_fetch(client.clone(), tx.clone(), true);
+                                    app.workloads.loading = true;
+                                }
+                            }
+                            Err(message) => app.new_workload.spawn_error = Some(message),
+                        }
+                    }
                 }
             }
             _ = clock.tick() => {
@@ -801,6 +966,105 @@ fn spawn_directory_fetch(
             .await
             .map_err(|err| err.to_string());
         let _ = tx.send(RuntimeEvent::DirectoryLoaded(Box::new(result)));
+    });
+}
+
+// -- New workload (TOON_Network#146): the daemon calls
+// `views::new_workload` needs. --
+
+/// `GET /api/templates` — free, and needs no account (`use-templates.ts`'s
+/// own doc comment): read on connect, on a profile switch, and again on `r`
+/// while the Gallery stage is showing.
+fn spawn_templates_fetch(client: Arc<DaemonClient>, tx: UnboundedSender<RuntimeEvent>) {
+    tokio::spawn(async move {
+        let result = client
+            .get::<TemplateGallery>("/api/templates")
+            .await
+            .map_err(|err| err.to_string());
+        let _ = tx.send(RuntimeEvent::TemplatesLoaded(Box::new(result)));
+    });
+}
+
+/// `POST /api/templates/expand` — free. The daemon re-reads the Template and
+/// decides what is settable; what comes back is the §6.2 content a manual
+/// spawn of the expanded image would carry.
+fn spawn_expand_template(
+    client: Arc<DaemonClient>,
+    tx: UnboundedSender<RuntimeEvent>,
+    request: ExpandTemplateRequest,
+) {
+    tokio::spawn(async move {
+        let result = client
+            .post::<_, ExpandedTemplate>("/api/templates/expand", &request)
+            .await
+            .map_err(|err| err.to_string());
+        let _ = tx.send(RuntimeEvent::TemplateExpanded(Box::new(result)));
+    });
+}
+
+/// `POST /api/leases/preflight` — free; safe to call every time the
+/// Standbys stage is left or `L` flips `local_only`.
+fn spawn_preflight_spawn(
+    client: Arc<DaemonClient>,
+    tx: UnboundedSender<RuntimeEvent>,
+    request: SpawnRequestBody,
+) {
+    tokio::spawn(async move {
+        let result = client
+            .post::<_, PreflightView>("/api/leases/preflight", &request)
+            .await
+            .map_err(|err| err.to_string());
+        let _ = tx.send(RuntimeEvent::SpawnPreflighted(Box::new(result)));
+    });
+}
+
+/// `POST /api/leases/standby-set/preflight` — free; prices every member of
+/// the set (spec §7).
+fn spawn_preflight_standby_set(
+    client: Arc<DaemonClient>,
+    tx: UnboundedSender<RuntimeEvent>,
+    request: StandbySetRequestBody,
+) {
+    tokio::spawn(async move {
+        let result = client
+            .post::<_, StandbySetPreflightView>("/api/leases/standby-set/preflight", &request)
+            .await
+            .map_err(|err| err.to_string());
+        let _ = tx.send(RuntimeEvent::StandbySetPreflighted(Box::new(result)));
+    });
+}
+
+/// `POST /api/leases/spawn` — **spends money** (spec §5, ADR 0003). Only
+/// ever reached after `views::new_workload::handle_key` has already
+/// required typing `yes` through `widgets::confirm`, the same rule every
+/// other spending command in this crate follows.
+fn spawn_workload_spawn(
+    client: Arc<DaemonClient>,
+    tx: UnboundedSender<RuntimeEvent>,
+    request: SpawnRequestBody,
+) {
+    tokio::spawn(async move {
+        let result = client
+            .post::<_, SpawnResult>("/api/leases/spawn", &request)
+            .await
+            .map_err(|err| err.to_string());
+        let _ = tx.send(RuntimeEvent::WorkloadSpawned(Box::new(result)));
+    });
+}
+
+/// `POST /api/leases/standby-set` — **spends at every member** (ADR 0003).
+/// Same confirmation gate as [`spawn_workload_spawn`].
+fn spawn_standby_set_spawn(
+    client: Arc<DaemonClient>,
+    tx: UnboundedSender<RuntimeEvent>,
+    request: StandbySetRequestBody,
+) {
+    tokio::spawn(async move {
+        let result = client
+            .post::<_, StandbySetResult>("/api/leases/standby-set", &request)
+            .await
+            .map_err(|err| err.to_string());
+        let _ = tx.send(RuntimeEvent::StandbySetSpawned(Box::new(result)));
     });
 }
 

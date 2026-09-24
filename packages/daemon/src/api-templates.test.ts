@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { AccountSession } from './account-session.js';
 import { handleApi, type ApiDeps, type ApiResponse } from './api.js';
+import { writeApiFixture } from './api-fixtures.testkit.js';
 import { ChainSeedStore } from './chain-seed.js';
 import { InMemoryChainSeedCache } from './chain-seed-cache.js';
 import type { ConnectorHealth } from './connector-health.js';
@@ -121,6 +122,9 @@ describe('the Template routes', () => {
     const body = response.body as { state: string; templates: { name: string }[] };
     expect(body.state).toBe('ok');
     expect(body.templates.map((template) => template.name)).toEqual(['static-site']);
+    // TOON_Network#146's Gallery stage checks its Rust type against this
+    // real answer.
+    writeApiFixture('templates', response.body);
   });
 
   it('expands a Template into a spawn', async () => {
@@ -133,6 +137,9 @@ describe('the Template routes', () => {
     const body = response.body as { spawn: { env: Record<string, string>; template: string } };
     expect(body.spawn.env).toEqual({ MODE: 'production', SITE_TITLE: 'a small site' });
     expect(body.spawn.template).toBe(address);
+    // TOON_Network#146's Form stage builds its spawn request straight from
+    // this answer's `spawn` — checked against its Rust type here too.
+    writeApiFixture('template-expand', response.body);
   });
 
   it('refuses a setting the Template did not mark tenant-settable', async () => {

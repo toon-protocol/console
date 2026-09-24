@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { handleApi, type ApiDeps, type ApiResponse } from './api.js';
+import { writeApiFixture } from './api-fixtures.testkit.js';
 import { ChainSeedStore } from './chain-seed.js';
 import { InMemoryChainSeedCache } from './chain-seed-cache.js';
 import {
@@ -127,6 +128,10 @@ describe('the lease routes', () => {
   it('spawns, and lists the workload afterwards', async () => {
     const spawned = await call('POST', '/api/leases/spawn', GOOD_SPAWN);
     expect(spawned.status).toBe(200);
+    // TOON_Network#146's New workload view spawns through this exact route;
+    // its preflight confirmation and post-spawn "select the new workload"
+    // hook are checked against this real answer's shape.
+    writeApiFixture('leases-spawn', spawned.body);
 
     const listed = (await call('GET', '/api/leases')).body as LeaseVaultStatus;
     expect(listed.leases).toHaveLength(1);
@@ -153,6 +158,9 @@ describe('the lease routes', () => {
     expect(answer.status).toBe(200);
     expect(answer.body).toMatchObject({ ok: true, route: 'g.toon.provider.basic.v1.spawn' });
     expect(port.sent).toHaveLength(0);
+    // TOON_Network#146's Preflight stage checks its Rust type against this
+    // real answer.
+    writeApiFixture('leases-preflight', answer.body);
   });
 
   it('surfaces the provider’s OWN code when a spawn is refused', async () => {

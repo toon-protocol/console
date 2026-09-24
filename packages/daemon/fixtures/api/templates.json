@@ -1,0 +1,84 @@
+{
+  "state": "ok",
+  "relays": {
+    "seed": [
+      "wss://relay.test"
+    ],
+    "read": [
+      {
+        "url": "wss://relay.test",
+        "state": "read",
+        "events": 1
+      }
+    ]
+  },
+  "templates": [
+    {
+      "version": 1,
+      "image": {
+        "digest": "sha256:c0a665205c6d8d1f4ee8e2e217efd7a467527df34100ca78f11cca5c17486126",
+        "registryEntry": {
+          "address": "30434:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000:web:1.0"
+        }
+      },
+      "ports": [
+        {
+          "containerPort": 8080,
+          "protocol": "tcp"
+        }
+      ],
+      "envFixed": {
+        "MODE": "production"
+      },
+      "envTenant": [
+        "SITE_TITLE"
+      ],
+      "name": "static-site",
+      "address": "30436:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000:static-site",
+      "publisher": {
+        "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
+        "npub": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000"
+      },
+      "availability": {
+        "state": "available",
+        "checked": "Its Image Registry entry was read from a relay, verified as the signature of the key its own address names, and names a source for each of its 2 blobs. The bytes themselves are fetched and checked against this digest by the provider (ADR 0006, §8.4).",
+        "entry": {
+          "address": "30434:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000:web:1.0",
+          "canonicalName": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000/web:1.0",
+          "digest": "sha256:c0a665205c6d8d1f4ee8e2e217efd7a467527df34100ca78f11cca5c17486126",
+          "mediaType": "application/vnd.oci.image.manifest.v1+json",
+          "blobs": [
+            {
+              "digest": "sha256:c0a665205c6d8d1f4ee8e2e217efd7a467527df34100ca78f11cca5c17486126",
+              "size": 549,
+              "mediaType": "application/vnd.oci.image.manifest.v1+json",
+              "source": {
+                "type": "toon-store",
+                "blobRecordTxid": "aaaaaaaaaaaaaaaaaaaaaa0000"
+              }
+            },
+            {
+              "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+              "size": 2048,
+              "mediaType": "application/vnd.oci.image.layer.v1.tar",
+              "source": {
+                "type": "oci",
+                "registry": "registry-1.docker.io",
+                "repository": "library/alpine"
+              }
+            }
+          ],
+          "signer": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
+          "publishedAt": "2026-01-01T00:00:00.000Z",
+          "eventId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001"
+        }
+      },
+      "warnings": [],
+      "publishedAt": "2026-01-01T00:00:00.000Z",
+      "eventId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0002"
+    }
+  ],
+  "rejected": [],
+  "rejectedEvents": 0,
+  "readAt": "2026-01-01T00:00:00.000Z"
+}

@@ -1,0 +1,1760 @@
+//! New workload (TOON_Network#146): starting a lease entirely from the TUI.
+//!
+//! A terminal mirror of `packages/ui/src/app/templates-view.tsx`,
+//! `hooks/use-templates.ts`, and the spawn/preflight half of
+//! `packages/ui/src/app/workloads-view.tsx` and `hooks/use-leases.ts` — the
+//! web UI never wires those two together itself (the Templates view only
+//! previews an expansion; a person retypes it by hand into the generic
+//! spawn form), but this ticket's own acceptance criteria describe exactly
+//! that pipeline, so this view builds it: expand a Template, pick a
+//! Listing, optionally add Warm Standbys, see the preflight, confirm.
+//!
+//! Five stages ([`Stage`]), walked in order, `Backspace` to go back one:
+//!
+//! 1. **Gallery** — `GET /api/templates`, `j`/`k`/`/`/`Enter` over
+//!    [`crate::widgets::list::ListState`], same as every other list in this
+//!    crate. `Enter` on an unavailable Template does nothing but say so; an
+//!    available one opens the form.
+//! 2. **Form** — one [`crate::widgets::input::TextField`] per tenant-settable
+//!    env name (`template.envTenant` minus `envFixed`'s keys — exactly
+//!    `SpawnForm`'s own `settable` in `templates-view.tsx`), one for the SSH
+//!    public key, one for an optional volume size. `Enter` on "Preview the
+//!    spawn" validates (an empty SSH key or a non-numeric volume shows its
+//!    error on the line right after the field, per this ticket's acceptance
+//!    criterion) and, if it passes, sends `POST /api/templates/expand` —
+//!    free, and the same content a manual spawn of the expanded image would
+//!    carry (spec §6.2).
+//! 3. **Listing** — [`crate::views::directory::ListingPicker`], embedded
+//!    exactly as its own module doc says #146 would: fed from the same
+//!    `GET /api/directory` read every other view shares (`apply_directory`),
+//!    never a filtered or separate copy. Since an unfiltered read shows
+//!    Hidden Providers alongside the rest, picking one here is how a Hidden
+//!    Provider is chosen — there is no separate toggle, the same as the web
+//!    form (`workloads-view.tsx`'s `<select>` lists every provider the
+//!    Directory returned).
+//! 4. **Standbys** — a second, independently-fed `ListingPicker`, holding
+//!    only providers that are not the primary and sell a tier with a
+//!    `standbyPrice` (mirrors `Standbys` in `workloads-view.tsx`). `Enter`
+//!    adds one, `d` removes the last, `n` continues (with zero is fine — an
+//!    ordinary spawn, not a Standby Set).
+//! 5. **Preflight** — `POST /api/leases/preflight` or, with standbys,
+//!    `POST /api/leases/standby-set/preflight`; `L` toggles "local only" and
+//!    re-prices; `s` opens [`crate::widgets::confirm::Confirm`] (typing `yes`
+//!    then Enter — one keypress cannot pass it), which on confirmation sends
+//!    `POST /api/leases/spawn` or `.../standby-set`.
+//!
+//! `main.rs` owns the network calls and the `Stage::Form` -> `Stage::Listing`
+//! transition (it only happens once `POST /api/templates/expand` answers);
+//! everything else here is this module's own state machine, tested without a
+//! terminal the same way `views::workloads` and `views::account` are.
+
+use std::collections::BTreeMap;
+
+use crossterm::event::{KeyCode, KeyEvent};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::Frame;
+
+use crate::app::Command;
+use crate::types::{
+    Directory, ExpandTemplateRequest, ExpandedTemplate, ListingView, PreflightView, ProviderView,
+    RegistryEntryRequest, SpawnContentImage, SpawnImageRequest, SpawnPortRequest, SpawnRequestBody,
+    StandbyMemberRequest, StandbySetPreflightView, StandbySetRequestBody, TemplateAvailability,
+    TemplateGallery, TemplateView,
+};
+use crate::views::directory::{ListingPicker, PickerEvent};
+use crate::widgets::confirm::{Confirm, ConfirmOutcome};
+use crate::widgets::input::TextField;
+use crate::widgets::list::{ListOutcome, ListState};
+
+/// The five steps of the wizard, walked in order. `Backspace` moves back
+/// one; nothing here skips ahead — each stage's own key handling is what
+/// advances to the next.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stage {
+    Gallery,
+    Form,
+    Listing,
+    Standbys,
+    Preflight,
+}
+
+/// One focusable field or button in the Form stage, in cursor order — the
+/// same `targets()`-plus-`cursor` shape `views::account` documents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FormTarget {
+    Env(usize),
+    Ssh,
+    Volume,
+    Preview,
+}
+
+/// The Form stage's own fields, rebuilt fresh by [`FormFields::new`] each
+/// time a Template is opened from the gallery — a stale field from a
+/// PREVIOUS Template must never leak into this one's request.
+pub struct FormFields {
+    /// Parallel to `env_fields`: `env_names[i]` is the env var `env_fields[i]`
+    /// holds a value for.
+    env_names: Vec<String>,
+    env_fields: Vec<TextField>,
+    ssh: TextField,
+    volume: TextField,
+    cursor: usize,
+    editing: bool,
+    /// Validation errors from the last "Preview the spawn" attempt, shown
+    /// beside the field they are about — cleared and rebuilt on every
+    /// attempt, never accumulated.
+    errors: Vec<(FormTarget, String)>,
+}
+
+impl FormFields {
+    fn new(template: &TemplateView) -> Self {
+        let env_names = settable_env_names(template);
+        let env_fields = env_names
+            .iter()
+            .map(|_| TextField::new("", false))
+            .collect();
+        Self {
+            env_names,
+            env_fields,
+            ssh: TextField::new("SSH public key", false),
+            volume: TextField::new("Volume (GB, optional)", false),
+            cursor: 0,
+            editing: false,
+            errors: Vec::new(),
+        }
+    }
+}
+
+impl Default for FormFields {
+    fn default() -> Self {
+        Self {
+            env_names: Vec::new(),
+            env_fields: Vec::new(),
+            ssh: TextField::new("SSH public key", false),
+            volume: TextField::new("Volume (GB, optional)", false),
+            cursor: 0,
+            editing: false,
+            errors: Vec::new(),
+        }
+    }
+}
+
+/// Every name a Template marks tenant-settable, minus the ones it fixed —
+/// `SpawnForm`'s own `settable` in `templates-view.tsx`.
+fn settable_env_names(template: &TemplateView) -> Vec<String> {
+    template
+        .env_tenant
+        .iter()
+        .filter(|name| !template.env_fixed.contains_key(*name))
+        .cloned()
+        .collect()
+}
+
+/// One Warm Standby chosen in the Standbys stage — just enough to build a
+/// [`StandbyMemberRequest`] and to show what was picked; `views::directory`'s
+/// own [`ListingView`]/[`ProviderView`] are not kept around once chosen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StandbyMember {
+    pub provider_pubkey: String,
+    pub provider_label: String,
+    pub listing_name: String,
+    pub listing_label: String,
+}
+
+/// What a confirmed `s` becomes, once the person has typed `yes` — carried
+/// out by `main.rs`, the only place this crate calls the network.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SpawnAction {
+    Spawn(SpawnRequestBody),
+    StandbySet(StandbySetRequestBody),
+}
+
+pub struct NewWorkloadViewState {
+    pub stage: Stage,
+
+    // -- Gallery --
+    pub gallery: Option<TemplateGallery>,
+    pub loading_gallery: bool,
+    pub gallery_error: Option<String>,
+    pub gallery_list: ListState,
+
+    /// The Template chosen from the gallery, carried through every later
+    /// stage — cleared only when the wizard resets.
+    pub template: Option<TemplateView>,
+
+    // -- Form --
+    pub form: FormFields,
+    pub expanding: bool,
+    pub expand_error: Option<String>,
+    /// The §6.2 spawn content the Template expanded to. Set once
+    /// `POST /api/templates/expand` answers (`main.rs`), which is also what
+    /// moves `stage` on to [`Stage::Listing`].
+    pub expansion: Option<ExpandedTemplate>,
+
+    // -- Listing --
+    /// Fed by [`apply_directory`] from the same `GET /api/directory` read
+    /// every other view shares — never its own fetch (see the module doc).
+    pub picker: ListingPicker,
+    /// The raw providers from the last directory read, kept so the Standbys
+    /// stage can filter them down to candidates independently of what the
+    /// primary picker currently shows.
+    all_providers: Vec<ProviderView>,
+    pub directory_error: Option<String>,
+
+    // -- Standbys --
+    pub standby_picker: ListingPicker,
+    pub standbys: Vec<StandbyMember>,
+
+    // -- Shared / Preflight --
+    pub local_only: bool,
+    pub preflight_loading: bool,
+    pub preflight_error: Option<String>,
+    pub preflight: Option<PreflightView>,
+    pub set_preflight: Option<StandbySetPreflightView>,
+    pub confirm: Option<Confirm<SpawnAction>>,
+    pub spawning: bool,
+    pub spawn_error: Option<String>,
+    /// A message from the last cancelled confirmation or a successful
+    /// spawn — cleared the next time something meaningful changes.
+    pub status: Option<String>,
+}
+
+impl NewWorkloadViewState {
+    pub fn new() -> Self {
+        Self {
+            stage: Stage::Gallery,
+            gallery: None,
+            loading_gallery: false,
+            gallery_error: None,
+            gallery_list: ListState::new(),
+            template: None,
+            form: FormFields::default(),
+            expanding: false,
+            expand_error: None,
+            expansion: None,
+            picker: ListingPicker::new(),
+            all_providers: Vec::new(),
+            directory_error: None,
+            standby_picker: ListingPicker::new(),
+            standbys: Vec::new(),
+            local_only: false,
+            preflight_loading: false,
+            preflight_error: None,
+            preflight: None,
+            set_preflight: None,
+            confirm: None,
+            spawning: false,
+            spawn_error: None,
+            status: None,
+        }
+    }
+}
+
+impl Default for NewWorkloadViewState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Applies a fresh `GET /api/directory` answer (`main.rs` calls this
+/// alongside `app.directory.apply`, every time — see the module doc:
+/// this view never fetches its own copy). Unfiltered, so a Hidden Provider
+/// is right there to choose, exactly like the web form.
+pub fn apply_directory(state: &mut NewWorkloadViewState, directory: &Directory) {
+    match directory {
+        Directory::Ok { providers, .. } => {
+            state.all_providers = providers.clone();
+            state.picker.set_providers(providers.clone());
+            state.directory_error = None;
+        }
+        Directory::Unconfigured { reason } => {
+            state.all_providers = Vec::new();
+            state.picker.set_providers(Vec::new());
+            state.directory_error = Some(reason.clone());
+        }
+    }
+}
+
+/// Back to the gallery, everything past it cleared — called once a spawn has
+/// gone through (`main.rs`, after `views::workloads::select_workload`). The
+/// gallery and the directory data are left alone: both are free to keep
+/// around, and refetching them would just show the same thing again.
+pub fn reset_wizard(state: &mut NewWorkloadViewState, status: impl Into<String>) {
+    state.stage = Stage::Gallery;
+    state.template = None;
+    state.form = FormFields::default();
+    state.expanding = false;
+    state.expand_error = None;
+    state.expansion = None;
+    state.standby_picker = ListingPicker::new();
+    state.standbys.clear();
+    state.local_only = false;
+    state.preflight_loading = false;
+    state.preflight_error = None;
+    state.preflight = None;
+    state.set_preflight = None;
+    state.confirm = None;
+    state.spawning = false;
+    state.spawn_error = None;
+    state.status = Some(status.into());
+}
+
+/// The one place a keypress becomes a decision for this view — the same
+/// "first refusal" shape `app::handle_key` gives Account and Workloads.
+/// Returns `None` for a key this view has no opinion about right now, so the
+/// global keymap (view switching, `?`, quit) still gets it.
+pub fn handle_key(state: &mut NewWorkloadViewState, key: KeyEvent) -> Option<Command> {
+    if let Some(confirm) = &mut state.confirm {
+        return Some(match confirm.handle_key(key) {
+            ConfirmOutcome::Pending => Command::None,
+            ConfirmOutcome::Cancelled => {
+                state.confirm = None;
+                state.status = Some("Cancelled. Nothing was sent.".to_string());
+                Command::None
+            }
+            ConfirmOutcome::Confirmed(action) => {
+                state.confirm = None;
+                state.spawning = true;
+                state.spawn_error = None;
+                match action {
+                    SpawnAction::Spawn(body) => Command::SpawnWorkload(body),
+                    SpawnAction::StandbySet(body) => Command::SpawnStandbySet(body),
+                }
+            }
+        });
+    }
+
+    match state.stage {
+        Stage::Gallery => gallery_handle_key(state, key),
+        Stage::Form => form_handle_key(state, key),
+        Stage::Listing => listing_handle_key(state, key),
+        Stage::Standbys => standbys_handle_key(state, key),
+        Stage::Preflight => preflight_handle_key(state, key),
+    }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Gallery                                                                    */
+/* -------------------------------------------------------------------------- */
+
+fn gallery_rows(state: &NewWorkloadViewState) -> Vec<&TemplateView> {
+    let Some(TemplateGallery::Ok { templates, .. }) = &state.gallery else {
+        return Vec::new();
+    };
+    templates
+        .iter()
+        .filter(|template| {
+            let haystack = format!(
+                "{} {} {}",
+                template.name,
+                template
+                    .publisher
+                    .display_name
+                    .as_deref()
+                    .or(template.publisher.name.as_deref())
+                    .unwrap_or(""),
+                template.publisher.npub
+            );
+            state.gallery_list.matches(&haystack)
+        })
+        .collect()
+}
+
+fn gallery_total(state: &NewWorkloadViewState) -> usize {
+    match &state.gallery {
+        Some(TemplateGallery::Ok { templates, .. }) => templates.len(),
+        _ => 0,
+    }
+}
+
+fn gallery_handle_key(state: &mut NewWorkloadViewState, key: KeyEvent) -> Option<Command> {
+    let rows_len = gallery_rows(state).len();
+    match state.gallery_list.handle_key(key, rows_len) {
+        ListOutcome::Handled => return Some(Command::None),
+        ListOutcome::Open(index) => {
+            let chosen = gallery_rows(state)
+                .get(index)
+                .map(|template| (*template).clone());
+            if let Some(template) = chosen {
+                match &template.availability {
+                    TemplateAvailability::Unavailable { reason } => {
+                        state.status = Some(format!("Not offered: {reason}"));
+                    }
+                    TemplateAvailability::Available { .. } => {
+                        state.form = FormFields::new(&template);
+                        state.template = Some(template);
+                        state.expansion = None;
+                        state.expand_error = None;
+                        state.status = None;
+                        state.stage = Stage::Form;
+                    }
+                }
+            }
+            return Some(Command::None);
+        }
+        ListOutcome::Ignored => {}
+    }
+    match key.code {
+        KeyCode::Char('r') => Some(Command::RefreshTemplates),
+        _ => None,
+    }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Form                                                                       */
+/* -------------------------------------------------------------------------- */
+
+fn form_targets(state: &NewWorkloadViewState) -> Vec<FormTarget> {
+    let mut out: Vec<FormTarget> = (0..state.form.env_names.len())
+        .map(FormTarget::Env)
+        .collect();
+    out.push(FormTarget::Ssh);
+    out.push(FormTarget::Volume);
+    out.push(FormTarget::Preview);
+    out
+}
+
+fn form_field_mut(state: &mut NewWorkloadViewState, target: FormTarget) -> Option<&mut TextField> {
+    match target {
+        FormTarget::Env(index) => state.form.env_fields.get_mut(index),
+        FormTarget::Ssh => Some(&mut state.form.ssh),
+        FormTarget::Volume => Some(&mut state.form.volume),
+        FormTarget::Preview => None,
+    }
+}
+
+fn form_handle_key(state: &mut NewWorkloadViewState, key: KeyEvent) -> Option<Command> {
+    let targets = form_targets(state);
+    if targets.is_empty() {
+        return Some(Command::None);
+    }
+    if state.form.cursor >= targets.len() {
+        state.form.cursor = targets.len() - 1;
+    }
+
+    if state.form.editing {
+        match key.code {
+            KeyCode::Enter | KeyCode::Esc => state.form.editing = false,
+            _ => {
+                let target = targets[state.form.cursor];
+                if let Some(field) = form_field_mut(state, target) {
+                    field.handle_key(key);
+                }
+            }
+        }
+        return Some(Command::None);
+    }
+
+    match key.code {
+        KeyCode::Up | KeyCode::Char('k') => {
+            state.form.cursor = state.form.cursor.saturating_sub(1);
+            Some(Command::None)
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            state.form.cursor = (state.form.cursor + 1).min(targets.len() - 1);
+            Some(Command::None)
+        }
+        KeyCode::Backspace => {
+            state.stage = Stage::Gallery;
+            Some(Command::None)
+        }
+        KeyCode::Enter => {
+            let target = targets[state.form.cursor];
+            Some(form_activate(state, target))
+        }
+        _ => None,
+    }
+}
+
+fn form_activate(state: &mut NewWorkloadViewState, target: FormTarget) -> Command {
+    match target {
+        FormTarget::Env(_) | FormTarget::Ssh | FormTarget::Volume => {
+            state.form.editing = true;
+            Command::None
+        }
+        FormTarget::Preview => match validate_form(state) {
+            Some((env, ssh_public_key, volume_gb)) => {
+                let Some(template) = state.template.as_ref() else {
+                    return Command::None;
+                };
+                state.expanding = true;
+                state.expand_error = None;
+                Command::ExpandTemplate(ExpandTemplateRequest {
+                    template: template.address.clone(),
+                    env: if env.is_empty() { None } else { Some(env) },
+                    ssh_public_key,
+                    volume_gb,
+                })
+            }
+            None => Command::None,
+        },
+    }
+}
+
+/// Validates the form and, on success, hands back what
+/// `POST /api/templates/expand` needs. Every problem found is pushed to
+/// `state.form.errors` (cleared first), beside the field it is about — this
+/// ticket's own acceptance criterion — and `None` comes back the moment
+/// there is at least one, so "Preview the spawn" never sends a request that
+/// is missing what the daemon would refuse anyway.
+fn validate_form(
+    state: &mut NewWorkloadViewState,
+) -> Option<(BTreeMap<String, String>, String, Option<i64>)> {
+    state.form.errors.clear();
+    let mut ok = true;
+
+    if state.form.ssh.is_empty() {
+        state.form.errors.push((
+            FormTarget::Ssh,
+            "Required — no password is ever issued for a workload (spec §6.2).".to_string(),
+        ));
+        ok = false;
+    }
+
+    let mut volume_gb = None;
+    if !state.form.volume.is_empty() {
+        match state.form.volume.value().trim().parse::<i64>() {
+            Ok(value) if value >= 0 => volume_gb = Some(value),
+            _ => {
+                state.form.errors.push((
+                    FormTarget::Volume,
+                    "Must be a whole number of GB.".to_string(),
+                ));
+                ok = false;
+            }
+        }
+    }
+
+    if !ok {
+        return None;
+    }
+
+    let mut env = BTreeMap::new();
+    for (name, field) in state
+        .form
+        .env_names
+        .iter()
+        .zip(state.form.env_fields.iter())
+    {
+        let value = field.value();
+        if !value.is_empty() {
+            env.insert(name.clone(), value.to_string());
+        }
+    }
+
+    Some((env, state.form.ssh.value().to_string(), volume_gb))
+}
+
+/* -------------------------------------------------------------------------- */
+/* Listing                                                                    */
+/* -------------------------------------------------------------------------- */
+
+fn listing_handle_key(state: &mut NewWorkloadViewState, key: KeyEvent) -> Option<Command> {
+    if key.code == KeyCode::Backspace {
+        state.stage = Stage::Form;
+        return Some(Command::None);
+    }
+    match state.picker.handle_key(key) {
+        PickerEvent::Chosen => {
+            state.stage = Stage::Standbys;
+            refresh_standby_candidates(state);
+            Some(Command::None)
+        }
+        PickerEvent::Moved => Some(Command::None),
+        PickerEvent::None => None,
+    }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Standbys                                                                   */
+/* -------------------------------------------------------------------------- */
+
+/// Rebuilds the Standbys picker's candidates: every provider that is not the
+/// chosen primary, not already added, and sells at least one tier with a
+/// `standbyPrice` — mirrors `others`/`tiers` in `workloads-view.tsx`'s own
+/// `Standbys` component. Each candidate provider is given a filtered COPY of
+/// its own listings (the standby-priced ones only), so the picker never
+/// offers a tier that sells no Warm Standby at all.
+fn refresh_standby_candidates(state: &mut NewWorkloadViewState) {
+    let Some((primary, _)) = state.picker.selected_listing() else {
+        state.standby_picker.set_providers(Vec::new());
+        return;
+    };
+    let primary_pubkey = primary.pubkey.clone();
+    let candidates: Vec<ProviderView> = state
+        .all_providers
+        .iter()
+        .filter(|provider| provider.pubkey != primary_pubkey)
+        .filter(|provider| {
+            !state
+                .standbys
+                .iter()
+                .any(|member| member.provider_pubkey == provider.pubkey)
+        })
+        .filter_map(|provider| {
+            let listings: Vec<ListingView> = provider
+                .listings
+                .iter()
+                .filter(|listing| listing.standby_price.is_some())
+                .cloned()
+                .collect();
+            if listings.is_empty() {
+                None
+            } else {
+                Some(ProviderView {
+                    listings,
+                    ..provider.clone()
+                })
+            }
+        })
+        .collect();
+    state.standby_picker.set_providers(candidates);
+}
+
+fn standbys_handle_key(state: &mut NewWorkloadViewState, key: KeyEvent) -> Option<Command> {
+    match key.code {
+        KeyCode::Backspace => {
+            state.stage = Stage::Listing;
+            return Some(Command::None);
+        }
+        KeyCode::Char('d') => {
+            state.standbys.pop();
+            refresh_standby_candidates(state);
+            return Some(Command::None);
+        }
+        KeyCode::Char('n') => {
+            state.stage = Stage::Preflight;
+            return Some(start_preflight(state));
+        }
+        _ => {}
+    }
+    match state.standby_picker.handle_key(key) {
+        PickerEvent::Chosen => {
+            if let Some((provider, listing)) = state.standby_picker.selected_listing() {
+                state.standbys.push(StandbyMember {
+                    provider_pubkey: provider.pubkey.clone(),
+                    provider_label: provider.profile.ilp_address.clone(),
+                    listing_name: listing.name.clone(),
+                    listing_label: format!("{} v{}", listing.name, listing.version),
+                });
+            }
+            refresh_standby_candidates(state);
+            Some(Command::None)
+        }
+        PickerEvent::Moved => Some(Command::None),
+        PickerEvent::None => None,
+    }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Preflight                                                                  */
+/* -------------------------------------------------------------------------- */
+
+fn spawn_image_request(image: &SpawnContentImage) -> SpawnImageRequest {
+    SpawnImageRequest {
+        reference: image.reference.clone(),
+        digest: image.digest.clone(),
+        registry_entry: image
+            .registry_entry
+            .as_ref()
+            .map(|entry| RegistryEntryRequest {
+                address: entry.address.clone(),
+                relay: entry.relay.clone(),
+            }),
+    }
+}
+
+/// Builds the primary spawn's body straight from the Template's expansion
+/// (image, env, ports, volume, SSH key — spec §6.2) and the Listing chosen
+/// in [`Stage::Listing`]. Never assembled from typed fields the way the
+/// generic Workloads spawn form's are.
+fn build_spawn_request(state: &NewWorkloadViewState) -> Option<SpawnRequestBody> {
+    let expansion = state.expansion.as_ref()?;
+    let template = state.template.as_ref()?;
+    let (provider, listing) = state.picker.selected_listing()?;
+    Some(SpawnRequestBody {
+        provider: provider.pubkey.clone(),
+        listing: listing.name.clone(),
+        image: spawn_image_request(&expansion.spawn.image),
+        env: if expansion.spawn.env.is_empty() {
+            None
+        } else {
+            Some(expansion.spawn.env.clone())
+        },
+        ports: if expansion.spawn.ports.is_empty() {
+            None
+        } else {
+            Some(
+                expansion
+                    .spawn
+                    .ports
+                    .iter()
+                    .map(|port| SpawnPortRequest {
+                        container_port: port.container_port,
+                        protocol: Some(port.protocol.clone()),
+                    })
+                    .collect(),
+            )
+        },
+        ssh_public_key: expansion.spawn.ssh_public_key.clone(),
+        volume_gb: expansion.spawn.volume_gb,
+        entrypoint: expansion.spawn.entrypoint.clone(),
+        args: expansion.spawn.args.clone(),
+        template: Some(template.address.clone()),
+        local_only: if state.local_only { Some(true) } else { None },
+        chain: None,
+    })
+}
+
+/// `None` when no Warm Standby has been added — the caller falls back to
+/// [`build_spawn_request`] alone, an ordinary spawn (spec §7: a set of one
+/// is not a Standby Set).
+fn build_standby_set_request(state: &NewWorkloadViewState) -> Option<StandbySetRequestBody> {
+    if state.standbys.is_empty() {
+        return None;
+    }
+    let base = build_spawn_request(state)?;
+    Some(StandbySetRequestBody {
+        base,
+        standbys: state
+            .standbys
+            .iter()
+            .map(|member| StandbyMemberRequest {
+                provider: member.provider_pubkey.clone(),
+                listing: member.listing_name.clone(),
+                listing_version: None,
+                chain: None,
+            })
+            .collect(),
+    })
+}
+
+/// Sends whichever preflight applies and marks it loading. Called both when
+/// the Standbys stage is left (`n`) and whenever `L` re-prices with
+/// `local_only` flipped.
+fn start_preflight(state: &mut NewWorkloadViewState) -> Command {
+    state.preflight_error = None;
+    if let Some(body) = build_standby_set_request(state) {
+        state.preflight_loading = true;
+        return Command::PreflightStandbySet(body);
+    }
+    match build_spawn_request(state) {
+        Some(body) => {
+            state.preflight_loading = true;
+            Command::PreflightSpawn(body)
+        }
+        None => {
+            state.preflight_error =
+                Some("Nothing to preflight yet — go back and finish the form.".to_string());
+            Command::None
+        }
+    }
+}
+
+fn preflight_ok(state: &NewWorkloadViewState) -> bool {
+    if let Some(set) = &state.set_preflight {
+        return set.ok;
+    }
+    state
+        .preflight
+        .as_ref()
+        .is_some_and(|preflight| preflight.ok)
+}
+
+fn preflight_confirm_lines(state: &NewWorkloadViewState) -> Vec<String> {
+    if let Some(set) = &state.set_preflight {
+        let mut lines = vec![format!(
+            "One workload id, {} member(s), one Root Secret.",
+            set.members.len()
+        )];
+        lines.push(match &set.cost {
+            Some(cost) => format!("{cost} base units for the first interval at every member."),
+            None => "Not every member quoted a price, so the full cost is unknown.".to_string(),
+        });
+        lines.push(
+            "A refused request is billed the same as an accepted one (ADR 0003).".to_string(),
+        );
+        lines
+    } else if let Some(preflight) = &state.preflight {
+        let mut lines = Vec::new();
+        if let Some(listing) = &preflight.listing {
+            lines.push(format!(
+                "{} \u{b5}USDC for {} s.",
+                listing.price, listing.lease_interval_seconds
+            ));
+        }
+        lines.push(
+            "A refused request is billed the same as an accepted one (ADR 0003).".to_string(),
+        );
+        lines
+    } else {
+        vec!["Nothing priced yet.".to_string()]
+    }
+}
+
+fn preflight_handle_key(state: &mut NewWorkloadViewState, key: KeyEvent) -> Option<Command> {
+    match key.code {
+        KeyCode::Backspace => {
+            state.stage = Stage::Standbys;
+            Some(Command::None)
+        }
+        KeyCode::Char('L') => {
+            state.local_only = !state.local_only;
+            Some(start_preflight(state))
+        }
+        KeyCode::Char('s') => {
+            if state.spawning || !preflight_ok(state) {
+                return Some(Command::None);
+            }
+            let action = match build_standby_set_request(state) {
+                Some(body) => SpawnAction::StandbySet(body),
+                None => match build_spawn_request(state) {
+                    Some(body) => SpawnAction::Spawn(body),
+                    None => return Some(Command::None),
+                },
+            };
+            let lines = preflight_confirm_lines(state);
+            state.confirm = Some(Confirm::new("Spawn", lines, action));
+            Some(Command::None)
+        }
+        _ => None,
+    }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Drawing                                                                    */
+/* -------------------------------------------------------------------------- */
+
+pub fn draw(frame: &mut Frame, area: Rect, state: &NewWorkloadViewState, now_ms: i64) {
+    match state.stage {
+        Stage::Gallery => draw_gallery(frame, area, state),
+        Stage::Form => draw_form(frame, area, state),
+        Stage::Listing => draw_listing(frame, area, state, now_ms),
+        Stage::Standbys => draw_standbys(frame, area, state, now_ms),
+        Stage::Preflight => draw_preflight(frame, area, state),
+    }
+    if let Some(confirm) = &state.confirm {
+        crate::widgets::confirm::draw(frame, area, confirm);
+    }
+}
+
+fn label_span(text: &str) -> Span<'static> {
+    Span::styled(
+        text.to_string(),
+        Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::BOLD),
+    )
+}
+
+fn button_line(label: &str, focused: bool) -> Line<'static> {
+    let style = if focused {
+        Style::default()
+            .fg(Color::Black)
+            .bg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().add_modifier(Modifier::BOLD)
+    };
+    Line::from(Span::styled(format!(" {label} "), style))
+}
+
+fn error_line(message: &str) -> Line<'static> {
+    Line::from(Span::styled(
+        format!("  {message}"),
+        Style::default().fg(Color::Red),
+    ))
+}
+
+fn push_error(lines: &mut Vec<Line<'static>>, errors: &[(FormTarget, String)], target: FormTarget) {
+    if let Some((_, message)) = errors.iter().find(|(candidate, _)| *candidate == target) {
+        lines.push(error_line(message));
+    }
+}
+
+fn draw_gallery(frame: &mut Frame, area: Rect, state: &NewWorkloadViewState) {
+    let rows = gallery_rows(state);
+    let title = format!(
+        " Templates{} ",
+        state
+            .gallery_list
+            .title_suffix(rows.len(), gallery_total(state))
+    );
+    let block = Block::default().title(title).borders(Borders::ALL);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    match &state.gallery {
+        None => {
+            let text = if state.loading_gallery {
+                "Reading relays\u{2026}"
+            } else if let Some(err) = &state.gallery_error {
+                err.as_str()
+            } else {
+                "Nothing read yet."
+            };
+            frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }), inner);
+            return;
+        }
+        Some(TemplateGallery::Unconfigured { reason }) => {
+            frame.render_widget(
+                Paragraph::new(reason.as_str()).wrap(Wrap { trim: false }),
+                inner,
+            );
+            return;
+        }
+        Some(TemplateGallery::Ok { .. }) => {}
+    }
+
+    if rows.is_empty() {
+        frame.render_widget(
+            Paragraph::new("No Template has been published on this network yet.")
+                .wrap(Wrap { trim: false }),
+            inner,
+        );
+        return;
+    }
+
+    let mut lines: Vec<Line> = rows
+        .iter()
+        .enumerate()
+        .map(|(index, template)| template_line(template, index == state.gallery_list.selected))
+        .collect();
+    if let Some(status) = &state.status {
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            status.clone(),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+fn template_line(template: &TemplateView, selected: bool) -> Line<'static> {
+    let available = matches!(
+        template.availability,
+        TemplateAvailability::Available { .. }
+    );
+    let marker = if available {
+        "available"
+    } else {
+        "unavailable"
+    };
+    let style = if selected {
+        Style::default()
+            .fg(Color::Black)
+            .bg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
+    } else if available {
+        Style::default()
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let publisher = template
+        .publisher
+        .display_name
+        .clone()
+        .or_else(|| template.publisher.name.clone())
+        .unwrap_or_else(|| template.publisher.npub.clone());
+    Line::from(Span::styled(
+        format!("{} \u{2014} {publisher} ({marker})", template.name),
+        style,
+    ))
+}
+
+fn draw_form(frame: &mut Frame, area: Rect, state: &NewWorkloadViewState) {
+    let title = match &state.template {
+        Some(template) => format!(" {} ", template.name),
+        None => " Template form ".to_string(),
+    };
+    let block = Block::default().title(title).borders(Borders::ALL);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let targets = form_targets(state);
+    let mut lines: Vec<Line> = Vec::new();
+
+    if let Some(template) = &state.template {
+        if !template.env_fixed.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "Fixed by the publisher:",
+                Style::default().fg(Color::DarkGray),
+            )));
+            for (name, value) in &template.env_fixed {
+                lines.push(Line::from(Span::styled(
+                    format!("  {name}={value}"),
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
+            lines.push(Line::raw(""));
+        }
+    }
+
+    for (index, name) in state.form.env_names.iter().enumerate() {
+        let target = FormTarget::Env(index);
+        let focused = targets.get(state.form.cursor) == Some(&target);
+        lines.push(Line::from(vec![
+            label_span(&format!("{name}: ")),
+            state.form.env_fields[index].value_span(focused && state.form.editing),
+        ]));
+        push_error(&mut lines, &state.form.errors, target);
+    }
+
+    let ssh_focused = targets.get(state.form.cursor) == Some(&FormTarget::Ssh);
+    lines.push(state.form.ssh.line(ssh_focused && state.form.editing));
+    push_error(&mut lines, &state.form.errors, FormTarget::Ssh);
+
+    let volume_focused = targets.get(state.form.cursor) == Some(&FormTarget::Volume);
+    lines.push(state.form.volume.line(volume_focused && state.form.editing));
+    push_error(&mut lines, &state.form.errors, FormTarget::Volume);
+
+    lines.push(Line::raw(""));
+    let preview_focused = targets.get(state.form.cursor) == Some(&FormTarget::Preview);
+    lines.push(button_line(
+        if state.expanding {
+            "Expanding\u{2026}"
+        } else {
+            "Preview the spawn"
+        },
+        preview_focused,
+    ));
+    if let Some(err) = &state.expand_error {
+        lines.push(error_line(err));
+    }
+
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
+fn draw_listing(frame: &mut Frame, area: Rect, state: &NewWorkloadViewState, now_ms: i64) {
+    let block = Block::default()
+        .title(" Choose a Listing ")
+        .borders(Borders::ALL);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if let Some(reason) = &state.directory_error {
+        frame.render_widget(
+            Paragraph::new(reason.as_str()).wrap(Wrap { trim: false }),
+            inner,
+        );
+        return;
+    }
+    if state.picker.is_empty() {
+        frame.render_widget(
+            Paragraph::new("No providers loaded yet. Open the Directory view first.")
+                .wrap(Wrap { trim: false }),
+            inner,
+        );
+        return;
+    }
+    state.picker.draw(frame, inner, now_ms);
+}
+
+fn draw_standbys(frame: &mut Frame, area: Rect, state: &NewWorkloadViewState, now_ms: i64) {
+    let added_height = (state.standbys.len() as u16 + 2).max(3);
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(added_height), Constraint::Min(3)])
+        .split(area);
+
+    let added_block = Block::default()
+        .title(" Warm Standbys added ")
+        .borders(Borders::ALL);
+    let added_inner = added_block.inner(rows[0]);
+    frame.render_widget(added_block, rows[0]);
+    let added_lines: Vec<Line> = if state.standbys.is_empty() {
+        vec![Line::raw(
+            "None yet \u{2014} pick one below, or press n to continue without any.",
+        )]
+    } else {
+        state
+            .standbys
+            .iter()
+            .map(|member| {
+                Line::from(format!(
+                    "{} \u{2014} {}",
+                    member.provider_label, member.listing_label
+                ))
+            })
+            .collect()
+    };
+    frame.render_widget(Paragraph::new(added_lines), added_inner);
+
+    let picker_block = Block::default()
+        .title(" Add a Warm Standby \u{2014} Enter adds, d removes the last, n continues ")
+        .borders(Borders::ALL);
+    let picker_inner = picker_block.inner(rows[1]);
+    frame.render_widget(picker_block, rows[1]);
+    if state.standby_picker.is_empty() {
+        frame.render_widget(
+            Paragraph::new("No other provider sells a Warm Standby tier.")
+                .wrap(Wrap { trim: false }),
+            picker_inner,
+        );
+    } else {
+        state.standby_picker.draw(frame, picker_inner, now_ms);
+    }
+}
+
+fn draw_preflight(frame: &mut Frame, area: Rect, state: &NewWorkloadViewState) {
+    let block = Block::default().title(" Preflight ").borders(Borders::ALL);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let mut lines: Vec<Line> = vec![
+        Line::from(vec![
+            label_span("Local only: "),
+            Span::raw(if state.local_only { "yes" } else { "no" }),
+        ]),
+        Line::raw(""),
+    ];
+
+    if state.preflight_loading {
+        lines.push(Line::raw("Pricing\u{2026}"));
+    } else if let Some(set) = &state.set_preflight {
+        lines.push(Line::from(format!(
+            "One workload id, {} member(s), one Root Secret.",
+            set.members.len()
+        )));
+        lines.push(Line::from(match &set.cost {
+            Some(cost) => format!("{cost} base units for the first interval at every member."),
+            None => "Not every member quoted a price.".to_string(),
+        }));
+        for member in &set.members {
+            let short: String = member.pubkey.chars().take(12).collect();
+            lines.push(Line::from(format!(
+                "  {} {short}\u{2026} \u{2014} {}",
+                member.role,
+                if member.view.ok { "ok" } else { "problem" }
+            )));
+        }
+        for problem in &set.problems {
+            lines.push(error_line(problem));
+        }
+    } else if let Some(preflight) = &state.preflight {
+        if let Some(route) = &preflight.route {
+            lines.push(Line::from(vec![
+                label_span("Route: "),
+                Span::raw(route.clone()),
+            ]));
+        }
+        if let Some(listing) = &preflight.listing {
+            lines.push(Line::from(format!(
+                "{} \u{b5}USDC for {} s.",
+                listing.price, listing.lease_interval_seconds
+            )));
+        }
+        for problem in &preflight.problems {
+            lines.push(error_line(&format!("Problem: {problem}")));
+        }
+    } else if let Some(err) = &state.preflight_error {
+        lines.push(error_line(err));
+    } else {
+        lines.push(Line::raw("Nothing priced yet."));
+    }
+
+    if let Some(err) = &state.spawn_error {
+        lines.push(Line::raw(""));
+        lines.push(error_line(err));
+    }
+    if let Some(status) = &state.status {
+        lines.push(Line::from(Span::styled(
+            status.clone(),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+
+    lines.push(Line::raw(""));
+    let ready = preflight_ok(state) && !state.spawning;
+    let button_style = if ready {
+        Style::default()
+            .fg(Color::Black)
+            .bg(Color::Green)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    lines.push(Line::from(Span::styled(
+        if state.spawning {
+            " Spawning\u{2026} "
+        } else {
+            " s: spawn (asks for confirmation) "
+        },
+        button_style,
+    )));
+
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{
+        ListingResources, LivenessView, PreflightListingView, PreflightVault, ProviderProfileView,
+        PublisherView, RelayWriteTargets, SpawnContent, SpawnContentPort, TemplateImage,
+        TemplatePort, TemplateResources,
+    };
+    use crossterm::event::KeyModifiers;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+    use std::collections::BTreeMap;
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn publisher() -> PublisherView {
+        PublisherView {
+            pubkey: "a".repeat(64),
+            npub: "npub1testpublisheraddress".to_string(),
+            name: Some("acme".to_string()),
+            display_name: Some("Acme".to_string()),
+            picture: None,
+            nip05: None,
+        }
+    }
+
+    fn available_template(name: &str) -> TemplateView {
+        let mut env_fixed = BTreeMap::new();
+        env_fixed.insert("MODE".to_string(), "production".to_string());
+        TemplateView {
+            name: name.to_string(),
+            address: format!("30436:{}:{name}", publisher().pubkey),
+            publisher: publisher(),
+            version: 1,
+            image: TemplateImage {
+                digest: "sha256:aa".repeat(8),
+                registry_entry: None,
+            },
+            ports: vec![TemplatePort {
+                container_port: 8080,
+                protocol: "tcp".to_string(),
+            }],
+            data_path: None,
+            env_fixed,
+            env_tenant: vec!["MODE".to_string(), "SITE_TITLE".to_string()],
+            min_resources: Some(TemplateResources {
+                cpu_millicores: 500,
+                memory_mb: 512,
+                storage_gb: 5,
+                gpu: None,
+            }),
+            availability: TemplateAvailability::Available {
+                checked: "1 image entry".to_string(),
+                entry: None,
+                blob_record: None,
+            },
+            warnings: Vec::new(),
+            published_at: "2026-09-24T00:00:00.000Z".to_string(),
+            event_id: "e".repeat(64),
+        }
+    }
+
+    fn unavailable_template(name: &str) -> TemplateView {
+        let mut template = available_template(name);
+        template.availability = TemplateAvailability::Unavailable {
+            reason: "no relay carries this image".to_string(),
+        };
+        template
+    }
+
+    fn gallery(templates: Vec<TemplateView>) -> TemplateGallery {
+        TemplateGallery::Ok {
+            relays: crate::types::TemplateRelays {
+                seed: vec!["wss://relay.test".to_string()],
+                read: Vec::new(),
+            },
+            templates,
+            rejected: Vec::new(),
+            rejected_events: 0,
+            read_at: "2026-09-24T00:00:00.000Z".to_string(),
+        }
+    }
+
+    fn provider(pubkey: &str, with_standby: bool) -> ProviderView {
+        ProviderView {
+            pubkey: pubkey.to_string(),
+            profile: ProviderProfileView {
+                ilp_address: "g.toon.provider".to_string(),
+                connector_url: "https://provider.example/ilp".to_string(),
+                connector_seal_key: "0x04aa".to_string(),
+                relays: Vec::new(),
+                settlement: Vec::new(),
+                isolation: "shared-kernel".to_string(),
+                hidden: false,
+                host: None,
+                liveness_cadence_seconds: None,
+                published_at: "2026-09-24T00:00:00.000Z".to_string(),
+                event_id: "f".repeat(64),
+            },
+            liveness: LivenessView {
+                state: "live".to_string(),
+                published_at: None,
+                expires_at: None,
+                seconds_until_expiry: None,
+                cadence_seconds: None,
+            },
+            listings: vec![ListingView {
+                name: "basic".to_string(),
+                address: format!("30432:{pubkey}:basic"),
+                version: 1,
+                resources: ListingResources {
+                    cpu_millicores: 1000,
+                    memory_mb: 1024,
+                    storage_gb: 10,
+                    gpu: None,
+                },
+                arch: "amd64".to_string(),
+                isolation: "shared-kernel".to_string(),
+                hidden: false,
+                lease_interval_seconds: 3600,
+                price: 1000,
+                standby_price: if with_standby { Some(200) } else { None },
+                capabilities: Vec::new(),
+                unspecified_capabilities: Vec::new(),
+                geohash: None,
+                published_at: "2026-09-24T00:00:00.000Z".to_string(),
+                event_id: "e".repeat(64),
+                available: None,
+            }],
+            relays_read: Vec::new(),
+            superseded_listings: 0,
+            rejected_listings: Vec::new(),
+        }
+    }
+
+    fn expansion(template: &TemplateView) -> ExpandedTemplate {
+        ExpandedTemplate {
+            template: template.address.clone(),
+            spawn: SpawnContent {
+                workload_id: "w".repeat(64),
+                image: SpawnContentImage {
+                    digest: template.image.digest.clone(),
+                    reference: Some("traefik/whoami".to_string()),
+                    registry_entry: None,
+                },
+                env: BTreeMap::from([("MODE".to_string(), "production".to_string())]),
+                ports: vec![SpawnContentPort {
+                    container_port: 8080,
+                    protocol: "tcp".to_string(),
+                }],
+                volume_gb: None,
+                ssh_public_key: "ssh-ed25519 AAAA".to_string(),
+                entrypoint: None,
+                args: None,
+                standby_set: None,
+                template: Some(template.address.clone()),
+            },
+            warnings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn opening_an_available_template_moves_to_the_form_stage() {
+        let mut state = NewWorkloadViewState::new();
+        state.gallery = Some(gallery(vec![available_template("static-site")]));
+        let command = gallery_handle_key(&mut state, key(KeyCode::Enter));
+        assert_eq!(command, Some(Command::None));
+        assert_eq!(state.stage, Stage::Form);
+        assert!(state.template.is_some());
+        assert_eq!(state.form.env_names, vec!["SITE_TITLE".to_string()]);
+    }
+
+    #[test]
+    fn opening_an_unavailable_template_stays_on_the_gallery() {
+        let mut state = NewWorkloadViewState::new();
+        state.gallery = Some(gallery(vec![unavailable_template("broken")]));
+        gallery_handle_key(&mut state, key(KeyCode::Enter));
+        assert_eq!(state.stage, Stage::Gallery);
+        assert!(state.status.unwrap().contains("Not offered"));
+    }
+
+    #[test]
+    fn r_refreshes_the_gallery() {
+        let mut state = NewWorkloadViewState::new();
+        assert_eq!(
+            gallery_handle_key(&mut state, key(KeyCode::Char('r'))),
+            Some(Command::RefreshTemplates)
+        );
+    }
+
+    #[test]
+    fn preview_with_no_ssh_key_reports_a_validation_error_beside_the_field() {
+        let mut state = NewWorkloadViewState::new();
+        state.template = Some(available_template("static-site"));
+        state.form = FormFields::new(state.template.as_ref().unwrap());
+        state.form.cursor = form_targets(&state).len() - 1; // Preview
+        let command = form_handle_key(&mut state, key(KeyCode::Enter));
+        assert_eq!(command, Some(Command::None));
+        assert!(state
+            .form
+            .errors
+            .iter()
+            .any(|(target, _)| *target == FormTarget::Ssh));
+        assert!(!state.expanding);
+    }
+
+    #[test]
+    fn preview_with_a_non_numeric_volume_reports_a_validation_error() {
+        let mut state = NewWorkloadViewState::new();
+        state.template = Some(available_template("static-site"));
+        state.form = FormFields::new(state.template.as_ref().unwrap());
+        for c in "ssh-ed25519 AAAA".chars() {
+            state.form.ssh.handle_key(key(KeyCode::Char(c)));
+        }
+        for c in "lots".chars() {
+            state.form.volume.handle_key(key(KeyCode::Char(c)));
+        }
+        state.form.cursor = form_targets(&state).len() - 1;
+        form_handle_key(&mut state, key(KeyCode::Enter));
+        assert!(state
+            .form
+            .errors
+            .iter()
+            .any(|(target, _)| *target == FormTarget::Volume));
+    }
+
+    #[test]
+    fn a_valid_form_sends_expand_template() {
+        let mut state = NewWorkloadViewState::new();
+        state.template = Some(available_template("static-site"));
+        state.form = FormFields::new(state.template.as_ref().unwrap());
+        for c in "ssh-ed25519 AAAA".chars() {
+            state.form.ssh.handle_key(key(KeyCode::Char(c)));
+        }
+        state.form.cursor = form_targets(&state).len() - 1;
+        let command = form_handle_key(&mut state, key(KeyCode::Enter));
+        match command {
+            Some(Command::ExpandTemplate(request)) => {
+                assert_eq!(request.ssh_public_key, "ssh-ed25519 AAAA");
+                assert!(request.template.contains("static-site"));
+            }
+            other => panic!("expected ExpandTemplate, got {other:?}"),
+        }
+        assert!(state.expanding);
+        assert!(state.form.errors.is_empty());
+    }
+
+    #[test]
+    fn choosing_a_listing_moves_to_standbys_and_seeds_its_candidates() {
+        let mut state = NewWorkloadViewState::new();
+        state.all_providers = vec![
+            provider(&"1".repeat(64), true),
+            provider(&"2".repeat(64), true),
+        ];
+        state.picker.set_providers(state.all_providers.clone());
+        let command = listing_handle_key(&mut state, key(KeyCode::Enter));
+        assert_eq!(command, Some(Command::None));
+        assert_eq!(state.stage, Stage::Standbys);
+        // The primary itself must not be offered as its own standby.
+        assert!(!state.standby_picker.is_empty());
+    }
+
+    #[test]
+    fn adding_and_removing_a_standby() {
+        let mut state = NewWorkloadViewState::new();
+        state.all_providers = vec![
+            provider(&"1".repeat(64), true),
+            provider(&"2".repeat(64), true),
+        ];
+        state.picker.set_providers(state.all_providers.clone());
+        listing_handle_key(&mut state, key(KeyCode::Enter));
+        assert_eq!(state.standbys.len(), 0);
+
+        standbys_handle_key(&mut state, key(KeyCode::Enter));
+        assert_eq!(state.standbys.len(), 1);
+
+        standbys_handle_key(&mut state, key(KeyCode::Char('d')));
+        assert_eq!(state.standbys.len(), 0);
+    }
+
+    #[test]
+    fn continuing_with_no_standbys_preflights_a_plain_spawn() {
+        let mut state = NewWorkloadViewState::new();
+        let template = available_template("static-site");
+        state.expansion = Some(expansion(&template));
+        state.template = Some(template);
+        state.all_providers = vec![provider(&"1".repeat(64), false)];
+        state.picker.set_providers(state.all_providers.clone());
+        listing_handle_key(&mut state, key(KeyCode::Enter));
+
+        let command = standbys_handle_key(&mut state, key(KeyCode::Char('n')));
+        assert_eq!(state.stage, Stage::Preflight);
+        match command {
+            Some(Command::PreflightSpawn(body)) => {
+                assert_eq!(body.provider, "1".repeat(64));
+                assert_eq!(body.ssh_public_key, "ssh-ed25519 AAAA");
+            }
+            other => panic!("expected PreflightSpawn, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn continuing_with_a_standby_preflights_a_standby_set() {
+        let mut state = NewWorkloadViewState::new();
+        let template = available_template("static-site");
+        state.expansion = Some(expansion(&template));
+        state.template = Some(template);
+        state.all_providers = vec![
+            provider(&"1".repeat(64), true),
+            provider(&"2".repeat(64), true),
+        ];
+        state.picker.set_providers(state.all_providers.clone());
+        listing_handle_key(&mut state, key(KeyCode::Enter));
+        standbys_handle_key(&mut state, key(KeyCode::Enter)); // add one
+
+        let command = standbys_handle_key(&mut state, key(KeyCode::Char('n')));
+        match command {
+            Some(Command::PreflightStandbySet(body)) => {
+                assert_eq!(body.standbys.len(), 1);
+            }
+            other => panic!("expected PreflightStandbySet, got {other:?}"),
+        }
+    }
+
+    fn ready_preflight() -> PreflightView {
+        PreflightView {
+            ok: true,
+            problems: Vec::new(),
+            provider: None,
+            listing: Some(PreflightListingView {
+                name: "basic".to_string(),
+                version: 1,
+                lease_interval_seconds: 3600,
+                price: 1000,
+                capabilities: Vec::new(),
+            }),
+            route: Some("g.toon.provider.basic.v1.spawn".to_string()),
+            payment: None,
+            vault: PreflightVault {
+                local_only: false,
+                writes: RelayWriteTargets {
+                    relays: Vec::new(),
+                    plan: Vec::new(),
+                    destination: None,
+                    pay_at: None,
+                    price: None,
+                    total_price: None,
+                    ready: true,
+                    blocked_by: None,
+                },
+            },
+        }
+    }
+
+    #[test]
+    fn s_does_nothing_until_the_preflight_is_ok() {
+        let mut state = NewWorkloadViewState::new();
+        state.stage = Stage::Preflight;
+        let command = preflight_handle_key(&mut state, key(KeyCode::Char('s')));
+        assert_eq!(command, Some(Command::None));
+        assert!(state.confirm.is_none());
+    }
+
+    #[test]
+    fn s_opens_a_confirmation_once_the_preflight_is_ok() {
+        let mut state = NewWorkloadViewState::new();
+        let template = available_template("static-site");
+        state.expansion = Some(expansion(&template));
+        state.template = Some(template);
+        state.all_providers = vec![provider(&"1".repeat(64), false)];
+        state.picker.set_providers(state.all_providers.clone());
+        state.stage = Stage::Preflight;
+        state.preflight = Some(ready_preflight());
+
+        preflight_handle_key(&mut state, key(KeyCode::Char('s')));
+        assert!(state.confirm.is_some());
+
+        // A single Enter (no typed "yes") must not confirm — the same rule
+        // every other spending action in this crate follows. Goes through
+        // the top-level dispatcher, which is what actually routes a key to
+        // the open `Confirm` (`preflight_handle_key` alone never sees it).
+        let command = handle_key(&mut state, key(KeyCode::Enter));
+        assert_eq!(command, Some(Command::None));
+        assert!(state.spawn_error.is_none());
+        assert!(!state.spawning);
+    }
+
+    #[test]
+    fn typing_yes_then_enter_confirms_and_spawns() {
+        let mut state = NewWorkloadViewState::new();
+        let template = available_template("static-site");
+        state.expansion = Some(expansion(&template));
+        state.template = Some(template);
+        state.all_providers = vec![provider(&"1".repeat(64), false)];
+        state.picker.set_providers(state.all_providers.clone());
+        state.stage = Stage::Preflight;
+        state.preflight = Some(ready_preflight());
+
+        preflight_handle_key(&mut state, key(KeyCode::Char('s')));
+        for c in "yes".chars() {
+            handle_key(&mut state, key(KeyCode::Char(c)));
+        }
+        let command = handle_key(&mut state, key(KeyCode::Enter));
+        match command {
+            Some(Command::SpawnWorkload(body)) => assert_eq!(body.provider, "1".repeat(64)),
+            other => panic!("expected SpawnWorkload, got {other:?}"),
+        }
+        assert!(state.spawning);
+    }
+
+    #[test]
+    fn l_reset_toggles_local_only_and_reprices() {
+        let mut state = NewWorkloadViewState::new();
+        let template = available_template("static-site");
+        state.expansion = Some(expansion(&template));
+        state.template = Some(template);
+        state.all_providers = vec![provider(&"1".repeat(64), false)];
+        state.picker.set_providers(state.all_providers.clone());
+        state.stage = Stage::Preflight;
+        assert!(!state.local_only);
+        let command = preflight_handle_key(&mut state, key(KeyCode::Char('L')));
+        assert!(state.local_only);
+        assert!(matches!(command, Some(Command::PreflightSpawn(_))));
+    }
+
+    #[test]
+    fn backspace_walks_back_a_stage_at_every_step() {
+        let mut state = NewWorkloadViewState::new();
+        state.stage = Stage::Form;
+        state.form = FormFields::new(&available_template("x"));
+        form_handle_key(&mut state, key(KeyCode::Backspace));
+        assert_eq!(state.stage, Stage::Gallery);
+
+        state.stage = Stage::Listing;
+        listing_handle_key(&mut state, key(KeyCode::Backspace));
+        assert_eq!(state.stage, Stage::Form);
+
+        state.stage = Stage::Standbys;
+        standbys_handle_key(&mut state, key(KeyCode::Backspace));
+        assert_eq!(state.stage, Stage::Listing);
+
+        state.stage = Stage::Preflight;
+        preflight_handle_key(&mut state, key(KeyCode::Backspace));
+        assert_eq!(state.stage, Stage::Standbys);
+    }
+
+    #[test]
+    fn reset_wizard_returns_to_the_gallery_and_clears_the_form() {
+        let mut state = NewWorkloadViewState::new();
+        state.stage = Stage::Preflight;
+        state.template = Some(available_template("static-site"));
+        state.standbys.push(StandbyMember {
+            provider_pubkey: "1".repeat(64),
+            provider_label: "g.toon.provider".to_string(),
+            listing_name: "basic".to_string(),
+            listing_label: "basic v1".to_string(),
+        });
+        reset_wizard(&mut state, "Spawned.");
+        assert_eq!(state.stage, Stage::Gallery);
+        assert!(state.template.is_none());
+        assert!(state.standbys.is_empty());
+        assert_eq!(state.status.as_deref(), Some("Spawned."));
+    }
+
+    fn render(state: &NewWorkloadViewState) -> String {
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| draw(frame, frame.area(), state, 0))
+            .unwrap();
+        buffer_to_string(terminal.backend().buffer())
+    }
+
+    fn buffer_to_string(buffer: &ratatui::buffer::Buffer) -> String {
+        let area = buffer.area;
+        let mut out = String::new();
+        for y in area.top()..area.bottom() {
+            for x in area.left()..area.right() {
+                out.push_str(buffer[(x, y)].symbol());
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    #[test]
+    fn snapshot_gallery() {
+        let mut state = NewWorkloadViewState::new();
+        state.gallery = Some(gallery(vec![
+            available_template("static-site"),
+            unavailable_template("broken-image"),
+        ]));
+        insta::assert_snapshot!(render(&state));
+    }
+
+    #[test]
+    fn snapshot_form_with_a_validation_error() {
+        let mut state = NewWorkloadViewState::new();
+        state.template = Some(available_template("static-site"));
+        state.form = FormFields::new(state.template.as_ref().unwrap());
+        state.form.cursor = form_targets(&state).len() - 1;
+        state.stage = Stage::Form;
+        form_handle_key(&mut state, key(KeyCode::Enter)); // no SSH key typed yet
+        insta::assert_snapshot!(render(&state));
+    }
+
+    #[test]
+    fn snapshot_preflight() {
+        let mut state = NewWorkloadViewState::new();
+        state.stage = Stage::Preflight;
+        state.preflight = Some(ready_preflight());
+        insta::assert_snapshot!(render(&state));
+    }
+
+    fn real_fixture<T: serde::de::DeserializeOwned>(name: &str) -> T {
+        let path = format!(
+            "{}/../packages/daemon/fixtures/api/{name}.json",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("could not read fixture {path}: {err}"));
+        serde_json::from_str(&text)
+            .unwrap_or_else(|err| panic!("fixture {path} did not deserialize: {err}"))
+    }
+
+    /// The daemon's own real, volatile answers must still render without
+    /// panicking — no snapshot assertion here (the addresses and timestamps
+    /// differ on every regeneration, see `api-fixtures.testkit.ts`), just
+    /// proof this view survives contact with the real shapes
+    /// `packages/daemon` produces today, not only the tidy ones made up
+    /// above (same rule as `views::health`'s and `views::workloads`' own
+    /// tests of this name).
+    #[test]
+    fn renders_the_real_daemon_fixtures_without_panicking() {
+        let mut state = NewWorkloadViewState::new();
+        state.gallery = Some(real_fixture::<TemplateGallery>("templates"));
+        render(&state);
+
+        state.stage = Stage::Form;
+        if let Some(TemplateGallery::Ok { templates, .. }) = &state.gallery {
+            if let Some(template) = templates.first() {
+                state.form = FormFields::new(template);
+                state.template = Some(template.clone());
+            }
+        }
+        render(&state);
+
+        state.stage = Stage::Preflight;
+        state.preflight = Some(real_fixture::<PreflightView>("leases-preflight"));
+        render(&state);
+    }
+
+    #[test]
+    fn a_real_expansion_builds_a_real_spawn_request() {
+        let mut state = NewWorkloadViewState::new();
+        let expansion: ExpandedTemplate = real_fixture("template-expand");
+        state.template = Some(available_template("static-site"));
+        state.expansion = Some(expansion.clone());
+        state.all_providers = vec![provider(&"1".repeat(64), false)];
+        state.picker.set_providers(state.all_providers.clone());
+
+        let request = build_spawn_request(&state).expect("a listing is selected");
+        assert_eq!(request.image.digest, expansion.spawn.image.digest);
+        assert_eq!(request.ssh_public_key, expansion.spawn.ssh_public_key);
+        assert_eq!(request.env, Some(expansion.spawn.env));
+    }
+}

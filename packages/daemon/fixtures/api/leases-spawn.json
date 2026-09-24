@@ -1,0 +1,160 @@
+{
+  "lease": {
+    "workloadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
+    "state": "live",
+    "standbySet": [
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001"
+    ],
+    "members": [
+      {
+        "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001",
+        "index": 0,
+        "role": "standalone",
+        "provider": {
+          "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001",
+          "ilp_address": "g.toon.provider",
+          "connector_url": "https://provider.example/ilp",
+          "connector_seal_key": "0x04aa"
+        },
+        "listing": {
+          "name": "basic",
+          "version": 1,
+          "address": "30432:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001:basic",
+          "lease_interval_s": 3600,
+          "price": 1000
+        },
+        "paidAt": "https://provider.example/ilp",
+        "paidChain": "evm:31337",
+        "state": "live",
+        "answeredRole": "standalone",
+        "expiresAt": 1893456000,
+        "access": {
+          "host": "203.0.113.7",
+          "ssh_port": 40000,
+          "ports": [
+            {
+              "container_port": 80,
+              "host_port": 41000
+            }
+          ]
+        },
+        "known": true
+      }
+    ],
+    "provider": {
+      "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001",
+      "ilp_address": "g.toon.provider",
+      "connector_url": "https://provider.example/ilp",
+      "connector_seal_key": "0x04aa"
+    },
+    "paidAt": "https://provider.example/ilp",
+    "paidChain": "evm:31337",
+    "listing": {
+      "name": "basic",
+      "version": 1,
+      "address": "30432:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001:basic",
+      "lease_interval_s": 3600,
+      "price": 1000
+    },
+    "profileId": "sandbox",
+    "image": {
+      "digest": "sha256:1474027c316661cdec87df2623e13a41e7e1ce0ba99c24917631de8f300b5420",
+      "reference": "traefik/whoami"
+    },
+    "ports": [
+      {
+        "container_port": 80,
+        "protocol": "tcp"
+      }
+    ],
+    "envKeys": [],
+    "createdAt": "2026-01-01T00:00:00.000Z",
+    "localOnly": false,
+    "role": "standalone",
+    "expiresAt": 1893456000,
+    "access": {
+      "host": "203.0.113.7",
+      "ssh_port": 40000,
+      "ports": [
+        {
+          "container_port": 80,
+          "host_port": 41000
+        }
+      ]
+    },
+    "source": "relays",
+    "relays": [
+      "wss://own.relay.test"
+    ],
+    "recordId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0002"
+  },
+  "preflight": {
+    "ok": true,
+    "problems": [],
+    "provider": {
+      "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001",
+      "ilpAddress": "g.toon.provider",
+      "connectorUrl": "https://provider.example/ilp",
+      "hidden": false,
+      "liveness": "live"
+    },
+    "listing": {
+      "name": "basic",
+      "version": 1,
+      "leaseIntervalSeconds": 3600,
+      "price": 1000,
+      "capabilities": []
+    },
+    "route": "g.toon.provider.basic.v1.spawn",
+    "payment": {
+      "connectorUrl": "https://provider.example/ilp",
+      "via": "provider-connector",
+      "reason": "Local sandbox's connector publishes no route carrying g.toon.provider.basic.v1.spawn, so the packet is paid at the provider's own connector, which terminates it (spec §4.1, §5).",
+      "chain": "evm:31337",
+      "channelId": "0xchannel"
+    },
+    "vault": {
+      "localOnly": false,
+      "writes": {
+        "relays": [
+          "wss://own.relay.test"
+        ],
+        "plan": [
+          {
+            "url": "wss://own.relay.test",
+            "ready": true,
+            "destination": "g.toon.relay",
+            "payAt": "https://connector.test/ilp",
+            "price": "1",
+            "chain": "evm:31337",
+            "channelId": "0xchannel",
+            "via": "document"
+          }
+        ],
+        "destination": "g.toon.relay",
+        "payAt": "https://connector.test/ilp",
+        "price": "1",
+        "totalPrice": "1",
+        "chain": "evm:31337",
+        "channelId": "0xchannel",
+        "ready": true
+      }
+    }
+  },
+  "answer": {
+    "workload_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
+    "role": "standalone",
+    "expires_at": 1790003600,
+    "access": {
+      "host": "203.0.113.7",
+      "ssh_port": 40000,
+      "ports": [
+        {
+          "container_port": 80,
+          "host_port": 41000
+        }
+      ]
+    }
+  },
+  "cost": "1000"
+}

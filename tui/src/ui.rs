@@ -180,7 +180,12 @@ fn draw_content(frame: &mut Frame, area: Rect, app: &App) {
         // `draw_loading` arm here, since the view's own first line already
         // says "Reading your funds…".
         (View::Funds, _) => views::funds::draw(frame, area, &app.funds),
-        (view, _) => views::placeholder::draw(frame, area, view.title()),
+        // New workload (TOON_Network#146) draws its own per-stage
+        // loading/empty states from `app.new_workload`, the same as Funds.
+        // Every one of the seven sidebar views now has a dedicated arm —
+        // ADR 0028's placeholder (`views::placeholder::draw`) is what an
+        // unbuilt one showed, and there is not one left.
+        (View::New, _) => views::new_workload::draw(frame, area, &app.new_workload, app.now_ms),
     }
 }
 
@@ -257,6 +262,24 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
             " j/k chain  y copy  o open  f faucet  g quote  b buy  r refresh ",
         ));
     }
+    if app.view == View::New {
+        spans.push(Span::raw(match app.new_workload.stage {
+            views::new_workload::Stage::Gallery => " j/k select  / filter  Enter open  r refresh ",
+            views::new_workload::Stage::Form => {
+                " j/k move  Enter edit/preview  Esc stop editing  Backspace back "
+            }
+            views::new_workload::Stage::Listing => " j/k move  Enter choose  Backspace back ",
+            views::new_workload::Stage::Standbys => {
+                " j/k move  Enter add  d remove last  n continue  Backspace back "
+            }
+            views::new_workload::Stage::Preflight => {
+                " L toggle local-only  s spawn (asks for confirmation)  Backspace back "
+            }
+        }));
+        if app.new_workload.confirm.is_some() {
+            spans.push(Span::raw(" type yes, Enter to spawn  Esc cancel "));
+        }
+    }
     spans.push(Span::raw(" ? help  q quit "));
     let block = Block::default().borders(Borders::ALL);
     frame.render_widget(Paragraph::new(Line::from(spans)).block(block), area);
@@ -297,6 +320,16 @@ const HELP_LINES: &[&str] = &[
     "a          set/clear the auto-extend budget (asks for confirmation)",
     "r          rotate the Continuation Token (asks for confirmation)",
     "g          hand over to / withdraw from a gateway (asks for confirmation)",
+    "-- New workload --",
+    "j / k      Gallery: select a Template; Form/Listing/Standbys: move",
+    "/          Gallery: filter the list",
+    "Enter      Gallery: open; Form: edit a field or preview; Listing/Standbys: choose",
+    "Esc        Form: stop typing (while editing a field)",
+    "Backspace  go back one stage",
+    "d          Standbys: remove the last Warm Standby added",
+    "n          Standbys: continue to the preflight",
+    "L          Preflight: toggle local-only and re-price",
+    "s, yes     Preflight: spawn (asks for confirmation)",
 ];
 
 fn draw_help(frame: &mut Frame, area: Rect) {

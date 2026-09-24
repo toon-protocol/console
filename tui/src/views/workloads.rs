@@ -146,6 +146,12 @@ pub struct WorkloadsViewState {
     /// anything, so it never lingers past the moment it stops being true.
     pub status: Option<String>,
     pub error: Option<String>,
+    /// A workload id a New workload spawn just bought (TOON_Network#146),
+    /// waiting for a dashboard read to land it on screen — `main.rs` sets
+    /// this the moment a spawn succeeds and clears it on the next
+    /// `WorkloadsLoaded`, whether or not [`select_workload`] found the row
+    /// yet (see that handler's own comment).
+    pub pending_select: Option<String>,
 }
 
 impl WorkloadsViewState {
@@ -162,6 +168,33 @@ pub fn selected_workload_id(state: &WorkloadsViewState) -> Option<String> {
     filtered(dashboard, &state.list)
         .get(state.list.selected)
         .map(|card| card.workload_id.clone())
+}
+
+/// Lands the list's selection on `workload_id`, once it appears in a
+/// dashboard (TOON_Network#146): a New workload spawn switches the app to
+/// this view and wants the freshly bought lease highlighted, not whatever
+/// happened to be selected before. Clears any filter that would hide it —
+/// the whole point of this hook is that the new row is visible — and
+/// returns whether it was actually found, so a caller (`main.rs`) can keep
+/// asking on the next dashboard refresh if this one landed too early.
+pub fn select_workload(state: &mut WorkloadsViewState, workload_id: &str) -> bool {
+    let Some(dashboard) = state.dashboard.as_ref() else {
+        return false;
+    };
+    if !state.list.filter.is_empty() {
+        state.list.filter.clear();
+        state.list.filtering = false;
+    }
+    match filtered(dashboard, &state.list)
+        .iter()
+        .position(|card| card.workload_id == workload_id)
+    {
+        Some(index) => {
+            state.list.selected = index;
+            true
+        }
+        None => false,
+    }
 }
 
 /// Whether `workload_id`'s rotation or gateway state is missing, stale (a
@@ -1377,6 +1410,44 @@ mod tests {
             unreadable: 0,
             checked_at: "2026-09-24T00:00:00.000Z".to_string(),
         }
+    }
+
+    #[test]
+    fn select_workload_lands_on_the_matching_row() {
+        let mut state = WorkloadsViewState::new();
+        state.dashboard = Some(dashboard(vec![
+            card("workload-a", LeaseLife::Running),
+            card("workload-b", LeaseLife::Running),
+        ]));
+        state.list.selected = 0;
+        assert!(select_workload(&mut state, "workload-b"));
+        assert_eq!(state.list.selected, 1);
+    }
+
+    #[test]
+    fn select_workload_clears_a_filter_that_would_hide_the_row() {
+        let mut state = WorkloadsViewState::new();
+        state.dashboard = Some(dashboard(vec![
+            card("workload-a", LeaseLife::Running),
+            card("workload-b", LeaseLife::Running),
+        ]));
+        state.list.filter = "workload-a".to_string();
+        assert!(select_workload(&mut state, "workload-b"));
+        assert_eq!(state.list.filter, "");
+        assert_eq!(state.list.selected, 1);
+    }
+
+    #[test]
+    fn select_workload_reports_false_when_the_dashboard_does_not_have_it_yet() {
+        let mut state = WorkloadsViewState::new();
+        state.dashboard = Some(dashboard(vec![card("workload-a", LeaseLife::Running)]));
+        assert!(!select_workload(&mut state, "workload-new"));
+    }
+
+    #[test]
+    fn select_workload_reports_false_with_no_dashboard_loaded() {
+        let mut state = WorkloadsViewState::new();
+        assert!(!select_workload(&mut state, "workload-a"));
     }
 
     fn render(state: &WorkloadsViewState) -> String {
