@@ -956,14 +956,40 @@ fn spawn_desktop(client: Arc<DaemonClient>, tx: UnboundedSender<RuntimeEvent>) {
     });
 }
 
+/// Every `spawn_*` below is the same shape: run one `async` call that
+/// answers `Result<T, ClientError>`, turn a failure into its `Display`
+/// string (nothing downstream reads a `ClientError` — every `App` field and
+/// every `RuntimeEvent` variant already carries `String`), box the result so
+/// the (often much larger) `Ok` case does not bloat every other
+/// `RuntimeEvent` variant, and send it. `call` is the request itself —
+/// typically `move || async move { api::foo(&client, ...).await }`, with
+/// whatever that call needs already captured by `move` — and `wrap` is the
+/// `RuntimeEvent` variant constructor it lands in. This is what used to be
+/// hand-written in each of them; TOON_Network#138's code review is what
+/// asked for the one mechanism instead.
+fn spawn_call<T, Fut>(
+    tx: UnboundedSender<RuntimeEvent>,
+    call: impl FnOnce() -> Fut + Send + 'static,
+    wrap: fn(Box<Result<T, String>>) -> RuntimeEvent,
+) where
+    T: Send + 'static,
+    Fut: Future<Output = Result<T, ClientError>> + Send + 'static,
+{
+    tokio::spawn(async move {
+        let result = call().await.map_err(|err| err.to_string());
+        let _ = tx.send(wrap(Box::new(result)));
+    });
+}
+
 /// One-shot `GET /api/health`, matching the web UI's cadence: read once (on
 /// connect) and again only when asked (`r`) — `use-console.ts` has no
 /// auto-poll for Health, so this has none either.
 fn spawn_health_fetch(client: Arc<DaemonClient>, tx: UnboundedSender<RuntimeEvent>) {
-    tokio::spawn(async move {
-        let result = api::health(&client).await.map_err(|err| err.to_string());
-        let _ = tx.send(RuntimeEvent::HealthLoaded(Box::new(result)));
-    });
+    spawn_call(
+        tx,
+        move || async move { api::health(&client).await },
+        RuntimeEvent::HealthLoaded,
+    );
 }
 
 /// `GET /api/directory`, with whichever filters are current: once on connect
@@ -974,12 +1000,11 @@ fn spawn_directory_fetch(
     tx: UnboundedSender<RuntimeEvent>,
     filters: DirectoryFilters,
 ) {
-    tokio::spawn(async move {
-        let result = api::directory(&client, &filters)
-            .await
-            .map_err(|err| err.to_string());
-        let _ = tx.send(RuntimeEvent::DirectoryLoaded(Box::new(result)));
-    });
+    spawn_call(
+        tx,
+        move || async move { api::directory(&client, &filters).await },
+        RuntimeEvent::DirectoryLoaded,
+    );
 }
 
 // -- New workload (TOON_Network#146): the daemon calls
@@ -989,10 +1014,11 @@ fn spawn_directory_fetch(
 /// own doc comment): read on connect, on a profile switch, and again on `r`
 /// while the Gallery stage is showing.
 fn spawn_templates_fetch(client: Arc<DaemonClient>, tx: UnboundedSender<RuntimeEvent>) {
-    tokio::spawn(async move {
-        let result = api::templates(&client).await.map_err(|err| err.to_string());
-        let _ = tx.send(RuntimeEvent::TemplatesLoaded(Box::new(result)));
-    });
+    spawn_call(
+        tx,
+        move || async move { api::templates(&client).await },
+        RuntimeEvent::TemplatesLoaded,
+    );
 }
 
 /// `POST /api/templates/expand` — free. The daemon re-reads the Template and
@@ -1003,12 +1029,11 @@ fn spawn_expand_template(
     tx: UnboundedSender<RuntimeEvent>,
     request: ExpandTemplateRequest,
 ) {
-    tokio::spawn(async move {
-        let result = api::expand_template(&client, &request)
-            .await
-            .map_err(|err| err.to_string());
-        let _ = tx.send(RuntimeEvent::TemplateExpanded(Box::new(result)));
-    });
+    spawn_call(
+        tx,
+        move || async move { api::expand_template(&client, &request).await },
+        RuntimeEvent::TemplateExpanded,
+    );
 }
 
 /// `POST /api/leases/preflight` — free; safe to call every time the
@@ -1018,12 +1043,11 @@ fn spawn_preflight_spawn(
     tx: UnboundedSender<RuntimeEvent>,
     request: SpawnRequestBody,
 ) {
-    tokio::spawn(async move {
-        let result = api::preflight_spawn(&client, &request)
-            .await
-            .map_err(|err| err.to_string());
-        let _ = tx.send(RuntimeEvent::SpawnPreflighted(Box::new(result)));
-    });
+    spawn_call(
+        tx,
+        move || async move { api::preflight_spawn(&client, &request).await },
+        RuntimeEvent::SpawnPreflighted,
+    );
 }
 
 /// `POST /api/leases/standby-set/preflight` — free; prices every member of
@@ -1033,12 +1057,11 @@ fn spawn_preflight_standby_set(
     tx: UnboundedSender<RuntimeEvent>,
     request: StandbySetRequestBody,
 ) {
-    tokio::spawn(async move {
-        let result = api::preflight_standby_set(&client, &request)
-            .await
-            .map_err(|err| err.to_string());
-        let _ = tx.send(RuntimeEvent::StandbySetPreflighted(Box::new(result)));
-    });
+    spawn_call(
+        tx,
+        move || async move { api::preflight_standby_set(&client, &request).await },
+        RuntimeEvent::StandbySetPreflighted,
+    );
 }
 
 /// `POST /api/templates/spawn` — **spends money** (spec §5, ADR 0003). Only
@@ -1050,12 +1073,11 @@ fn spawn_workload_spawn(
     tx: UnboundedSender<RuntimeEvent>,
     request: TemplateSpawnRequestBody,
 ) {
-    tokio::spawn(async move {
-        let result = api::spawn_from_template(&client, &request)
-            .await
-            .map_err(|err| err.to_string());
-        let _ = tx.send(RuntimeEvent::WorkloadSpawned(Box::new(result)));
-    });
+    spawn_call(
+        tx,
+        move || async move { api::spawn_from_template(&client, &request).await },
+        RuntimeEvent::WorkloadSpawned,
+    );
 }
 
 /// `POST /api/leases/standby-set` — **spends at every member** (ADR 0003).
@@ -1065,12 +1087,11 @@ fn spawn_standby_set_spawn(
     tx: UnboundedSender<RuntimeEvent>,
     request: StandbySetRequestBody,
 ) {
-    tokio::spawn(async move {
-        let result = api::spawn_standby_set(&client, &request)
-            .await
-            .map_err(|err| err.to_string());
-        let _ = tx.send(RuntimeEvent::StandbySetSpawned(Box::new(result)));
-    });
+    spawn_call(
+        tx,
+        move || async move { api::spawn_standby_set(&client, &request).await },
+        RuntimeEvent::StandbySetSpawned,
+    );
 }
 
 /// `GET /api/docs`, on connect and again on `r` while no article is open —
@@ -1081,18 +1102,18 @@ fn spawn_docs_index_fetch(
     tx: UnboundedSender<RuntimeEvent>,
     refresh: bool,
 ) {
-    tokio::spawn(async move {
-        let path = if refresh {
-            "/api/docs?refresh=1"
-        } else {
-            "/api/docs"
-        };
-        let result = client
-            .get::<DocsIndex>(path)
-            .await
-            .map_err(|err| err.to_string());
-        let _ = tx.send(RuntimeEvent::DocsIndexLoaded(Box::new(result)));
-    });
+    spawn_call(
+        tx,
+        move || async move {
+            let path = if refresh {
+                "/api/docs?refresh=1"
+            } else {
+                "/api/docs"
+            };
+            client.get::<DocsIndex>(path).await
+        },
+        RuntimeEvent::DocsIndexLoaded,
+    );
 }
 
 /// `GET /api/docs/<d>`, on `Enter` in the reading list and again on `r` while
@@ -1106,18 +1127,18 @@ fn spawn_docs_page_fetch(
     d: String,
     refresh: bool,
 ) {
-    tokio::spawn(async move {
-        let path = if refresh {
-            format!("/api/docs/{d}?refresh=1")
-        } else {
-            format!("/api/docs/{d}")
-        };
-        let result = client
-            .get::<DocsPage>(&path)
-            .await
-            .map_err(|err| err.to_string());
-        let _ = tx.send(RuntimeEvent::DocsPageLoaded(Box::new(result)));
-    });
+    spawn_call(
+        tx,
+        move || async move {
+            let path = if refresh {
+                format!("/api/docs/{d}?refresh=1")
+            } else {
+                format!("/api/docs/{d}")
+            };
+            client.get::<DocsPage>(&path).await
+        },
+        RuntimeEvent::DocsPageLoaded,
+    );
 }
 
 /// `o` on a focused link. Runs `xdg-open` directly — no shell, so nothing in
@@ -1149,17 +1170,19 @@ fn spawn_open_link(href: String, tx: UnboundedSender<RuntimeEvent>) {
 /// connect (so the header has an answer on every view) and again on `r`
 /// while the Account view is open.
 fn spawn_account_fetch(client: Arc<DaemonClient>, tx: UnboundedSender<RuntimeEvent>) {
-    tokio::spawn(async move {
-        let result = api::account(&client).await.map_err(|err| err.to_string());
-        let _ = tx.send(RuntimeEvent::AccountLoaded(Box::new(result)));
-    });
+    spawn_call(
+        tx,
+        move || async move { api::account(&client).await },
+        RuntimeEvent::AccountLoaded,
+    );
 }
 
 fn spawn_profiles_fetch(client: Arc<DaemonClient>, tx: UnboundedSender<RuntimeEvent>) {
-    tokio::spawn(async move {
-        let result = api::profiles(&client).await.map_err(|err| err.to_string());
-        let _ = tx.send(RuntimeEvent::ProfilesLoaded(Box::new(result)));
-    });
+    spawn_call(
+        tx,
+        move || async move { api::profiles(&client).await },
+        RuntimeEvent::ProfilesLoaded,
+    );
 }
 
 /// Every account action — add a local signer, add a bunker signer, sign
@@ -1169,12 +1192,9 @@ fn spawn_profiles_fetch(client: Arc<DaemonClient>, tx: UnboundedSender<RuntimeEv
 fn spawn_account_call<F, Fut>(client: Arc<DaemonClient>, tx: UnboundedSender<RuntimeEvent>, call: F)
 where
     F: FnOnce(Arc<DaemonClient>) -> Fut + Send + 'static,
-    Fut: Future<Output = Result<SessionStatus, ClientError>> + Send,
+    Fut: Future<Output = Result<SessionStatus, ClientError>> + Send + 'static,
 {
-    tokio::spawn(async move {
-        let result = call(client).await.map_err(|err| err.to_string());
-        let _ = tx.send(RuntimeEvent::AccountLoaded(Box::new(result)));
-    });
+    spawn_call(tx, move || call(client), RuntimeEvent::AccountLoaded);
 }
 
 fn spawn_switch_profile(client: Arc<DaemonClient>, tx: UnboundedSender<RuntimeEvent>, id: String) {
@@ -1196,12 +1216,11 @@ fn spawn_switch_profile(client: Arc<DaemonClient>, tx: UnboundedSender<RuntimeEv
 /// `ChainSeedStatus` back (`spawn_chain_seed_call` below reuses this
 /// same event).
 fn spawn_chain_seed_fetch(client: Arc<DaemonClient>, tx: UnboundedSender<RuntimeEvent>) {
-    tokio::spawn(async move {
-        let result = api::chain_seed(&client)
-            .await
-            .map_err(|err| err.to_string());
-        let _ = tx.send(RuntimeEvent::ChainSeedLoaded(Box::new(result)));
-    });
+    spawn_call(
+        tx,
+        move || async move { api::chain_seed(&client).await },
+        RuntimeEvent::ChainSeedLoaded,
+    );
 }
 
 /// Every Chain Seed action — acknowledge, mint, import, publish, refresh —
@@ -1212,12 +1231,9 @@ fn spawn_chain_seed_call<F, Fut>(
     call: F,
 ) where
     F: FnOnce(Arc<DaemonClient>) -> Fut + Send + 'static,
-    Fut: Future<Output = Result<ChainSeedStatus, ClientError>> + Send,
+    Fut: Future<Output = Result<ChainSeedStatus, ClientError>> + Send + 'static,
 {
-    tokio::spawn(async move {
-        let result = call(client).await.map_err(|err| err.to_string());
-        let _ = tx.send(RuntimeEvent::ChainSeedLoaded(Box::new(result)));
-    });
+    spawn_call(tx, move || call(client), RuntimeEvent::ChainSeedLoaded);
 }
 
 // -- Funds (TOON_Network#147): the daemon calls `views::funds` needs. --
@@ -1230,21 +1246,19 @@ fn spawn_funding_fetch(
     tx: UnboundedSender<RuntimeEvent>,
     refresh: bool,
 ) {
-    tokio::spawn(async move {
-        let result = api::funding(&client, refresh)
-            .await
-            .map_err(|err| err.to_string());
-        let _ = tx.send(RuntimeEvent::FundingLoaded(Box::new(result)));
-    });
+    spawn_call(
+        tx,
+        move || async move { api::funding(&client, refresh).await },
+        RuntimeEvent::FundingLoaded,
+    );
 }
 
 fn spawn_gas_station_fetch(client: Arc<DaemonClient>, tx: UnboundedSender<RuntimeEvent>) {
-    tokio::spawn(async move {
-        let result = api::gas_station(&client)
-            .await
-            .map_err(|err| err.to_string());
-        let _ = tx.send(RuntimeEvent::GasStationLoaded(Box::new(result)));
-    });
+    spawn_call(
+        tx,
+        move || async move { api::gas_station(&client).await },
+        RuntimeEvent::GasStationLoaded,
+    );
 }
 
 /// Issued only from `Command::OpenChannel`, which `app::handle_key` only
@@ -1257,30 +1271,27 @@ fn spawn_open_channel(
     deposit: Option<String>,
     connector: Option<String>,
 ) {
-    tokio::spawn(async move {
-        let result = api::open_channel(&client, chain, deposit, connector)
-            .await
-            .map_err(|err| err.to_string());
-        let _ = tx.send(RuntimeEvent::FundingLoaded(Box::new(result)));
-    });
+    spawn_call(
+        tx,
+        move || async move { api::open_channel(&client, chain, deposit, connector).await },
+        RuntimeEvent::FundingLoaded,
+    );
 }
 
 fn spawn_drip(client: Arc<DaemonClient>, tx: UnboundedSender<RuntimeEvent>, chain: String) {
-    tokio::spawn(async move {
-        let result = api::drip(&client, chain)
-            .await
-            .map_err(|err| err.to_string());
-        let _ = tx.send(RuntimeEvent::FundingLoaded(Box::new(result)));
-    });
+    spawn_call(
+        tx,
+        move || async move { api::drip(&client, chain).await },
+        RuntimeEvent::FundingLoaded,
+    );
 }
 
 fn spawn_quote_gas(client: Arc<DaemonClient>, tx: UnboundedSender<RuntimeEvent>, chain: String) {
-    tokio::spawn(async move {
-        let result = api::quote_gas(&client, chain)
-            .await
-            .map_err(|err| err.to_string());
-        let _ = tx.send(RuntimeEvent::GasQuoteLoaded(Box::new(result)));
-    });
+    spawn_call(
+        tx,
+        move || async move { api::quote_gas(&client, chain).await },
+        RuntimeEvent::GasQuoteLoaded,
+    );
 }
 
 /// Issued only from `Command::BuyGas`, same rule as `spawn_open_channel`:
@@ -1291,12 +1302,11 @@ fn spawn_buy_gas(
     chain: String,
     quote_id: String,
 ) {
-    tokio::spawn(async move {
-        let result = api::buy_gas(&client, chain, quote_id)
-            .await
-            .map_err(|err| err.to_string());
-        let _ = tx.send(RuntimeEvent::GasPurchaseLoaded(Box::new(result)));
-    });
+    spawn_call(
+        tx,
+        move || async move { api::buy_gas(&client, chain, quote_id).await },
+        RuntimeEvent::GasPurchaseLoaded,
+    );
 }
 
 // -- Workloads (TOON_Network#143, #144): the daemon calls `views::workloads`
@@ -1313,12 +1323,11 @@ fn spawn_workloads_fetch(
     tx: UnboundedSender<RuntimeEvent>,
     refresh: bool,
 ) {
-    tokio::spawn(async move {
-        let result = api::workloads(&client, refresh)
-            .await
-            .map_err(|err| err.to_string());
-        let _ = tx.send(RuntimeEvent::WorkloadsLoaded(Box::new(result)));
-    });
+    spawn_call(
+        tx,
+        move || async move { api::workloads(&client, refresh).await },
+        RuntimeEvent::WorkloadsLoaded,
+    );
 }
 
 fn spawn_workloads_poll(client: Arc<DaemonClient>, tx: UnboundedSender<RuntimeEvent>) {
@@ -1342,12 +1351,11 @@ fn spawn_extend(
     workload_id: String,
     max_price: Option<String>,
 ) {
-    tokio::spawn(async move {
-        let result = api::extend(&client, &workload_id, max_price)
-            .await
-            .map_err(|err| err.to_string());
-        let _ = tx.send(RuntimeEvent::WorkloadExtended(Box::new(result)));
-    });
+    spawn_call(
+        tx,
+        move || async move { api::extend(&client, &workload_id, max_price).await },
+        RuntimeEvent::WorkloadExtended,
+    );
 }
 
 /// Ends the workload now. Free, immediate and irreversible (spec §6.6): also
@@ -1357,12 +1365,11 @@ fn spawn_terminate(
     tx: UnboundedSender<RuntimeEvent>,
     workload_id: String,
 ) {
-    tokio::spawn(async move {
-        let result = api::terminate(&client, &workload_id)
-            .await
-            .map_err(|err| err.to_string());
-        let _ = tx.send(RuntimeEvent::WorkloadTerminated(Box::new(result)));
-    });
+    spawn_call(
+        tx,
+        move || async move { api::terminate(&client, &workload_id).await },
+        RuntimeEvent::WorkloadTerminated,
+    );
 }
 
 /// Arms a budget. Spends money with nobody present (`workload-card.tsx`'s own
@@ -1375,12 +1382,11 @@ fn spawn_arm_auto_extend(
     budget: String,
     agreed_price: String,
 ) {
-    tokio::spawn(async move {
-        let result = api::arm_auto_extend(&client, &workload_id, budget, agreed_price)
-            .await
-            .map_err(|err| err.to_string());
-        let _ = tx.send(RuntimeEvent::AutoExtendArmed(Box::new(result)));
-    });
+    spawn_call(
+        tx,
+        move || async move { api::arm_auto_extend(&client, &workload_id, budget, agreed_price).await },
+        RuntimeEvent::AutoExtendArmed,
+    );
 }
 
 /// Turns extension off. The budget is still shown afterwards, remembered,
@@ -1390,24 +1396,22 @@ fn spawn_disarm_auto_extend(
     tx: UnboundedSender<RuntimeEvent>,
     workload_id: String,
 ) {
-    tokio::spawn(async move {
-        let result = api::disarm_auto_extend(&client, &workload_id)
-            .await
-            .map_err(|err| err.to_string());
-        let _ = tx.send(RuntimeEvent::AutoExtendDisarmed(Box::new(result)));
-    });
+    spawn_call(
+        tx,
+        move || async move { api::disarm_auto_extend(&client, &workload_id).await },
+        RuntimeEvent::AutoExtendDisarmed,
+    );
 }
 
 /// Replaces this lease's Continuation Token at every member of its Standby
 /// Set (spec §6.8, ADR 0018), or finishes a rotation left part-way through.
 /// Free at the providers; only ever reached after a typed `yes`.
 fn spawn_rotate(client: Arc<DaemonClient>, tx: UnboundedSender<RuntimeEvent>, workload_id: String) {
-    tokio::spawn(async move {
-        let result = api::rotate(&client, &workload_id)
-            .await
-            .map_err(|err| err.to_string());
-        let _ = tx.send(RuntimeEvent::WorkloadRotated(Box::new(result)));
-    });
+    spawn_call(
+        tx,
+        move || async move { api::rotate(&client, &workload_id).await },
+        RuntimeEvent::WorkloadRotated,
+    );
 }
 
 /// Hands the workload to the Workload Gateway. An empty body asks for the
@@ -1419,12 +1423,11 @@ fn spawn_handover(
     tx: UnboundedSender<RuntimeEvent>,
     workload_id: String,
 ) {
-    tokio::spawn(async move {
-        let result = api::handover(&client, &workload_id)
-            .await
-            .map_err(|err| err.to_string());
-        let _ = tx.send(RuntimeEvent::WorkloadHandedOver(Box::new(result)));
-    });
+    spawn_call(
+        tx,
+        move || async move { api::handover(&client, &workload_id).await },
+        RuntimeEvent::WorkloadHandedOver,
+    );
 }
 
 /// Stops the gateway serving this workload — ends serving, not reading
@@ -1434,12 +1437,11 @@ fn spawn_withdraw(
     tx: UnboundedSender<RuntimeEvent>,
     workload_id: String,
 ) {
-    tokio::spawn(async move {
-        let result = api::withdraw(&client, &workload_id)
-            .await
-            .map_err(|err| err.to_string());
-        let _ = tx.send(RuntimeEvent::WorkloadWithdrawn(Box::new(result)));
-    });
+    spawn_call(
+        tx,
+        move || async move { api::withdraw(&client, &workload_id).await },
+        RuntimeEvent::WorkloadWithdrawn,
+    );
 }
 
 /// Reads the selected workload's rotation and gateway state (TOON_Network#144).
@@ -1455,18 +1457,16 @@ fn spawn_workload_detail(
     let rotation_client = client.clone();
     let rotation_tx = tx.clone();
     let rotation_id = workload_id.clone();
-    tokio::spawn(async move {
-        let result = api::rotation(&rotation_client, &rotation_id)
-            .await
-            .map_err(|err| err.to_string());
-        let _ = rotation_tx.send(RuntimeEvent::RotationLoaded(Box::new(result)));
-    });
-    tokio::spawn(async move {
-        let result = api::gateway(&client, &workload_id)
-            .await
-            .map_err(|err| err.to_string());
-        let _ = tx.send(RuntimeEvent::GatewayLoaded(Box::new(result)));
-    });
+    spawn_call(
+        rotation_tx,
+        move || async move { api::rotation(&rotation_client, &rotation_id).await },
+        RuntimeEvent::RotationLoaded,
+    );
+    spawn_call(
+        tx,
+        move || async move { api::gateway(&client, &workload_id).await },
+        RuntimeEvent::GatewayLoaded,
+    );
 }
 
 /// `wl-copy` is a fast local subprocess, but it is still a blocking spawn —
