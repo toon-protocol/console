@@ -1,6 +1,6 @@
 {
-  "workloadId": "f7378046d2012b7d722cfde101b7bdac939a6f788f59584f32d311f06cba7e1d",
-  "hostname": "643yarwsaevx24rm7xqqdn55vsjzu33yr5mvqtzs2mi7a3f2pyoq.gw.example",
+  "workloadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
+  "hostname": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000.gw.example",
   "gateway": {
     "connectorUrl": "https://gateway.example/ilp",
     "ilpAddress": "g.toon.workload-gateway",

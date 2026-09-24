@@ -1,13 +1,13 @@
 {
   "state": "not_yet_recoverable",
-  "pubkey": "30e56154cd5b65a9f149dc62eaf983855b821a62e158cfa92f80cd4e76211283",
+  "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
   "addresses": {
     "evm": {
-      "address": "0x9858EfFD232B4033E47d90003D41EC34EcaEda94",
+      "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
       "path": "m/44'/60'/0'/0/0"
     },
     "solana": {
-      "address": "HAgk14JpMQLgt6rVgv7cBQFJWFto5Dqxi472uT3DKpqk",
+      "address": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
       "path": "m/44'/501'/0'/0'"
     }
   },

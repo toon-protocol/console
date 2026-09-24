@@ -21,7 +21,7 @@
   "filters": {},
   "providers": [
     {
-      "pubkey": "719f30c9b948b6c228a6959f2a5296a743fc8164e28e6bdcc9cc84a6e2a536fa",
+      "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
       "profile": {
         "ilpAddress": "g.test.provider",
         "connectorUrl": "https://connector.test/ilp",
@@ -42,7 +42,7 @@
         "host": "203.0.113.7",
         "livenessCadenceSeconds": 60,
         "publishedAt": "2026-01-01T00:00:00.000Z",
-        "eventId": "194ffc80237b2d2ad2e829940235c7da82ebc2efe640b9e8b937d4a8834e1523"
+        "eventId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001"
       },
       "liveness": {
         "state": "live",
@@ -54,7 +54,7 @@
       "listings": [
         {
           "name": "arm",
-          "address": "30432:719f30c9b948b6c228a6959f2a5296a743fc8164e28e6bdcc9cc84a6e2a536fa:arm",
+          "address": "30432:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000:arm",
           "version": 1,
           "resources": {
             "cpuMillicores": 1000,
@@ -69,12 +69,12 @@
           "capabilities": [],
           "unspecifiedCapabilities": [],
           "publishedAt": "2026-01-01T00:00:00.000Z",
-          "eventId": "a9a332365565cca159193b2798339b210195e3e2d2cb142e01c0942e4c80b79c",
+          "eventId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0002",
           "available": 2
         },
         {
           "name": "basic",
-          "address": "30432:719f30c9b948b6c228a6959f2a5296a743fc8164e28e6bdcc9cc84a6e2a536fa:basic",
+          "address": "30432:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000:basic",
           "version": 1,
           "resources": {
             "cpuMillicores": 1000,
@@ -90,12 +90,12 @@
           "capabilities": [],
           "unspecifiedCapabilities": [],
           "publishedAt": "2026-01-01T00:00:00.000Z",
-          "eventId": "a736ad70a95af5b7df47f620454edd064de077ca153751c050e5ddd6893c8cfd",
+          "eventId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0003",
           "available": 3
         },
         {
           "name": "ci",
-          "address": "30432:719f30c9b948b6c228a6959f2a5296a743fc8164e28e6bdcc9cc84a6e2a536fa:ci",
+          "address": "30432:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000:ci",
           "version": 1,
           "resources": {
             "cpuMillicores": 1000,
@@ -112,12 +112,12 @@
           ],
           "unspecifiedCapabilities": [],
           "publishedAt": "2026-01-01T00:00:00.000Z",
-          "eventId": "3fe173b9a53d236153439c08910807a70951c671ae424643a39c59977f6931ef",
+          "eventId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0004",
           "available": 1
         },
         {
           "name": "gpu",
-          "address": "30432:719f30c9b948b6c228a6959f2a5296a743fc8164e28e6bdcc9cc84a6e2a536fa:gpu",
+          "address": "30432:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000:gpu",
           "version": 1,
           "resources": {
             "cpuMillicores": 1000,
@@ -133,7 +133,7 @@
           "capabilities": [],
           "unspecifiedCapabilities": [],
           "publishedAt": "2026-01-01T00:00:00.000Z",
-          "eventId": "0fc16da8df07acf1c9aa4cb6eaaf7c7e5533947f47338c932d6d7c3bbef1ff1e",
+          "eventId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0005",
           "available": 0
         }
       ],
@@ -144,7 +144,7 @@
       "rejectedListings": []
     },
     {
-      "pubkey": "c4222b278ac8b9f17988ae0362c273cd736071d58541a323abf8b7b399ab73b6",
+      "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0006",
       "profile": {
         "ilpAddress": "g.test.provider",
         "connectorUrl": "https://connector.test/ilp",
@@ -163,7 +163,7 @@
         "hidden": true,
         "livenessCadenceSeconds": 60,
         "publishedAt": "2026-01-01T00:00:00.000Z",
-        "eventId": "d8ab030eb34f4e1f52f6e37e914020c20eaad508f0273a3fde32b936787bd298"
+        "eventId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0007"
       },
       "liveness": {
         "state": "live",
@@ -175,7 +175,7 @@
       "listings": [
         {
           "name": "quiet",
-          "address": "30432:c4222b278ac8b9f17988ae0362c273cd736071d58541a323abf8b7b399ab73b6:quiet",
+          "address": "30432:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0006:quiet",
           "version": 1,
           "resources": {
             "cpuMillicores": 1000,
@@ -190,7 +190,7 @@
           "capabilities": [],
           "unspecifiedCapabilities": [],
           "publishedAt": "2026-01-01T00:00:00.000Z",
-          "eventId": "978b530f6138472969a44638d678c43fb0bc88d4ad27201bca1c96b6c5e50151",
+          "eventId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0008",
           "available": 1
         }
       ],

@@ -1,9 +1,9 @@
 {
   "signedIn": true,
   "account": {
-    "pubkey": "a962a44072e5e6d6febacc1c95f16e1aff17aecb2dfdf2851a692db6b83905cf",
-    "npub": "npub14932gsrjuhnddl46eswftutwrtl30tkt9h7l9pg6dykmdwpeqh8sllex8x",
-    "signerId": "7ade5b92-0ff4-4f76-a479-179cc079e624",
+    "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
+    "npub": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
+    "signerId": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaa0000",
     "signerKind": "local",
     "signerLabel": "agent",
     "signedInAt": "2026-01-01T00:00:00.000Z",
@@ -16,11 +16,11 @@
   },
   "signers": [
     {
-      "id": "7ade5b92-0ff4-4f76-a479-179cc079e624",
+      "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaa0000",
       "kind": "local",
       "label": "agent",
-      "pubkey": "a962a44072e5e6d6febacc1c95f16e1aff17aecb2dfdf2851a692db6b83905cf",
-      "npub": "npub14932gsrjuhnddl46eswftutwrtl30tkt9h7l9pg6dykmdwpeqh8sllex8x",
+      "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
+      "npub": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
       "backend": "file",
       "origin": "generated",
       "createdAt": "2026-01-01T00:00:00.000Z",

@@ -1,19 +1,19 @@
 {
   "state": "ready",
-  "pubkey": "8cb7d9875d843393727482839d9438baa9716c60c5e297d691f95c38360ee436",
+  "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
   "addresses": {
     "evm": {
-      "address": "0x285276dCac6f31118D492D4Ad0629556f607d234",
+      "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
       "path": "m/44'/60'/0'/0/0"
     },
     "solana": {
-      "address": "5VPvo6vUtuRktNPm3uMV8buDoFbZ4ZdbxiGDzX7NKzFY",
+      "address": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
       "path": "m/44'/501'/0'/0'"
     }
   },
   "origin": "minted",
   "record": {
-    "eventId": "a8f74f8fed06c8690f4bef34af008f3df21542cb2dca93581da6842866e29acd",
+    "eventId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001",
     "publishedAt": "2026-01-01T00:00:00.000Z",
     "source": "relays",
     "relays": [

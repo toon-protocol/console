@@ -1,11 +1,11 @@
 {
-  "workloadId": "33e88274e09e00670aed67fe651be342de0bed8bfbac96d77dfe263d51fbe435",
+  "workloadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
   "started": true,
   "rotated": true,
   "problems": [],
   "members": [
     {
-      "pubkey": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001",
       "index": 0,
       "role": "standalone",
       "sent": true,
@@ -26,13 +26,13 @@
   "of": 1,
   "vaultCost": "2",
   "view": {
-    "workloadId": "33e88274e09e00670aed67fe651be342de0bed8bfbac96d77dfe263d51fbe435",
+    "workloadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
     "underWay": false,
     "ok": true,
     "problems": [],
     "members": [
       {
-        "pubkey": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001",
         "index": 0,
         "role": "standalone",
         "confirmed": false,

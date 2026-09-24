@@ -22,18 +22,18 @@
   },
   "checkedAt": "2026-01-01T00:00:00.000Z",
   "state": "ready",
-  "pubkey": "7194fa4861dc6ab35b205bee73d74ab4474f1d6e70b62952f29ba2b920f78d04",
+  "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
   "chains": [
     {
       "chain": "evm:31337",
       "kind": "evm",
-      "counterparty": "0xc0ffee0000000000000000000000000000000001",
+      "counterparty": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
       "token": {
-        "address": "0xc0ffee0000000000000000000000000000000002",
+        "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001",
         "decimals": 18
       },
       "deposit": {
-        "address": "0x953B5daAEeB046A0d35b11ADDE0fb5228E8C32E0",
+        "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0002",
         "path": "m/44'/60'/0'/0/0"
       },
       "rpc": {
@@ -70,13 +70,13 @@
     {
       "chain": "solana",
       "kind": "solana",
-      "counterparty": "Ho1dEr1111111111111111111111111111111111111",
+      "counterparty": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
       "token": {
-        "address": "M1nt111111111111111111111111111111111111111",
+        "address": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001",
         "decimals": 6
       },
       "deposit": {
-        "address": "7WEvRhHDctLYhQXHq4tXeTjaJjUjpxwECXqfvXe6PmAM",
+        "address": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0002",
         "path": "m/44'/501'/0'/0'"
       },
       "rpc": {
@@ -96,8 +96,8 @@
         "verdict": "none",
         "symbol": "SOL",
         "headline": "Opening a payment channel is a transaction on solana, so it costs SOL — the chain's own coin, which is not the token this network is priced in and which no part of TOON Network can give you.",
-        "detail": "This address holds no SOL, so an open would be refused by the chain before it cost anything. This network has no faucet. Ask the cluster itself: `solana airdrop 1 7WEvRhHDctLYhQXHq4tXeTjaJjUjpxwECXqfvXe6PmAM --url http://localhost:8899`. A public devnet caps that per day and answers 429 Too Many Requests once the cap is reached, and there is nothing to do about a 429 but wait or bring SOL from elsewhere. A local validator has no cap.",
-        "command": "solana airdrop 1 7WEvRhHDctLYhQXHq4tXeTjaJjUjpxwECXqfvXe6PmAM --url http://localhost:8899",
+        "detail": "This address holds no SOL, so an open would be refused by the chain before it cost anything. This network has no faucet. Ask the cluster itself: `solana airdrop 1 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0002 --url http://localhost:8899`. A public devnet caps that per day and answers 429 Too Many Requests once the cap is reached, and there is nothing to do about a 429 but wait or bring SOL from elsewhere. A local validator has no cap.",
+        "command": "solana airdrop 1 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0002 --url http://localhost:8899",
         "faucetGivesGas": false
       },
       "channel": {

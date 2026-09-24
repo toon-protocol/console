@@ -1,11 +1,11 @@
 {
-  "workloadId": "8a94bd17f5ce44b879649c93ed974d521c3ad2e50309255fbc00383af5cbd4d6",
+  "workloadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
   "underWay": false,
   "ok": true,
   "problems": [],
   "members": [
     {
-      "pubkey": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001",
       "index": 0,
       "role": "standalone",
       "confirmed": false,

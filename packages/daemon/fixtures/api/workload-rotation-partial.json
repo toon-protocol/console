@@ -1,11 +1,11 @@
 {
-  "workloadId": "2af8fe1009892f10132f5170025e55ed590bb3c95f4e72c3658dcb7bf1bba204",
+  "workloadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
   "underWay": true,
   "ok": true,
   "problems": [],
   "members": [
     {
-      "pubkey": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001",
       "index": 0,
       "role": "primary",
       "confirmed": true,
@@ -22,7 +22,7 @@
       }
     },
     {
-      "pubkey": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0002",
       "index": 1,
       "role": "standby",
       "confirmed": false,

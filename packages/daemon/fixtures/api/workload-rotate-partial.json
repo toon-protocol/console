@@ -1,11 +1,11 @@
 {
-  "workloadId": "2af8fe1009892f10132f5170025e55ed590bb3c95f4e72c3658dcb7bf1bba204",
+  "workloadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
   "started": true,
   "rotated": false,
   "problems": [],
   "members": [
     {
-      "pubkey": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001",
       "index": 0,
       "role": "primary",
       "sent": true,
@@ -22,7 +22,7 @@
       "message": "Rotated. From this moment the old token is `not_tenant` at this provider, and every Gateway Grant derived from it is `bad_grant` — there is no grace period and nothing is kept per gateway (spec §6.8, ADR 0018)."
     },
     {
-      "pubkey": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0002",
       "index": 1,
       "role": "standby",
       "sent": true,
@@ -44,13 +44,13 @@
   "of": 2,
   "vaultCost": "2",
   "view": {
-    "workloadId": "2af8fe1009892f10132f5170025e55ed590bb3c95f4e72c3658dcb7bf1bba204",
+    "workloadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
     "underWay": true,
     "ok": true,
     "problems": [],
     "members": [
       {
-        "pubkey": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001",
         "index": 0,
         "role": "primary",
         "confirmed": true,
@@ -67,7 +67,7 @@
         }
       },
       {
-        "pubkey": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0002",
         "index": 1,
         "role": "standby",
         "confirmed": false,

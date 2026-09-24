@@ -10,13 +10,13 @@
     "chain": "evm:31337",
     "channelId": "0xchannel"
   },
-  "hostname": "dunvgkpiyx2j6ejocosi2ltwn6m4kk5s2qga56fifiorsgql2ruq.gw.example",
-  "expectedHostname": "dunvgkpiyx2j6ejocosi2ltwn6m4kk5s2qga56fifiorsgql2ruq.gw.example",
+  "hostname": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000.gw.example",
+  "expectedHostname": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000.gw.example",
   "matches": true,
-  "expiresAt": 1790260370,
+  "expiresAt": 1893456000,
   "view": {
-    "workloadId": "1d1b5329e8c5f49f112e13a48d2e766f99c52bb2d40c0ef8a82a1d191a0bd469",
-    "hostname": "dunvgkpiyx2j6ejocosi2ltwn6m4kk5s2qga56fifiorsgql2ruq.gw.example",
+    "workloadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
+    "hostname": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000.gw.example",
     "gateway": {
       "connectorUrl": "https://gateway.example/ilp",
       "ilpAddress": "g.toon.workload-gateway",
@@ -25,12 +25,12 @@
       "domain": "gw.example"
     },
     "handover": {
-      "hostname": "dunvgkpiyx2j6ejocosi2ltwn6m4kk5s2qga56fifiorsgql2ruq.gw.example",
-      "expiresAt": 1790260370,
+      "hostname": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000.gw.example",
+      "expiresAt": 1893456000,
       "httpPort": 80,
       "name": "blog",
       "standbySet": [
-        "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001"
       ],
       "connectorUrl": "https://gateway.example/ilp",
       "route": "g.toon.workload-gateway.handover",

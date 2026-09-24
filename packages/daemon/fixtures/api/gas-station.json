@@ -12,14 +12,14 @@
     {
       "chain": "evm:31337",
       "kind": "evm",
-      "recipient": "0xF0aA51F2703d61953B90000fae897FCBC6C24092",
+      "recipient": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
       "verdict": "unsupported",
       "reason": "A gas station will not sell native ETH on evm:31337, and that is a decision rather than a gap. Its EVM job (kind:5098) relays a call you signed and pays the gas for it — its `to` must be the connector's own TokenNetwork, its native `value` cap is zero, and it will only relay a deposit, a close or a settle. An EVM gas station that sent coin to an address that asked would be a faucet, and would be emptied by the first caller. So this chain's coin still has to come from a wallet that holds some."
     },
     {
       "chain": "solana",
       "kind": "solana",
-      "recipient": "AUrtxBp5ofJePjBNUmQTCVXBhLsHvqdXePUBtr1VqD8e",
+      "recipient": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
       "verdict": "buyable",
       "payer": {
         "chain": "evm:31337",
