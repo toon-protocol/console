@@ -51,7 +51,8 @@ use crate::types::{
     SessionStatus, SignerKind,
 };
 use crate::views::chain_seed::{self, ChainSeedViewState};
-use crate::widgets::confirm::ConfirmOutcome;
+use crate::views::network::{self, NetworkEditorState};
+use crate::widgets::confirm::{Confirm, ConfirmOutcome};
 use crate::widgets::input::TextField;
 
 /// Whether `Command::RefreshAccount` should be asked for again on the next
@@ -183,6 +184,15 @@ pub struct AccountViewState {
     /// rather than flattened here, so `views::chain_seed` stays the one
     /// place that state is read or written.
     pub chain_seed: ChainSeedViewState,
+    /// TOON_Network#150's network profile editor — `e` on a profile row, or
+    /// `n` to add one — open while `Some`, and swallowing every key the same
+    /// way the Chain Seed publish confirm does (see [`handle_key`]'s top).
+    pub network_editor: Option<NetworkEditorState>,
+    /// TOON_Network#150's `D` on a profile row — reset a built-in's
+    /// override, or remove an added profile, through
+    /// `widgets::confirm::Confirm`. Carries the profile id to send once
+    /// confirmed.
+    pub network_confirm: Option<Confirm<String>>,
 }
 
 impl AccountViewState {
@@ -198,6 +208,8 @@ impl AccountViewState {
             local_passphrase: TextField::new("Keystore passphrase", true),
             saved_passphrase: TextField::new("Passphrase", true),
             chain_seed: ChainSeedViewState::new(),
+            network_editor: None,
+            network_confirm: None,
         }
     }
 
@@ -275,6 +287,40 @@ pub fn handle_key(
         });
     }
 
+    // TOON_Network#150's network profile editor and its reset/remove
+    // confirm — the same "every key goes here while it is open" rule as the
+    // Chain Seed confirm just above, each checked before the target list so
+    // neither ever sees a stray `q`, digit or `Tab`.
+    if let Some(confirm) = &mut state.network_confirm {
+        return Some(match confirm.handle_key(key) {
+            ConfirmOutcome::Confirmed(id) => {
+                state.network_confirm = None;
+                Command::ResetProfile(id)
+            }
+            ConfirmOutcome::Cancelled => {
+                state.network_confirm = None;
+                Command::None
+            }
+            ConfirmOutcome::Pending => Command::None,
+        });
+    }
+    if let Some(editor) = &mut state.network_editor {
+        return Some(match network::handle_key(editor, key) {
+            network::Outcome::Pending => Command::None,
+            network::Outcome::Cancelled => {
+                state.network_editor = None;
+                Command::None
+            }
+            // Stays open — a save that fails (a bad URL, a bad id) needs the
+            // form to still be there, with whatever was typed, so the
+            // per-field errors it comes back with land beside them
+            // (`main.rs`'s `RuntimeEvent::ProfileSaved` closes it on
+            // success and nowhere else).
+            network::Outcome::Save(command) => *command,
+            network::Outcome::Paste => Command::RequestClipboardPaste,
+        });
+    }
+
     let list = targets(
         status,
         profiles,
@@ -295,6 +341,38 @@ pub fn handle_key(
     if !state.editing {
         if let KeyCode::Char('r') | KeyCode::Char('R') = key.code {
             return Some(Command::RefreshAccount);
+        }
+    }
+
+    // TOON_Network#150: `n` adds a profile under a new id from anywhere in
+    // this view; `e` edits, and `D` resets or removes, whichever profile row
+    // the cursor is currently on. Checked here — after the modals above
+    // (nothing reaches this far while either is open) and before `Enter`'s
+    // own per-target dispatch, since these are not something `Enter`
+    // activates.
+    if !state.editing {
+        match key.code {
+            KeyCode::Char('n') => {
+                state.network_editor = Some(NetworkEditorState::for_new());
+                return Some(Command::None);
+            }
+            KeyCode::Char('e') => {
+                if let Some(Target::SwitchProfile(index)) = list.get(state.cursor).copied() {
+                    if let Some(profile) = profiles.and_then(|p| p.profiles.get(index)) {
+                        state.network_editor = Some(NetworkEditorState::for_edit(profile));
+                        return Some(Command::None);
+                    }
+                }
+            }
+            KeyCode::Char('D') => {
+                if let Some(Target::SwitchProfile(index)) = list.get(state.cursor).copied() {
+                    if let Some(profile) = profiles.and_then(|p| p.profiles.get(index)) {
+                        state.network_confirm = Some(network::confirm_for(profile));
+                        return Some(Command::None);
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -356,6 +434,10 @@ pub fn handle_paste(
     chain_seed_status: Option<&ChainSeedStatus>,
     text: &str,
 ) {
+    if let Some(editor) = &mut state.network_editor {
+        network::handle_paste(editor, text);
+        return;
+    }
     if state.chain_seed.confirm.is_some() || !state.editing {
         return;
     }
@@ -587,6 +669,19 @@ pub fn draw(
     chain_seed_status: Option<&ChainSeedStatus>,
     error: Option<&str>,
 ) -> Vec<(u16, usize)> {
+    // TOON_Network#150's editor and its reset/remove confirm cover the
+    // WHOLE view while either is open, the same way the Chain Seed publish
+    // confirm does below — checked first, so neither ever draws underneath
+    // a modal that is about to take every subsequent key anyway.
+    if let Some(confirm) = &state.network_confirm {
+        crate::widgets::confirm::draw(frame, area, confirm);
+        return Vec::new();
+    }
+    if let Some(editor) = &state.network_editor {
+        network::draw(frame, area, editor);
+        return Vec::new();
+    }
+
     let list = targets(
         Some(status),
         profiles,
@@ -1020,6 +1115,18 @@ fn draw_profiles(
                 Style::default().fg(Color::DarkGray),
             ));
         }
+        // TOON_Network#150: a custom marker for anything a person changed —
+        // an override on a built-in, or a profile added outright — so the
+        // list itself says which endpoints are no longer just the built-in
+        // ones, before anyone opens the editor (`e`) to find out which.
+        if profile.origin == "user" {
+            spans.push(Span::styled(
+                "✎user ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::ITALIC),
+            ));
+        }
     }
     frame.render_widget(
         Paragraph::new(Line::from(spans)).wrap(Wrap { trim: false }),
@@ -1159,11 +1266,13 @@ mod tests {
                     relay_url: "wss://r".to_string(),
                     gateway_domain: "g".to_string(),
                     gateway_connector_url: "https://g".to_string(),
+                    gas_connector_url: "https://gas".to_string(),
                     faucet_url: None,
                     rpc: None,
                     origin: "built-in".to_string(),
                     configured: true,
                     active: true,
+                    overridden_fields: Vec::new(),
                 },
                 ProfileView {
                     id: "sandbox".to_string(),
@@ -1173,11 +1282,13 @@ mod tests {
                     relay_url: "wss://r2".to_string(),
                     gateway_domain: "g2".to_string(),
                     gateway_connector_url: "https://g2".to_string(),
+                    gas_connector_url: "https://gas2".to_string(),
                     faucet_url: None,
                     rpc: None,
                     origin: "built-in".to_string(),
                     configured: true,
                     active: false,
+                    overridden_fields: Vec::new(),
                 },
             ],
         }
@@ -1676,6 +1787,54 @@ mod tests {
                 None,
             );
         });
+        insta::assert_snapshot!(output);
+    }
+
+    /// TOON_Network#150: an overridden built-in and a profile added under a
+    /// new id both carry `origin: "user"` — the list marks both with the
+    /// same custom marker, distinct from the plain built-in row and from
+    /// "unconfigured".
+    #[test]
+    fn the_profile_list_marks_an_overridden_or_added_profile_and_not_a_plain_built_in() {
+        let state = AccountViewState::new();
+        let status = signed_in();
+        let mut profiles = sample_profiles();
+        let mut overridden = profiles.profiles[0].clone();
+        overridden.origin = "user".to_string();
+        overridden.overridden_fields = vec!["connectorUrl".to_string()];
+        profiles.profiles[0] = overridden;
+        profiles.profiles.push(ProfileView {
+            id: "my-devnet".to_string(),
+            label: "My devnet fork".to_string(),
+            description: String::new(),
+            connector_url: "https://my-fork.example/ilp".to_string(),
+            relay_url: String::new(),
+            gateway_domain: String::new(),
+            gateway_connector_url: String::new(),
+            gas_connector_url: String::new(),
+            faucet_url: None,
+            rpc: None,
+            origin: "user".to_string(),
+            configured: true,
+            active: false,
+            overridden_fields: vec!["connectorUrl".to_string()],
+        });
+
+        let output = render(|frame| {
+            draw(
+                frame,
+                frame.area(),
+                &state,
+                &status,
+                Some(&profiles),
+                None,
+                None,
+            );
+        });
+        // The overridden devnet and the added "my-devnet" both carry the
+        // marker; the plain built-in sandbox does not.
+        assert_eq!(output.matches("user").count(), 2);
+        assert!(output.contains("My devnet fork"));
         insta::assert_snapshot!(output);
     }
 

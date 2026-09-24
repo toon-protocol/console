@@ -93,6 +93,15 @@ impl TextField {
         self.cursor += trimmed.len();
     }
 
+    /// Replaces the buffer with `value` outright, cursor at the end —
+    /// prefilling a field from something already known (a profile's current
+    /// endpoint, `views::network`'s own use) rather than typed key by key.
+    /// The old buffer is dropped the same way `clear` drops it.
+    pub fn set_value(&mut self, value: impl Into<String>) {
+        self.value = Zeroizing::new(value.into());
+        self.cursor = self.value.len();
+    }
+
     /// Hands back the typed value as an owned `String` — the shape a request
     /// body needs — and clears this field's own buffer in the same call.
     ///

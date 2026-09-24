@@ -5,17 +5,19 @@
       "id": "devnet",
       "label": "Devnet",
       "description": "TOON Network's public test network.",
-      "connectorUrl": "https://proxy.relay.devnet.toonprotocol.dev/ilp",
+      "connectorUrl": "https://my-fork.example/ilp",
       "relayUrl": "wss://relay-ws.devnet.toonprotocol.dev",
       "gatewayDomain": "gw.devnet.toonprotocol.dev",
       "gatewayConnectorUrl": "https://proxy.gateway.devnet.toonprotocol.dev/ilp",
       "gasConnectorUrl": "https://proxy.gas.devnet.toonprotocol.dev/ilp",
       "faucetUrl": "https://faucet.devnet.toonprotocol.dev",
       "rpc": {},
-      "origin": "built-in",
+      "origin": "user",
       "configured": true,
       "active": true,
-      "overriddenFields": []
+      "overriddenFields": [
+        "connectorUrl"
+      ]
     },
     {
       "id": "sandbox",

@@ -1,0 +1,8 @@
+{
+  "error": "invalid_profile",
+  "message": "One or more endpoints are invalid.",
+  "errors": {
+    "connectorUrl": "the connector URL must be a full URL, e.g. http://host.example",
+    "relayUrl": "the relay URL must start with ws or wss://"
+  }
+}

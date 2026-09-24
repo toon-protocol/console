@@ -9,8 +9,8 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
 use crate::types::{
-    ChainSeedStatus, ExpandTemplateRequest, Health, LocalSignerRequest, Profiles, SessionStatus,
-    SpawnRequestBody, StandbySetRequestBody, TemplateSpawnRequestBody,
+    ChainSeedStatus, ExpandTemplateRequest, Health, LocalSignerRequest, ProfileEndpointsRequest,
+    Profiles, SessionStatus, SpawnRequestBody, StandbySetRequestBody, TemplateSpawnRequestBody,
 };
 use crate::views::account::{self, AccountViewState};
 use crate::views::directory::{self, DirectoryViewState};
@@ -288,6 +288,19 @@ pub enum Command {
     /// re-fetches once this lands (ADR 0028's "the new profile's connector
     /// is a different machine with different terms").
     SwitchProfile(String),
+    /// `PUT /api/profiles/<id>` (TOON_Network#150) — `views::network`'s own
+    /// `Save`, for an override, an edit, or a brand-new id. When `id` is the
+    /// active profile, everything that reads it re-fetches the same way a
+    /// `SwitchProfile` does — see `main.rs`'s `RuntimeEvent::ProfileSaved`.
+    SaveProfile {
+        id: String,
+        request: ProfileEndpointsRequest,
+    },
+    /// `DELETE /api/profiles/<id>` — `D` on a profile row, through
+    /// `widgets::confirm`. Resets a built-in's override, or removes a
+    /// profile added under a new id; the daemon refuses this while `id` is
+    /// active.
+    ResetProfile(String),
     /// `POST /api/chain-seed/acknowledge` (TOON_Network#142) — the custody
     /// warning, read once.
     AcknowledgeChainSeedWarning,

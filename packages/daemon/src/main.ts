@@ -35,7 +35,12 @@ import {
   writeLaunchRecord,
   type LaunchRecord,
 } from './launch-token.js';
-import { activeProfileFilePath, consolePaths, launchFilePath } from './paths.js';
+import {
+  activeProfileFilePath,
+  consolePaths,
+  launchFilePath,
+  userProfilesFilePath,
+} from './paths.js';
 import { ProfileStore } from './profile-store.js';
 import { startServer } from './server.js';
 import { readTheme } from './theme.js';
@@ -92,7 +97,11 @@ export async function main(): Promise<void> {
   mkdirSync(paths.config, { recursive: true });
   mkdirSync(paths.runtime, { recursive: true, mode: 0o700 });
 
-  const profiles = new ProfileStore(activeProfileFilePath(paths));
+  const profiles = new ProfileStore(
+    activeProfileFilePath(paths),
+    undefined,
+    userProfilesFilePath(paths)
+  );
   const version = daemonVersion();
   const token = mintLaunchToken();
 

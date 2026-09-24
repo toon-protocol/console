@@ -1,10 +1,22 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { activeProfileFilePath, consolePaths } from './paths.js';
-import { ProfileStore, UnknownProfileError } from './profile-store.js';
+import { activeProfileFilePath, consolePaths, userProfilesFilePath } from './paths.js';
+import {
+  ActiveProfileError,
+  InvalidProfileIdError,
+  ProfileStore,
+  UnknownProfileError,
+} from './profile-store.js';
 import { BUILT_IN_PROFILES, DEFAULT_PROFILE_ID, isConfigured } from './profiles.js';
 
 describe('network profiles', () => {
@@ -111,5 +123,189 @@ describe('ProfileStore', () => {
       BUILT_IN_PROFILES.filter((p) => p.id !== 'mainnet')
     );
     expect(store.active().id).toBe('devnet');
+  });
+});
+
+describe('ProfileStore: user profiles (TOON_Network#150)', () => {
+  let home: string;
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), 'toon-console-test-'));
+  });
+
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  const paths = () => consolePaths({ HOME: home } as NodeJS.ProcessEnv);
+  const storePath = () => activeProfileFilePath(paths());
+  const userPath = () => userProfilesFilePath(paths());
+  const newStore = () => new ProfileStore(storePath(), undefined, userPath());
+
+  it('overrides one field of a built-in and falls every other field through', () => {
+    const store = newStore();
+    const updated = store.setEndpoints('devnet', {
+      connectorUrl: 'https://my-fork.example/ilp',
+    });
+    expect(updated.connectorUrl).toBe('https://my-fork.example/ilp');
+    expect(updated.relayUrl).toBe(BUILT_IN_PROFILES.find((p) => p.id === 'devnet')!.relayUrl);
+    expect(updated.origin).toBe('user');
+    expect(store.overriddenFields('devnet')).toEqual(['connectorUrl']);
+  });
+
+  it('persists an override across a restart', () => {
+    newStore().setEndpoints('devnet', { connectorUrl: 'https://my-fork.example/ilp' });
+    const reloaded = newStore();
+    expect(reloaded.list().find((p) => p.id === 'devnet')?.connectorUrl).toBe(
+      'https://my-fork.example/ilp'
+    );
+    expect(reloaded.overriddenFields('devnet')).toEqual(['connectorUrl']);
+  });
+
+  it('a later call REPLACES the whole override, not merges into it', () => {
+    const store = newStore();
+    store.setEndpoints('devnet', {
+      connectorUrl: 'https://a.example/ilp',
+      relayUrl: 'wss://a.example',
+    });
+    // Only `connectorUrl` this time — `relayUrl` must fall back to the
+    // built-in, not keep the previous call's override.
+    const updated = store.setEndpoints('devnet', { connectorUrl: 'https://b.example/ilp' });
+    expect(updated.connectorUrl).toBe('https://b.example/ilp');
+    expect(updated.relayUrl).toBe(BUILT_IN_PROFILES.find((p) => p.id === 'devnet')!.relayUrl);
+    expect(store.overriddenFields('devnet')).toEqual(['connectorUrl']);
+  });
+
+  it('resetting a built-in override goes back to exactly the built-in', () => {
+    const store = newStore();
+    store.setEndpoints('devnet', { connectorUrl: 'https://my-fork.example/ilp' });
+    const reset = store.resetOrRemove('devnet');
+    expect(reset).toEqual(BUILT_IN_PROFILES.find((p) => p.id === 'devnet'));
+    expect(store.overriddenFields('devnet')).toEqual([]);
+    expect(store.list().find((p) => p.id === 'devnet')?.origin).toBe('built-in');
+  });
+
+  it('resetting a built-in with no override is a harmless no-op', () => {
+    const store = newStore();
+    expect(store.resetOrRemove('sandbox')).toEqual(
+      BUILT_IN_PROFILES.find((p) => p.id === 'sandbox')
+    );
+  });
+
+  it('overriding every field with an empty string is the same as a reset', () => {
+    const store = newStore();
+    store.setEndpoints('devnet', { connectorUrl: 'https://my-fork.example/ilp' });
+    store.setEndpoints('devnet', { connectorUrl: '   ' });
+    expect(store.overriddenFields('devnet')).toEqual([]);
+    expect(store.list().find((p) => p.id === 'devnet')?.origin).toBe('built-in');
+  });
+
+  it('adds a profile under a new id, selectable once added', () => {
+    const store = newStore();
+    const added = store.setEndpoints('my-devnet', {
+      label: 'My devnet fork',
+      connectorUrl: 'https://my-fork.example/ilp',
+    });
+    expect(added.origin).toBe('user');
+    expect(added.label).toBe('My devnet fork');
+    expect(added.connectorUrl).toBe('https://my-fork.example/ilp');
+    expect(added.relayUrl).toBe('');
+    expect(store.list().map((p) => p.id)).toContain('my-devnet');
+    expect(store.setActive('my-devnet').id).toBe('my-devnet');
+  });
+
+  it('lists built-ins first, in their own order, then additions in the order they were added', () => {
+    const store = newStore();
+    store.setEndpoints('bravo', { label: 'Bravo' });
+    store.setEndpoints('alpha', { label: 'Alpha' });
+    expect(store.list().map((p) => p.id)).toEqual([
+      'devnet',
+      'sandbox',
+      'mainnet',
+      'bravo',
+      'alpha',
+    ]);
+  });
+
+  it('refuses a new id outside the safe alphabet', () => {
+    const store = newStore();
+    expect(() => store.setEndpoints('../escape', { label: 'x' })).toThrow(
+      InvalidProfileIdError
+    );
+    expect(() => store.setEndpoints('Has Spaces', { label: 'x' })).toThrow(
+      InvalidProfileIdError
+    );
+    expect(() => store.setEndpoints('UPPER', { label: 'x' })).toThrow(InvalidProfileIdError);
+  });
+
+  it('removes a profile added under a new id', () => {
+    const store = newStore();
+    store.setEndpoints('my-devnet', { label: 'My devnet fork' });
+    expect(store.resetOrRemove('my-devnet')).toBeUndefined();
+    expect(store.list().map((p) => p.id)).not.toContain('my-devnet');
+  });
+
+  it('refuses to remove a profile that does not exist', () => {
+    const store = newStore();
+    expect(() => store.resetOrRemove('nope')).toThrow(UnknownProfileError);
+  });
+
+  it('refuses to remove the active profile, and explains why', () => {
+    const store = newStore();
+    store.setEndpoints('my-devnet', { label: 'My devnet fork' });
+    store.setActive('my-devnet');
+    expect(() => store.resetOrRemove('my-devnet')).toThrow(ActiveProfileError);
+    // Still there — the throw did not partially apply.
+    expect(store.list().map((p) => p.id)).toContain('my-devnet');
+  });
+
+  it('a built-in may be reset even while it is the active profile', () => {
+    const store = newStore();
+    store.setEndpoints('devnet', { connectorUrl: 'https://my-fork.example/ilp' });
+    store.setActive('devnet');
+    const reset = store.resetOrRemove('devnet');
+    expect(reset?.origin).toBe('built-in');
+    expect(store.active().id).toBe('devnet');
+  });
+
+  it('a removed user profile is no longer switchable, but switching back to a reset built-in still finds it', () => {
+    const store = newStore();
+    store.setEndpoints('devnet', { connectorUrl: 'https://my-fork.example/ilp' });
+    store.resetOrRemove('devnet');
+    expect(store.setActive('devnet').connectorUrl).toBe(
+      BUILT_IN_PROFILES.find((p) => p.id === 'devnet')!.connectorUrl
+    );
+  });
+
+  it('writes the user profiles file atomically at mode 0600', () => {
+    newStore().setEndpoints('devnet', { connectorUrl: 'https://my-fork.example/ilp' });
+    const stat = statSync(userPath());
+    expect(stat.mode & 0o777).toBe(0o600);
+    const onDisk = JSON.parse(readFileSync(userPath(), 'utf8')) as { profiles: unknown[] };
+    expect(onDisk.profiles).toHaveLength(1);
+  });
+
+  it('a corrupt or hand-edited user profiles file falls back to no overrides rather than refusing to start', () => {
+    mkdirSync(dirname(userPath()), { recursive: true });
+    writeFileSync(userPath(), '{ not json');
+    const store = newStore();
+    expect(store.list().find((p) => p.id === 'devnet')?.origin).toBe('built-in');
+  });
+
+  it('carries no chain fact for an added profile either — endpoints only', () => {
+    const store = newStore();
+    const added = store.setEndpoints('my-devnet', {
+      label: 'My devnet fork',
+      connectorUrl: 'https://my-fork.example/ilp',
+    });
+    const { id, label, description, origin, gatewayDomain, ...endpoints } = added;
+    expect(id).toBeTruthy();
+    expect(label).toBeTruthy();
+    expect(typeof description).toBe('string');
+    expect(origin).toBe('user');
+    expect(gatewayDomain).toBe('');
+    for (const url of urlsIn(endpoints)) {
+      expect(url).toMatch(/^(https?|wss?):\/\/[^\s]+$/u);
+    }
   });
 });

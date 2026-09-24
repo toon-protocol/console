@@ -18,8 +18,8 @@ use crate::types::{
     BunkerSignerRequest, ChainSeedStatus, Dashboard, Directory, DirectoryFilters,
     ExpandTemplateRequest, ExpandedTemplate, ExtendResult, FundingStatus, GasPurchase, GasQuote,
     GasStationStatus, GatewayView, HandoverResult, Health, ImportChainSeedRequest,
-    LocalSignerRequest, PreflightView, ProfileSwitchRequest, Profiles, RotationResult,
-    RotationView, SessionStatus, SignInRequest, SpawnRequestBody, SpawnResult,
+    LocalSignerRequest, PreflightView, ProfileEndpointsRequest, ProfileSwitchRequest, Profiles,
+    RotationResult, RotationView, SessionStatus, SignInRequest, SpawnRequestBody, SpawnResult,
     StandbySetPreflightView, StandbySetRequestBody, StandbySetResult, TemplateGallery,
     TemplateSpawnRequestBody, TerminateResult, WithdrawalResult, WorkloadCard,
 };
@@ -43,6 +43,28 @@ pub async fn profiles(client: &DaemonClient) -> Answer<Profiles> {
 pub async fn switch_profile(client: &DaemonClient, id: String) -> Answer<Profiles> {
     client
         .post("/api/profiles/active", &ProfileSwitchRequest { id })
+        .await
+}
+
+/// `PUT /api/profiles/<id>` (TOON_Network#150) — `Command::SaveProfile`:
+/// overrides a subset of a built-in's endpoints, or adds a profile under a
+/// new id. Answers the updated profile list, same as `profiles` above.
+pub async fn save_profile(
+    client: &DaemonClient,
+    id: &str,
+    body: &ProfileEndpointsRequest,
+) -> Answer<Profiles> {
+    client
+        .put(&format!("/api/profiles/{}", encode_path_segment(id)), body)
+        .await
+}
+
+/// `DELETE /api/profiles/<id>` — `Command::ResetProfile`: resets a
+/// built-in's override, or removes a profile added under a new id (refused
+/// by the daemon while it is active).
+pub async fn reset_profile(client: &DaemonClient, id: &str) -> Answer<Profiles> {
+    client
+        .delete(&format!("/api/profiles/{}", encode_path_segment(id)))
         .await
 }
 

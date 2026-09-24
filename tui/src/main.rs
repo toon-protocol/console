@@ -39,10 +39,11 @@ use toon_console_tui::markdown;
 use toon_console_tui::types::{
     BunkerSignerRequest, ChainSeedStatus, Dashboard, Directory, DirectoryFilters, DocsIndex,
     DocsPage, ExpandTemplateRequest, ExpandedTemplate, ExtendResult, FundingStatus, GasPurchase,
-    GasQuote, GasStationStatus, GatewayView, HandoverResult, Health, PreflightView, Profiles,
-    RotationResult, RotationView, SessionStatus, SignInRequest, SpawnRequestBody, SpawnResult,
-    StandbySetPreflightView, StandbySetRequestBody, StandbySetResult, TemplateGallery,
-    TemplateSpawnRequestBody, TerminateResult, WithdrawalResult, WorkloadCard,
+    GasQuote, GasStationStatus, GatewayView, HandoverResult, Health, PreflightView,
+    ProfileEndpointsError, ProfileEndpointsRequest, Profiles, RotationResult, RotationView,
+    SessionStatus, SignInRequest, SpawnRequestBody, SpawnResult, StandbySetPreflightView,
+    StandbySetRequestBody, StandbySetResult, TemplateGallery, TemplateSpawnRequestBody,
+    TerminateResult, WithdrawalResult, WorkloadCard,
 };
 use toon_console_tui::ui;
 use toon_console_tui::views::account as account_view;
@@ -92,6 +93,13 @@ enum RuntimeEvent {
     /// re-read it before anything shown is trusted.
     ProfileSwitched(Profiles),
     ProfileSwitchFailed(String),
+    /// `PUT /api/profiles/<id>` (TOON_Network#150) answered — the id travels
+    /// alongside so a failure can be matched back to the open editor, and a
+    /// success can tell whether the profile just touched was the active one
+    /// (`refresh_after_profile_change`'s own gate).
+    ProfileSaved(String, Result<Profiles, ProfileActionFailure>),
+    /// `DELETE /api/profiles/<id>` answered.
+    ProfileReset(String, Result<Profiles, ProfileActionFailure>),
     SwitchView(View),
     /// `GET /api/docs`, on connect and again on `Command::RefreshDocs` while
     /// no article is open.
@@ -315,6 +323,16 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()
                                 if let Some(client) = &client {
                                     app.switching_profile = Some(id.clone());
                                     spawn_switch_profile(client.clone(), tx.clone(), id);
+                                }
+                            }
+                            Command::SaveProfile { id, request } => {
+                                if let Some(client) = &client {
+                                    spawn_save_profile(client.clone(), tx.clone(), id, request);
+                                }
+                            }
+                            Command::ResetProfile(id) => {
+                                if let Some(client) = &client {
+                                    spawn_reset_profile(client.clone(), tx.clone(), id);
                                 }
                             }
                             Command::AcknowledgeChainSeedWarning => {
@@ -618,45 +636,41 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()
                         // terms. Every view with its own data re-fetches
                         // here (the spec: every view refreshes after a
                         // switch); a later view ticket's data joins this list.
-                        if let Some(client) = &client {
-                            spawn_health_fetch(client.clone(), tx.clone());
-                            app.loading_health = true;
-                            spawn_account_fetch(client.clone(), tx.clone());
-                            app.loading_account = true;
-                            spawn_directory_fetch(
-                                client.clone(),
-                                tx.clone(),
-                                app.directory.filters.clone(),
-                            );
-                            app.loading_directory = true;
-                            spawn_docs_index_fetch(client.clone(), tx.clone(), false);
-                            app.docs.loading = true;
-                            spawn_funding_fetch(client.clone(), tx.clone(), false);
-                            app.funds.funding_loading = true;
-                            app.funds.funding_busy = true;
-                            spawn_gas_station_fetch(client.clone(), tx.clone());
-                            app.funds.gas_loading = true;
-                            app.funds.gas_busy = true;
-                            spawn_workloads_fetch(client.clone(), tx.clone(), true);
-                            app.workloads.loading = true;
-                            // A Template gallery is per network, like the
-                            // Directory (TOON_Network#146,
-                            // `use-templates.ts`'s own `profileId` key).
-                            spawn_templates_fetch(client.clone(), tx.clone());
-                            app.new_workload.loading_gallery = true;
-                            // `writes` (what a Chain Seed publish would cost)
-                            // is quoted by the active profile's connector, so
-                            // it re-reads here too, not only on a pubkey
-                            // change.
-                            if app.chain_seed_for_pubkey.is_some() {
-                                spawn_chain_seed_fetch(client.clone(), tx.clone());
-                                app.loading_chain_seed = true;
-                            }
-                        }
+                        refresh_after_profile_change(&client, &tx, &mut app);
                     }
                     RuntimeEvent::ProfileSwitchFailed(message) => {
                         app.switching_profile = None;
                         app.account_error = Some(message);
+                    }
+                    // TOON_Network#150: a save/reset that touched the ACTIVE
+                    // profile takes effect the same way a switch does — the
+                    // same re-fetch list, just gated on "was this the active
+                    // id" instead of always running (a save to a profile
+                    // nobody is using changes nothing currently on screen).
+                    RuntimeEvent::ProfileSaved(id, Ok(profiles)) => {
+                        let was_active = profiles.active_id == id;
+                        app.profiles = Some(profiles);
+                        app.account_view.network_editor = None;
+                        if was_active {
+                            refresh_after_profile_change(&client, &tx, &mut app);
+                        }
+                    }
+                    RuntimeEvent::ProfileSaved(_, Err(failure)) => {
+                        if let Some(editor) = &mut app.account_view.network_editor {
+                            editor.saving = false;
+                            editor.general_error = Some(failure.message);
+                            editor.errors = failure.errors;
+                        }
+                    }
+                    RuntimeEvent::ProfileReset(id, Ok(profiles)) => {
+                        let was_active = profiles.active_id == id;
+                        app.profiles = Some(profiles);
+                        if was_active {
+                            refresh_after_profile_change(&client, &tx, &mut app);
+                        }
+                    }
+                    RuntimeEvent::ProfileReset(_, Err(failure)) => {
+                        app.account_error = Some(failure.message);
                     }
                     RuntimeEvent::SwitchView(view) => {
                         app.view = view;
@@ -1275,6 +1289,113 @@ fn spawn_switch_profile(client: Arc<DaemonClient>, tx: UnboundedSender<RuntimeEv
             }
         }
     });
+}
+
+/// TOON_Network#150's `PUT`/`DELETE /api/profiles/<id>` share this shape on
+/// a refusal: a message worth showing on its own (a 409 "this is the active
+/// profile", say), and — only from `PUT`'s 400 — a per-field map
+/// `views::network`'s editor lines up against its own rows. Parsed from
+/// `ClientError::Status`'s raw body, which is `problem()`'s own JSON in
+/// `api.ts`; anything that is not that shape (an unreachable daemon, a
+/// stale-token 401 that survived the retry) falls back to the error's own
+/// `Display`, with no field singled out.
+struct ProfileActionFailure {
+    message: String,
+    errors: std::collections::HashMap<String, String>,
+}
+
+fn profile_action_failure(err: &ClientError) -> ProfileActionFailure {
+    if let ClientError::Status { status, body, .. } = err {
+        if matches!(status, 400 | 404 | 409) {
+            if let Ok(parsed) = serde_json::from_str::<ProfileEndpointsError>(body) {
+                return ProfileActionFailure {
+                    message: parsed.message,
+                    errors: parsed.errors,
+                };
+            }
+        }
+    }
+    ProfileActionFailure {
+        message: err.to_string(),
+        errors: std::collections::HashMap::new(),
+    }
+}
+
+/// `Command::SaveProfile` — `PUT /api/profiles/<id>`. The id travels with
+/// the event (not just the `Profiles` it succeeds with) so a failure can be
+/// matched back to whichever id the open editor is for.
+fn spawn_save_profile(
+    client: Arc<DaemonClient>,
+    tx: UnboundedSender<RuntimeEvent>,
+    id: String,
+    request: ProfileEndpointsRequest,
+) {
+    tokio::spawn(async move {
+        match api::save_profile(&client, &id, &request).await {
+            Ok(profiles) => {
+                let _ = tx.send(RuntimeEvent::ProfileSaved(id, Ok(profiles)));
+            }
+            Err(err) => {
+                let failure = profile_action_failure(&err);
+                let _ = tx.send(RuntimeEvent::ProfileSaved(id, Err(failure)));
+            }
+        }
+    });
+}
+
+/// `Command::ResetProfile` — `DELETE /api/profiles/<id>`.
+fn spawn_reset_profile(client: Arc<DaemonClient>, tx: UnboundedSender<RuntimeEvent>, id: String) {
+    tokio::spawn(async move {
+        match api::reset_profile(&client, &id).await {
+            Ok(profiles) => {
+                let _ = tx.send(RuntimeEvent::ProfileReset(id, Ok(profiles)));
+            }
+            Err(err) => {
+                let failure = profile_action_failure(&err);
+                let _ = tx.send(RuntimeEvent::ProfileReset(id, Err(failure)));
+            }
+        }
+    });
+}
+
+/// Every view with its own data, re-fetched — ADR 0028's "a switch re-reads
+/// rather than patches," reused for TOON_Network#150: editing or
+/// resetting/removing the ACTIVE profile takes effect the same way
+/// (`RuntimeEvent::ProfileSaved`/`ProfileReset`, gated on "was this the
+/// active id").
+fn refresh_after_profile_change(
+    client: &Option<Arc<DaemonClient>>,
+    tx: &UnboundedSender<RuntimeEvent>,
+    app: &mut App,
+) {
+    let Some(client) = client else { return };
+    spawn_health_fetch(client.clone(), tx.clone());
+    app.loading_health = true;
+    spawn_account_fetch(client.clone(), tx.clone());
+    app.loading_account = true;
+    spawn_directory_fetch(client.clone(), tx.clone(), app.directory.filters.clone());
+    app.loading_directory = true;
+    spawn_docs_index_fetch(client.clone(), tx.clone(), false);
+    app.docs.loading = true;
+    spawn_funding_fetch(client.clone(), tx.clone(), false);
+    app.funds.funding_loading = true;
+    app.funds.funding_busy = true;
+    spawn_gas_station_fetch(client.clone(), tx.clone());
+    app.funds.gas_loading = true;
+    app.funds.gas_busy = true;
+    spawn_workloads_fetch(client.clone(), tx.clone(), true);
+    app.workloads.loading = true;
+    // A Template gallery is per network, like the Directory
+    // (TOON_Network#146, `use-templates.ts`'s own `profileId` key).
+    spawn_templates_fetch(client.clone(), tx.clone());
+    app.new_workload.loading_gallery = true;
+    // `writes` (what a Chain Seed publish would cost) is quoted by the
+    // active profile's connector, so it re-reads here too, not only on a
+    // pubkey change.
+    if app.chain_seed_for_pubkey.is_some() {
+        spawn_chain_seed_fetch(client.clone(), tx.clone());
+        app.loading_chain_seed = true;
+    }
 }
 
 /// One-shot `GET /api/chain-seed` (TOON_Network#142). Read on connect once

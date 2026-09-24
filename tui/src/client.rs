@@ -99,6 +99,20 @@ impl DaemonClient {
         self.send(Method::DELETE, path, None).await
     }
 
+    /// `PUT <path>` with a JSON body, decoded as `T`. TOON_Network#150's
+    /// `PUT /api/profiles/<id>` is the first route this crate calls with
+    /// this verb; same 401-then-reread retry as every other verb, via
+    /// `send`.
+    pub async fn put<B: Serialize, T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<T, ClientError> {
+        let value =
+            serde_json::to_value(body).map_err(|err| ClientError::Decode(err.to_string()))?;
+        self.send(Method::PUT, path, Some(value)).await
+    }
+
     /// One request, with the daemon's 401-then-restarted-daemon retry from
     /// this module's doc comment. Every public method above is this call
     /// with a fixed `Method` — the retry-on-401 contract lives here once,

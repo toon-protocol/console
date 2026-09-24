@@ -22,9 +22,9 @@ use std::path::{Path, PathBuf};
 use toon_console_tui::types::{
     ChainSeedStatus, Dashboard, Directory, DocsIndex, DocsPage, ExpandedTemplate, ExtendResult,
     FundingStatus, GasPurchase, GasQuote, GasStationStatus, GatewayView, HandoverResult, Health,
-    PreflightView, Profiles, RotationResult, RotationView, SessionStatus, SpawnResult,
-    StandbySetPreflightView, StandbySetResult, TemplateGallery, TerminateResult, WithdrawalResult,
-    WorkloadCard,
+    PreflightView, ProfileEndpointsError, Profiles, RotationResult, RotationView, SessionStatus,
+    SpawnResult, StandbySetPreflightView, StandbySetResult, TemplateGallery, TerminateResult,
+    WithdrawalResult, WorkloadCard,
 };
 
 type Check = fn(&str) -> Result<(), String>;
@@ -50,6 +50,17 @@ fn registry() -> BTreeMap<&'static str, Check> {
     map.insert("account-signed-out", check::<SessionStatus> as Check);
     map.insert("account-signed-in", check::<SessionStatus> as Check);
     map.insert("profiles", check::<Profiles> as Check);
+    // TOON_Network#150 (network profile editor): `PUT`/`DELETE
+    // /api/profiles/<id>` answer the same `Profiles` shape as `GET
+    // /api/profiles` on success, and `problem()`'s own shape (`error`,
+    // `message`, an optional per-field `errors`) on a 400 or 409.
+    map.insert("profiles-overridden", check::<Profiles> as Check);
+    map.insert("profiles-added", check::<Profiles> as Check);
+    map.insert("profiles-invalid", check::<ProfileEndpointsError> as Check);
+    map.insert(
+        "profiles-active-delete-refused",
+        check::<ProfileEndpointsError> as Check,
+    );
     // TOON_Network#142 (Chain Seed): every fixture `api-chain-seed.test.ts`
     // writes is the same `ChainSeedStatus` shape the state it names comes
     // from.

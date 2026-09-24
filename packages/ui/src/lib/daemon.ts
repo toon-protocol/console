@@ -28,11 +28,33 @@ export interface ProfileView {
   gatewayDomain: string;
   /** The Workload Gateway's own connector, where a handover is sealed (§12.1). */
   gatewayConnectorUrl: string;
+  /** The gas station's own connector (TOON_Network#119). */
+  gasConnectorUrl: string;
   faucetUrl?: string;
   rpc: { evm?: string; solana?: string };
   origin: 'built-in' | 'user';
   configured: boolean;
   active: boolean;
+  /** Which endpoint fields a person has overridden (or, for a profile with
+   * no built-in, simply set) — `"connectorUrl"`, `"rpc.evm"`, etc. Empty for
+   * a built-in nobody has touched (TOON_Network#150). */
+  overriddenFields: string[];
+}
+
+/** `PUT /api/profiles/<id>`'s body (TOON_Network#150) — every endpoint field
+ * the WHOLE override for this call (a field left out falls through to the
+ * built-in), plus the label a brand-new id needs. Mirrors
+ * `profile-store.ts`'s `ProfileEndpointsInput`. */
+export interface ProfileEndpointsInput {
+  label?: string;
+  description?: string;
+  connectorUrl?: string;
+  relayUrl?: string;
+  gatewayDomain?: string;
+  gatewayConnectorUrl?: string;
+  gasConnectorUrl?: string;
+  faucetUrl?: string;
+  rpc?: { evm?: string; solana?: string };
 }
 
 export interface SettlementView {
@@ -1540,6 +1562,18 @@ export const daemon = {
   },
   setProfile: (id: string) =>
     call<Profiles>('/api/profiles/active', { method: 'POST', body: JSON.stringify({ id }) }),
+  /** Overrides a subset of a built-in's endpoints, or adds a profile under a
+   * new id (TOON_Network#150). Answers the updated profile list, the same
+   * shape `profiles()` does. */
+  updateProfile: (id: string, input: ProfileEndpointsInput) =>
+    call<Profiles>(`/api/profiles/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    }),
+  /** Resets a built-in's override, or removes a profile added under a new
+   * id — the daemon refuses this while that profile is the active one. */
+  resetProfile: (id: string) =>
+    call<Profiles>(`/api/profiles/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   directory: (filters: DirectoryFilters = {}) =>
     call<Directory>(`/api/directory${directoryQuery(filters)}`),
 

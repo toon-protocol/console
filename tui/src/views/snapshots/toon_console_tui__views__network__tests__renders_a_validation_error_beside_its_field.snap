@@ -1,0 +1,33 @@
+---
+source: src/views/network.rs
+expression: output
+---
+                                                                                                    
+                                                                                                    
+                                                                                                    
+                                                                                                    
+             ┌ Edit network profile ──────────────────────────────────────────────────┐             
+             │Connector URL: https://connector.example/ilp▏                           │             
+             │  the connector URL must use https://                                   │             
+             │Relay URL: wss://relay.example                                          │             
+             │Gateway domain: gw.example                                              │             
+             │Gateway's connector URL: https://gateway.example/ilp                    │             
+             │Gas station's connector URL: https://gas.example/ilp                    │             
+             │Faucet URL: https://faucet.example                                      │             
+             │EVM RPC URL: …                                                          │             
+             │Solana RPC URL: …                                                       │             
+             │ Save    Cancel                                                         │             
+             │                                                                        │             
+             │                                                                        │             
+             │                                                                        │             
+             │                                                                        │             
+             │                                                                        │             
+             │                                                                        │             
+             │                                                                        │             
+             │                                                                        │             
+             │                                                                        │             
+             │                                                                        │             
+             │                                                                        │             
+             │                                                                        │             
+             │                                                                        │             
+             └────────────────────────────────────────────────────────────────────────┘
