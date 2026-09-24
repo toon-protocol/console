@@ -1,20 +1,20 @@
 {
   "state": "ready",
-  "pubkey": "d6b18830f963a2e67542e1d0d4c8628840b410e68022b7d8ec4036b6d3d7aa1c",
+  "pubkey": "8cb7d9875d843393727482839d9438baa9716c60c5e297d691f95c38360ee436",
   "addresses": {
     "evm": {
-      "address": "0x7CE9373245B99C56fdF3e6435e235B629f52684d",
+      "address": "0x285276dCac6f31118D492D4Ad0629556f607d234",
       "path": "m/44'/60'/0'/0/0"
     },
     "solana": {
-      "address": "CzCWQRVdy1c4i8oGUaXfbSU7sNkCEgmS6YAuzMidXLDC",
+      "address": "5VPvo6vUtuRktNPm3uMV8buDoFbZ4ZdbxiGDzX7NKzFY",
       "path": "m/44'/501'/0'/0'"
     }
   },
   "origin": "minted",
   "record": {
-    "eventId": "6328b200741d425c4598453f06ef9d6d9fbb288537e2e9adc4bc9f3b7cefbed5",
-    "publishedAt": "2026-09-24T12:17:54.000Z",
+    "eventId": "a8f74f8fed06c8690f4bef34af008f3df21542cb2dca93581da6842866e29acd",
+    "publishedAt": "2026-01-01T00:00:00.000Z",
     "source": "relays",
     "relays": [
       "wss://relay.toon.test"
@@ -51,11 +51,11 @@
   },
   "warning": {
     "text": "Whoever holds this account’s Nostr key holds its funds. The Chain Seed is sealed to that key, so anyone who can sign as this account can unseal it, derive these addresses and spend what they hold. Losing the Nostr key loses the funds with it: nothing in TOON Network, and no one running it, can recover them for you.",
-    "acknowledgedAt": "2026-09-24T12:17:54.987Z"
+    "acknowledgedAt": "2026-01-01T00:00:00.000Z"
   },
   "supersededSeeds": 0,
   "lastPublish": {
-    "at": "2026-09-21T14:13:20.000Z",
+    "at": "2026-01-01T00:00:00.000Z",
     "what": "chain-seed",
     "relays": [
       {
@@ -73,5 +73,5 @@
     "payAt": "https://connector.test/ilp",
     "chain": "evm:31337"
   },
-  "checkedAt": "2026-09-24T12:17:55.078Z"
+  "checkedAt": "2026-01-01T00:00:00.000Z"
 }

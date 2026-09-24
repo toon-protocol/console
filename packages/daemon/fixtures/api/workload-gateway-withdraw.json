@@ -10,12 +10,12 @@
     "chain": "evm:31337",
     "channelId": "0xchannel"
   },
-  "hostname": "x6o2roiqnlrp2u5iipqe3vonyo5u2wwctmyl2spxxjbr62ofnkdq.gw.example",
+  "hostname": "tewnnopmv4uwepypxqe4col6st4wqtlkfnsejzac76mhp36ihuba.gw.example",
   "withdrawn": true,
-  "message": "x6o2roiqnlrp2u5iipqe3vonyo5u2wwctmyl2spxxjbr62ofnkdq.gw.example is no longer served here. The gateway KEEPS the grant it was handed until 2026-09-24T13:43:30.000Z: a withdrawal ends serving, not reading (spec §12.7). Rotating this lease's Continuation Token is what ends the reading, and it ends every grant of the old token at once (spec §6.8, ADR 0018).",
+  "message": "tewnnopmv4uwepypxqe4col6st4wqtlkfnsejzac76mhp36ihuba.gw.example is no longer served here. The gateway KEEPS the grant it was handed until 2026-09-24T14:32:50.000Z: a withdrawal ends serving, not reading (spec §12.7). Rotating this lease's Continuation Token is what ends the reading, and it ends every grant of the old token at once (spec §6.8, ADR 0018).",
   "view": {
-    "workloadId": "bf9da8b9106ae2fd53a843e04dd5cdc3bb4d5ac29b30bd49f7ba431f69c56a87",
-    "hostname": "x6o2roiqnlrp2u5iipqe3vonyo5u2wwctmyl2spxxjbr62ofnkdq.gw.example",
+    "workloadId": "992cd6b9ecaf29623f0fbc09c1397e94f9684d6a2b6444e402ff9877efc83d02",
+    "hostname": "tewnnopmv4uwepypxqe4col6st4wqtlkfnsejzac76mhp36ihuba.gw.example",
     "gateway": {
       "connectorUrl": "https://gateway.example/ilp",
       "ilpAddress": "g.toon.workload-gateway",
@@ -24,16 +24,16 @@
       "domain": "gw.example"
     },
     "handover": {
-      "hostname": "x6o2roiqnlrp2u5iipqe3vonyo5u2wwctmyl2spxxjbr62ofnkdq.gw.example",
-      "expiresAt": 1790257410,
+      "hostname": "tewnnopmv4uwepypxqe4col6st4wqtlkfnsejzac76mhp36ihuba.gw.example",
+      "expiresAt": 1790260370,
       "httpPort": 80,
       "standbySet": [
         "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
       ],
       "connectorUrl": "https://gateway.example/ilp",
       "route": "g.toon.workload-gateway.handover",
-      "at": "2026-09-24T12:43:30.527Z",
-      "withdrawnAt": "2026-09-24T12:43:30.548Z"
+      "at": "2026-01-01T00:00:00.000Z",
+      "withdrawnAt": "2026-01-01T00:00:00.000Z"
     },
     "held": false,
     "problems": [],
@@ -42,6 +42,6 @@
       80
     ],
     "httpPort": 80,
-    "checkedAt": "2026-09-24T12:43:30.548Z"
+    "checkedAt": "2026-01-01T00:00:00.000Z"
   }
 }

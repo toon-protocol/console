@@ -1,5 +1,5 @@
 {
-  "workloadId": "e369392dcbcccd0970cd104ca7a82389d87f0d340bb12a5b268911d4959a359d",
+  "workloadId": "33e88274e09e00670aed67fe651be342de0bed8bfbac96d77dfe263d51fbe435",
   "started": true,
   "rotated": true,
   "problems": [],
@@ -26,7 +26,7 @@
   "of": 1,
   "vaultCost": "2",
   "view": {
-    "workloadId": "e369392dcbcccd0970cd104ca7a82389d87f0d340bb12a5b268911d4959a359d",
+    "workloadId": "33e88274e09e00670aed67fe651be342de0bed8bfbac96d77dfe263d51fbe435",
     "underWay": false,
     "ok": true,
     "problems": [],
@@ -51,7 +51,7 @@
     ],
     "confirmed": 0,
     "of": 1,
-    "rotatedAt": "2026-09-24T12:43:30.851Z",
+    "rotatedAt": "2026-01-01T00:00:00.000Z",
     "vault": {
       "relays": [
         "wss://own.relay.test"

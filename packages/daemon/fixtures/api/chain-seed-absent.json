@@ -1,6 +1,6 @@
 {
   "state": "absent",
-  "pubkey": "118cd257496636edd259a675305bf0978b7bed02e13327707446bf1f4c3bd0e5",
+  "pubkey": "fac3d88f902ac20179ab293803f06935ecdeece3850bd36d624cf91ec2de64b9",
   "relayList": {
     "state": "none",
     "read": [],
@@ -34,5 +34,5 @@
     "text": "Whoever holds this account’s Nostr key holds its funds. The Chain Seed is sealed to that key, so anyone who can sign as this account can unseal it, derive these addresses and spend what they hold. Losing the Nostr key loses the funds with it: nothing in TOON Network, and no one running it, can recover them for you."
   },
   "supersededSeeds": 0,
-  "checkedAt": "2026-09-24T12:17:55.371Z"
+  "checkedAt": "2026-01-01T00:00:00.000Z"
 }

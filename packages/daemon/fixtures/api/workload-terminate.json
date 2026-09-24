@@ -13,9 +13,9 @@
   },
   "ended": "termination",
   "card": {
-    "workloadId": "06369d93c4badb142985209e2dffdd0fe9f0d4d3e053debc5adbceeee9814ede",
+    "workloadId": "e9a7159e0ec56d2daa23c88bce8f6e6458dc64ac04d4164d36fd323ab0bafd08",
     "lease": {
-      "workloadId": "06369d93c4badb142985209e2dffdd0fe9f0d4d3e053debc5adbceeee9814ede",
+      "workloadId": "e9a7159e0ec56d2daa23c88bce8f6e6458dc64ac04d4164d36fd323ab0bafd08",
       "state": "live",
       "standbySet": [
         "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
@@ -83,7 +83,7 @@
         }
       ],
       "envKeys": [],
-      "createdAt": "2026-09-24T11:54:03.316Z",
+      "createdAt": "2026-01-01T00:00:00.000Z",
       "localOnly": false,
       "role": "standalone",
       "expiresAt": 1790003600,
@@ -101,7 +101,7 @@
       "relays": [
         "wss://own.relay.test"
       ],
-      "recordId": "141a8e402343d42b03077d09756c877290d975c0fbd8fc75c462c859c2094496"
+      "recordId": "40d367c5749e2e28f800a11fdf01b6f809f5c00f1b320c781707c28434afcafe"
     },
     "provider": {
       "pubkey": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
@@ -117,7 +117,7 @@
         "phase": "ended",
         "ending": "termination"
       },
-      "readAt": "2026-09-24T11:54:03.380Z"
+      "readAt": "2026-01-01T00:00:00.000Z"
     },
     "runway": {
       "listingPrice": 1000,
@@ -131,10 +131,10 @@
           "ended": true
         }
       ],
-      "readAt": "2026-09-24T11:54:03.380Z",
+      "readAt": "2026-01-01T00:00:00.000Z",
       "state": "unknown",
       "reason": "This lease has ended, so it has no runway. Money in the channel is still yours; it is simply not keeping this workload alive any more.",
-      "paidUntil": "2026-09-21T15:13:20.000Z",
+      "paidUntil": "2026-01-01T00:00:00.000Z",
       "expirySource": "vault",
       "paidSeconds": 0
     },
@@ -178,7 +178,7 @@
             "phase": "ended",
             "ending": "termination"
           },
-          "readAt": "2026-09-24T11:54:03.380Z"
+          "readAt": "2026-01-01T00:00:00.000Z"
         },
         "extend": {
           "ok": false,

@@ -1,12 +1,12 @@
 {
   "state": "ready",
-  "pubkey": "ff43dbc2fa006c607fff4d8bf9f9ca32a4af8904c9ae6e14aa27ac8c3dbd72cb",
+  "pubkey": "e5dddd2f0bb24ebc76ad2f737b54a62811f418c26b005043512af011289b231d",
   "profileId": "sandbox",
   "cards": [
     {
-      "workloadId": "2733bde23e63254b983279547e43ff3e01593a84955b204245a200182cfe8cd4",
+      "workloadId": "c79e5fcd9c333bfc185106d2367f02f9d0a28d0f5cb97bef1cfa20c5bc073a5e",
       "lease": {
-        "workloadId": "2733bde23e63254b983279547e43ff3e01593a84955b204245a200182cfe8cd4",
+        "workloadId": "c79e5fcd9c333bfc185106d2367f02f9d0a28d0f5cb97bef1cfa20c5bc073a5e",
         "state": "live",
         "standbySet": [
           "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
@@ -74,7 +74,7 @@
           }
         ],
         "envKeys": [],
-        "createdAt": "2026-09-24T11:54:02.852Z",
+        "createdAt": "2026-01-01T00:00:00.000Z",
         "localOnly": false,
         "role": "standalone",
         "expiresAt": 1790003600,
@@ -92,7 +92,7 @@
         "relays": [
           "wss://own.relay.test"
         ],
-        "recordId": "52e0354813ec69334b1242252c36c4a50c1205343eb78825129394d9828365d0"
+        "recordId": "ab7a8cf0f0725c0e8947efd63c2f12494ca21b23feb25591c19d58065d448c5a"
       },
       "provider": {
         "pubkey": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
@@ -113,7 +113,7 @@
           "host": "203.0.113.7",
           "ssh_port": 40000
         },
-        "readAt": "2026-09-24T11:54:02.899Z"
+        "readAt": "2026-01-01T00:00:00.000Z"
       },
       "runway": {
         "listingPrice": 1000,
@@ -133,19 +133,19 @@
         "setPricePerInterval": "1000",
         "rounds": 10000,
         "boundBy": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-        "readAt": "2026-09-24T11:54:02.925Z",
+        "readAt": "2026-01-01T00:00:00.000Z",
         "payAt": "https://provider.example/ilp",
         "pricePerInterval": "1000",
         "chain": "evm:31337",
         "channelId": "0xchannel",
         "available": "10000000",
         "paidSeconds": 0,
-        "paidUntil": "2026-09-21T15:13:20.000Z",
+        "paidUntil": "2026-01-01T00:00:00.000Z",
         "expirySource": "provider",
         "state": "computed",
         "affordableIntervals": 10000,
         "seconds": 36000000,
-        "until": "2027-11-15T03:54:02.000Z"
+        "until": "2026-01-01T00:00:00.000Z"
       },
       "extend": {
         "ok": true,
@@ -190,7 +190,7 @@
               "host": "203.0.113.7",
               "ssh_port": 40000
             },
-            "readAt": "2026-09-24T11:54:02.899Z"
+            "readAt": "2026-01-01T00:00:00.000Z"
           },
           "extend": {
             "ok": true,
@@ -221,5 +221,5 @@
     }
   ],
   "unreadable": 0,
-  "checkedAt": "2026-09-24T11:54:02.899Z"
+  "checkedAt": "2026-01-01T00:00:00.000Z"
 }

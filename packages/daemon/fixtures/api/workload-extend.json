@@ -15,9 +15,9 @@
   "cost": "1000",
   "expiresAt": 1790007200,
   "card": {
-    "workloadId": "34a1d15d9df73948ec8db43be80cccdfc8248071717ec755f9cf4af1198ea5aa",
+    "workloadId": "c415ac41ea08ec46f7d801c678740fc877eabf97c3d5bf61fd62b431765c66a1",
     "lease": {
-      "workloadId": "34a1d15d9df73948ec8db43be80cccdfc8248071717ec755f9cf4af1198ea5aa",
+      "workloadId": "c415ac41ea08ec46f7d801c678740fc877eabf97c3d5bf61fd62b431765c66a1",
       "state": "live",
       "standbySet": [
         "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
@@ -85,7 +85,7 @@
         }
       ],
       "envKeys": [],
-      "createdAt": "2026-09-24T11:54:03.044Z",
+      "createdAt": "2026-01-01T00:00:00.000Z",
       "localOnly": false,
       "role": "standalone",
       "expiresAt": 1790003600,
@@ -103,7 +103,7 @@
       "relays": [
         "wss://own.relay.test"
       ],
-      "recordId": "c735b529cad52b1400f502272d1b65985e133d7ac3782fa15ad17a854597ef89"
+      "recordId": "2f7908f6adb3c30dd8b3d9fbaf8cecc89fa05756ad3f24cb4d14fe56882f3ccf"
     },
     "provider": {
       "pubkey": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
@@ -124,7 +124,7 @@
         "host": "203.0.113.7",
         "ssh_port": 40000
       },
-      "readAt": "2026-09-24T11:54:03.134Z"
+      "readAt": "2026-01-01T00:00:00.000Z"
     },
     "runway": {
       "listingPrice": 1000,
@@ -144,19 +144,19 @@
       "setPricePerInterval": "1000",
       "rounds": 10000,
       "boundBy": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-      "readAt": "2026-09-24T11:54:03.135Z",
+      "readAt": "2026-01-01T00:00:00.000Z",
       "payAt": "https://provider.example/ilp",
       "pricePerInterval": "1000",
       "chain": "evm:31337",
       "channelId": "0xchannel",
       "available": "10000000",
       "paidSeconds": 0,
-      "paidUntil": "2026-09-21T16:13:20.000Z",
+      "paidUntil": "2026-01-01T00:00:00.000Z",
       "expirySource": "provider",
       "state": "computed",
       "affordableIntervals": 10000,
       "seconds": 36000000,
-      "until": "2027-11-15T03:54:03.000Z"
+      "until": "2026-01-01T00:00:00.000Z"
     },
     "extend": {
       "ok": true,
@@ -201,7 +201,7 @@
             "host": "203.0.113.7",
             "ssh_port": 40000
           },
-          "readAt": "2026-09-24T11:54:03.134Z"
+          "readAt": "2026-01-01T00:00:00.000Z"
         },
         "extend": {
           "ok": true,

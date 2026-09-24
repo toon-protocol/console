@@ -1,6 +1,6 @@
 {
   "state": "unreadable",
-  "pubkey": "f7952587fac23afd2405e521609c2a6403cff9a8a9a981446e29dabdcdc3276c",
+  "pubkey": "b7cb60962c9d3148f93d0b2d4f0ac3ad0c820ad5af26082fea9058feb6e5aa05",
   "relayList": {
     "state": "none",
     "read": [],
@@ -35,5 +35,5 @@
   },
   "supersededSeeds": 0,
   "reason": "This account's key does not open that record: invalid MAC",
-  "checkedAt": "2026-09-24T12:17:55.520Z"
+  "checkedAt": "2026-01-01T00:00:00.000Z"
 }

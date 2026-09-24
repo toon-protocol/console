@@ -1,6 +1,6 @@
 {
-  "workloadId": "8d68f614e6d2514f62440440cedc5c51f7d3ff8425f80d36f887eb802fa2485b",
-  "hostname": "rvupmfhg2jiu6ysearam5xc4kh35h74eex4a2nxyq7vyal5cjbnq.gw.example",
+  "workloadId": "1d1b5329e8c5f49f112e13a48d2e766f99c52bb2d40c0ef8a82a1d191a0bd469",
+  "hostname": "dunvgkpiyx2j6ejocosi2ltwn6m4kk5s2qga56fifiorsgql2ruq.gw.example",
   "gateway": {
     "connectorUrl": "https://gateway.example/ilp",
     "ilpAddress": "g.toon.workload-gateway",
@@ -9,8 +9,8 @@
     "domain": "gw.example"
   },
   "handover": {
-    "hostname": "rvupmfhg2jiu6ysearam5xc4kh35h74eex4a2nxyq7vyal5cjbnq.gw.example",
-    "expiresAt": 1790257410,
+    "hostname": "dunvgkpiyx2j6ejocosi2ltwn6m4kk5s2qga56fifiorsgql2ruq.gw.example",
+    "expiresAt": 1790260370,
     "httpPort": 80,
     "name": "blog",
     "standbySet": [
@@ -18,7 +18,7 @@
     ],
     "connectorUrl": "https://gateway.example/ilp",
     "route": "g.toon.workload-gateway.handover",
-    "at": "2026-09-24T12:43:30.272Z"
+    "at": "2026-01-01T00:00:00.000Z"
   },
   "held": true,
   "expired": false,
@@ -28,5 +28,5 @@
     80
   ],
   "httpPort": 80,
-  "checkedAt": "2026-09-24T12:43:30.273Z"
+  "checkedAt": "2026-01-01T00:00:00.000Z"
 }

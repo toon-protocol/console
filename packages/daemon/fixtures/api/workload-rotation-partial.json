@@ -1,5 +1,5 @@
 {
-  "workloadId": "c71d311e115dbd844dc0fc4588863624b629d5a6cf04326710d9694a7fc8b7ff",
+  "workloadId": "2af8fe1009892f10132f5170025e55ed590bb3c95f4e72c3658dcb7bf1bba204",
   "underWay": true,
   "ok": true,
   "problems": [],
@@ -41,7 +41,7 @@
   ],
   "confirmed": 1,
   "of": 2,
-  "startedAt": "2026-09-24T12:43:31.357Z",
+  "startedAt": "2026-01-01T00:00:00.000Z",
   "vault": {
     "relays": [
       "wss://own.relay.test"

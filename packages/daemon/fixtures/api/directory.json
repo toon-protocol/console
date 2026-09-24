@@ -41,13 +41,13 @@
         "hidden": false,
         "host": "203.0.113.7",
         "livenessCadenceSeconds": 60,
-        "publishedAt": "2026-09-21T14:13:20.000Z",
+        "publishedAt": "2026-01-01T00:00:00.000Z",
         "eventId": "194ffc80237b2d2ad2e829940235c7da82ebc2efe640b9e8b937d4a8834e1523"
       },
       "liveness": {
         "state": "live",
-        "publishedAt": "2026-09-22T11:57:00.000Z",
-        "expiresAt": "2026-09-22T12:02:00.000Z",
+        "publishedAt": "2026-01-01T00:00:00.000Z",
+        "expiresAt": "2026-01-01T00:00:00.000Z",
         "secondsUntilExpiry": 120,
         "cadenceSeconds": 60
       },
@@ -68,7 +68,7 @@
           "price": 800,
           "capabilities": [],
           "unspecifiedCapabilities": [],
-          "publishedAt": "2026-09-21T14:13:20.000Z",
+          "publishedAt": "2026-01-01T00:00:00.000Z",
           "eventId": "a9a332365565cca159193b2798339b210195e3e2d2cb142e01c0942e4c80b79c",
           "available": 2
         },
@@ -89,7 +89,7 @@
           "standbyPrice": 400,
           "capabilities": [],
           "unspecifiedCapabilities": [],
-          "publishedAt": "2026-09-21T14:13:20.000Z",
+          "publishedAt": "2026-01-01T00:00:00.000Z",
           "eventId": "a736ad70a95af5b7df47f620454edd064de077ca153751c050e5ddd6893c8cfd",
           "available": 3
         },
@@ -111,7 +111,7 @@
             "docker"
           ],
           "unspecifiedCapabilities": [],
-          "publishedAt": "2026-09-21T14:13:20.000Z",
+          "publishedAt": "2026-01-01T00:00:00.000Z",
           "eventId": "3fe173b9a53d236153439c08910807a70951c671ae424643a39c59977f6931ef",
           "available": 1
         },
@@ -132,7 +132,7 @@
           "price": 20000,
           "capabilities": [],
           "unspecifiedCapabilities": [],
-          "publishedAt": "2026-09-21T14:13:20.000Z",
+          "publishedAt": "2026-01-01T00:00:00.000Z",
           "eventId": "0fc16da8df07acf1c9aa4cb6eaaf7c7e5533947f47338c932d6d7c3bbef1ff1e",
           "available": 0
         }
@@ -162,13 +162,13 @@
         "isolation": "shared-kernel",
         "hidden": true,
         "livenessCadenceSeconds": 60,
-        "publishedAt": "2026-09-21T14:13:20.000Z",
+        "publishedAt": "2026-01-01T00:00:00.000Z",
         "eventId": "d8ab030eb34f4e1f52f6e37e914020c20eaad508f0273a3fde32b936787bd298"
       },
       "liveness": {
         "state": "live",
-        "publishedAt": "2026-09-22T11:56:30.000Z",
-        "expiresAt": "2026-09-22T12:01:30.000Z",
+        "publishedAt": "2026-01-01T00:00:00.000Z",
+        "expiresAt": "2026-01-01T00:00:00.000Z",
         "secondsUntilExpiry": 90,
         "cadenceSeconds": 60
       },
@@ -189,7 +189,7 @@
           "price": 9000,
           "capabilities": [],
           "unspecifiedCapabilities": [],
-          "publishedAt": "2026-09-21T14:13:20.000Z",
+          "publishedAt": "2026-01-01T00:00:00.000Z",
           "eventId": "978b530f6138472969a44638d678c43fb0bc88d4ad27201bca1c96b6c5e50151",
           "available": 1
         }
@@ -203,5 +203,5 @@
   ],
   "listingsWithoutProfile": 0,
   "rejectedEvents": 0,
-  "readAt": "2026-09-22T12:00:00.000Z"
+  "readAt": "2026-01-01T00:00:00.000Z"
 }

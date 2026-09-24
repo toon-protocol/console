@@ -1,6 +1,6 @@
 {
   "relays": [],
-  "readAt": "2026-09-24T11:50:39.512Z",
+  "readAt": "2026-01-01T00:00:00.000Z",
   "read": [],
   "fallback": "These are the pages that shipped with this console. No documentation npub is configured, so nothing was read from a relay. Set TOON_CONSOLE_DOCS_NPUB to read the published articles.",
   "docs": [

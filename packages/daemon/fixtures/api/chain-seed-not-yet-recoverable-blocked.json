@@ -1,6 +1,6 @@
 {
   "state": "not_yet_recoverable",
-  "pubkey": "9dea9fdec7c0422c746057691904dea101ce8065857ce5b1e82809dbcedc2207",
+  "pubkey": "30e56154cd5b65a9f149dc62eaf983855b821a62e158cfa92f80cd4e76211283",
   "addresses": {
     "evm": {
       "address": "0x9858EfFD232B4033E47d90003D41EC34EcaEda94",
@@ -13,7 +13,7 @@
   },
   "origin": "imported",
   "held": {
-    "since": "2026-09-24T12:17:55.291Z",
+    "since": "2026-01-01T00:00:00.000Z",
     "origin": "imported",
     "text": "This Chain Seed is NOT YET RECOVERABLE. It is sealed on this machine and on nothing else: no relay holds it, so if this disk is lost before the record is published, everything these addresses hold is lost with it — including anything deposited in the meantime. Publishing the record is a paid TOON packet, and a seed cannot pay for its own publication, because the payer key that pays is derived from the seed itself.",
     "steps": [
@@ -45,8 +45,8 @@
   },
   "warning": {
     "text": "Whoever holds this account’s Nostr key holds its funds. The Chain Seed is sealed to that key, so anyone who can sign as this account can unseal it, derive these addresses and spend what they hold. Losing the Nostr key loses the funds with it: nothing in TOON Network, and no one running it, can recover them for you.",
-    "acknowledgedAt": "2026-09-24T12:17:55.290Z"
+    "acknowledgedAt": "2026-01-01T00:00:00.000Z"
   },
   "supersededSeeds": 0,
-  "checkedAt": "2026-09-24T12:17:55.306Z"
+  "checkedAt": "2026-01-01T00:00:00.000Z"
 }

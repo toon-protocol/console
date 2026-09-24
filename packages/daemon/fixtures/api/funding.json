@@ -6,11 +6,11 @@
   },
   "custody": {
     "text": "Whoever holds this account’s Nostr key holds its funds. The Chain Seed is sealed to that key, so anyone who can sign as this account can unseal it, derive these addresses and spend what they hold. Losing the Nostr key loses the funds with it: nothing in TOON Network, and no one running it, can recover them for you.",
-    "acknowledgedAt": "2026-09-24T11:51:55.797Z"
+    "acknowledgedAt": "2026-01-01T00:00:00.000Z"
   },
   "supersededSeeds": 0,
   "heldSeed": {
-    "since": "2026-09-24T11:51:55.804Z",
+    "since": "2026-01-01T00:00:00.000Z",
     "origin": "minted",
     "text": "This Chain Seed is NOT YET RECOVERABLE. It is sealed on this machine and on nothing else: no relay holds it, so if this disk is lost before the record is published, everything these addresses hold is lost with it — including anything deposited in the meantime. Publishing the record is a paid TOON packet, and a seed cannot pay for its own publication, because the payer key that pays is derived from the seed itself.",
     "steps": [
@@ -20,9 +20,9 @@
       "Publish the Chain Seed record. It is one paid write, at the price the connector quotes."
     ]
   },
-  "checkedAt": "2026-09-24T11:51:56.133Z",
+  "checkedAt": "2026-01-01T00:00:00.000Z",
   "state": "ready",
-  "pubkey": "e518b2e56e0611b81855d937d4a65a3e8f4da9406be0d5961b20e140b5db3217",
+  "pubkey": "7194fa4861dc6ab35b205bee73d74ab4474f1d6e70b62952f29ba2b920f78d04",
   "chains": [
     {
       "chain": "evm:31337",
@@ -33,7 +33,7 @@
         "decimals": 18
       },
       "deposit": {
-        "address": "0x6EB5C0BD1c338aD65c346d0B6688ADfc6f967685",
+        "address": "0x953B5daAEeB046A0d35b11ADDE0fb5228E8C32E0",
         "path": "m/44'/60'/0'/0/0"
       },
       "rpc": {
@@ -52,7 +52,7 @@
           "symbol": "USDC",
           "decimals": 6
         },
-        "readAt": "2026-09-24T11:51:56.134Z"
+        "readAt": "2026-01-01T00:00:00.000Z"
       },
       "gas": {
         "verdict": "present",
@@ -76,7 +76,7 @@
         "decimals": 6
       },
       "deposit": {
-        "address": "6qMfTogWZgKL861DFLgVoEGsEqJHyFXYT1ZpJRHC4gpL",
+        "address": "7WEvRhHDctLYhQXHq4tXeTjaJjUjpxwECXqfvXe6PmAM",
         "path": "m/44'/501'/0'/0'"
       },
       "rpc": {
@@ -90,14 +90,14 @@
           "symbol": "SOL",
           "decimals": 9
         },
-        "readAt": "2026-09-24T11:51:56.134Z"
+        "readAt": "2026-01-01T00:00:00.000Z"
       },
       "gas": {
         "verdict": "none",
         "symbol": "SOL",
         "headline": "Opening a payment channel is a transaction on solana, so it costs SOL — the chain's own coin, which is not the token this network is priced in and which no part of TOON Network can give you.",
-        "detail": "This address holds no SOL, so an open would be refused by the chain before it cost anything. This network has no faucet. Ask the cluster itself: `solana airdrop 1 6qMfTogWZgKL861DFLgVoEGsEqJHyFXYT1ZpJRHC4gpL --url http://localhost:8899`. A public devnet caps that per day and answers 429 Too Many Requests once the cap is reached, and there is nothing to do about a 429 but wait or bring SOL from elsewhere. A local validator has no cap.",
-        "command": "solana airdrop 1 6qMfTogWZgKL861DFLgVoEGsEqJHyFXYT1ZpJRHC4gpL --url http://localhost:8899",
+        "detail": "This address holds no SOL, so an open would be refused by the chain before it cost anything. This network has no faucet. Ask the cluster itself: `solana airdrop 1 7WEvRhHDctLYhQXHq4tXeTjaJjUjpxwECXqfvXe6PmAM --url http://localhost:8899`. A public devnet caps that per day and answers 429 Too Many Requests once the cap is reached, and there is nothing to do about a 429 but wait or bring SOL from elsewhere. A local validator has no cap.",
+        "command": "solana airdrop 1 7WEvRhHDctLYhQXHq4tXeTjaJjUjpxwECXqfvXe6PmAM --url http://localhost:8899",
         "faucetGivesGas": false
       },
       "channel": {
@@ -108,5 +108,5 @@
       "blockedBy": "No SOL at this address: the transaction cannot be paid for."
     }
   ],
-  "channelStorePath": "/tmp/toon-console-funding-api-jmEFj7/.local/share/toon-console/profiles/sandbox/channels/channels.json"
+  "channelStorePath": "/tmp/toon-console-fixture/.local/share/toon-console/profiles/sandbox/channels/channels.json"
 }

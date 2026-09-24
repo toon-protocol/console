@@ -1,6 +1,6 @@
 {
-  "workloadId": "4e178bfca54bfbbb8b621dcb2b47ba1b215a4bd321c01b78540d0ecaab55ad02",
-  "hostname": "jylyx7ffjp53xc3cdxfswr52dmqvus6tehabw6cubuhmvk2vvuba.gw.example",
+  "workloadId": "f7378046d2012b7d722cfde101b7bdac939a6f788f59584f32d311f06cba7e1d",
+  "hostname": "643yarwsaevx24rm7xqqdn55vsjzu33yr5mvqtzs2mi7a3f2pyoq.gw.example",
   "gateway": {
     "connectorUrl": "https://gateway.example/ilp",
     "ilpAddress": "g.toon.workload-gateway",
@@ -15,5 +15,5 @@
     80
   ],
   "httpPort": 80,
-  "checkedAt": "2026-09-24T12:43:30.014Z"
+  "checkedAt": "2026-01-01T00:00:00.000Z"
 }

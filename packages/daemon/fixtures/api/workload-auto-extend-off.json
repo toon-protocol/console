@@ -1,7 +1,7 @@
 {
-  "workloadId": "c337aa2ff8a895bb444ce7dd8275f7ad7af92df5a4cfc50fae5239d09aba3c64",
+  "workloadId": "421ef38af55f7a46849aa0bcc89d6233fab721947d46bccb767155080e754e54",
   "lease": {
-    "workloadId": "c337aa2ff8a895bb444ce7dd8275f7ad7af92df5a4cfc50fae5239d09aba3c64",
+    "workloadId": "421ef38af55f7a46849aa0bcc89d6233fab721947d46bccb767155080e754e54",
     "state": "live",
     "standbySet": [
       "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
@@ -69,7 +69,7 @@
       }
     ],
     "envKeys": [],
-    "createdAt": "2026-09-24T12:43:30.900Z",
+    "createdAt": "2026-01-01T00:00:00.000Z",
     "localOnly": false,
     "role": "standalone",
     "expiresAt": 1790003600,
@@ -87,7 +87,7 @@
     "relays": [
       "wss://own.relay.test"
     ],
-    "recordId": "82779f7023a46b5b1afb510de44d2b791d5854c538a645d79471d5129148c4a0"
+    "recordId": "dead56d4d0462d8a280b7814c502dd94f665cc7487c552871d965c42ffb49115"
   },
   "provider": {
     "pubkey": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
@@ -100,7 +100,7 @@
   "status": {
     "kind": "unread",
     "reason": "This member has not been asked about yet. Asking is free at the provider (§6.5).",
-    "readAt": "2026-09-24T12:43:30.945Z"
+    "readAt": "2026-01-01T00:00:00.000Z"
   },
   "runway": {
     "listingPrice": 1000,
@@ -120,19 +120,19 @@
     "setPricePerInterval": "1000",
     "rounds": 10000,
     "boundBy": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-    "readAt": "2026-09-24T12:43:30.945Z",
+    "readAt": "2026-01-01T00:00:00.000Z",
     "payAt": "https://provider.example/ilp",
     "pricePerInterval": "1000",
     "chain": "evm:31337",
     "channelId": "0xchannel",
     "available": "10000000",
     "paidSeconds": 0,
-    "paidUntil": "2026-09-21T15:13:20.000Z",
+    "paidUntil": "2026-01-01T00:00:00.000Z",
     "expirySource": "vault",
     "state": "computed",
     "affordableIntervals": 10000,
     "seconds": 36000000,
-    "until": "2027-11-15T04:43:30.000Z"
+    "until": "2026-01-01T00:00:00.000Z"
   },
   "extend": {
     "ok": false,
@@ -171,7 +171,7 @@
       "status": {
         "kind": "unread",
         "reason": "This member has not been asked about yet. Asking is free at the provider (§6.5).",
-        "readAt": "2026-09-24T12:43:30.945Z"
+        "readAt": "2026-01-01T00:00:00.000Z"
       },
       "extend": {
         "ok": false,
@@ -208,9 +208,9 @@
     "extensions": 0,
     "agreedPrice": "1000",
     "leadSeconds": 900,
-    "armedAt": "2026-09-24T12:43:30.943Z",
+    "armedAt": "2026-01-01T00:00:00.000Z",
     "lastRun": {
-      "at": "2026-09-24T12:43:30.945Z",
+      "at": "2026-01-01T00:00:00.000Z",
       "outcome": "stopped",
       "reason": "It was turned off by hand."
     },
