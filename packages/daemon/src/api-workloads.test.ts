@@ -280,8 +280,16 @@ describe('the dashboard routes', () => {
       remaining: '3000',
     });
 
+    // The TUI's fixture contract (TOON_Network#144, ADR 0028): the console's
+    // detail pane shows this budget and what remains of it.
+    writeApiFixture('workload-auto-extend-armed', armed.body);
+
     const off = await call('DELETE', `/api/workloads/${workloadId}/auto-extend`);
     expect((off.body as WorkloadCard).autoExtend?.armed).toBe(false);
+
+    // TOON_Network#144: "off" is a state, not an absence — the budget is
+    // still shown, remembered, with `armed: false`.
+    writeApiFixture('workload-auto-extend-off', off.body);
   });
 
   it('carries no Root Secret and no Continuation Token, in any answer', async () => {

@@ -168,7 +168,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     }
     if app.view == View::Workloads {
         spans.push(Span::raw(
-            " j/k select  / filter  e extend  x terminate  y copy  r refresh ",
+            " j/k select  / filter  e extend  x terminate  y copy  a auto-extend  r rotate  g gateway  R refresh ",
         ));
     }
     spans.push(Span::raw(" ? help  q quit "));
@@ -181,7 +181,8 @@ const HELP_LINES: &[&str] = &[
     "Tab        next view",
     "Shift+Tab  previous view",
     "h / l      previous / next view",
-    "r          refresh Health or Workloads",
+    "r          refresh Health",
+    "R          refresh Workloads",
     "mouse      click a sidebar row to select it",
     "?          toggle this help",
     "q / Esc    quit",
@@ -191,6 +192,9 @@ const HELP_LINES: &[&str] = &[
     "e          extend (asks for confirmation)",
     "x          terminate (asks for confirmation)",
     "y          copy access details (wl-copy)",
+    "a          set/clear the auto-extend budget (asks for confirmation)",
+    "r          rotate the Continuation Token (asks for confirmation)",
+    "g          hand over to / withdraw from a gateway (asks for confirmation)",
 ];
 
 fn draw_help(frame: &mut Frame, area: Rect) {

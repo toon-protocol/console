@@ -158,6 +158,48 @@ impl DaemonClient {
             })?;
         handle_response(url, response).await
     }
+
+    /// `DELETE <path>`, decoded as `T`. TOON_Network#144's `DELETE
+    /// …/auto-extend` is the first route this crate calls with this verb; the
+    /// same 401-then-reread-and-retry-once contract as [`DaemonClient::get`]
+    /// and [`DaemonClient::post`].
+    pub async fn delete<T: DeserializeOwned>(&self, path: &str) -> Result<T, ClientError> {
+        let first = self.try_delete(path).await;
+        match first {
+            Err(ClientError::Status { status: 401, .. }) => {
+                let reread = read_launch_record(&self.launch_file)?;
+                let changed = reread.token != self.record.read().await.token;
+                *self.record.write().await = reread;
+                if changed {
+                    self.try_delete(path).await.map_err(|err| match err {
+                        ClientError::Status { status: 401, .. } => ClientError::Unauthorized,
+                        other => other,
+                    })
+                } else {
+                    Err(ClientError::Unauthorized)
+                }
+            }
+            other => other,
+        }
+    }
+
+    async fn try_delete<T: DeserializeOwned>(&self, path: &str) -> Result<T, ClientError> {
+        let (url, token) = {
+            let record = self.record.read().await;
+            (join_url(&record.url, path), record.token.clone())
+        };
+        let response = self
+            .http
+            .delete(&url)
+            .bearer_auth(&token)
+            .send()
+            .await
+            .map_err(|err| ClientError::Unreachable {
+                url: url.clone(),
+                reason: err.to_string(),
+            })?;
+        handle_response(url, response).await
+    }
 }
 
 async fn handle_response<T: DeserializeOwned>(

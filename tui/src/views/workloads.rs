@@ -1,39 +1,52 @@
-//! The Workloads view (TOON_Network#143): the console's home screen.
+//! The Workloads view (TOON_Network#143, #144): the console's home screen.
 //!
 //! A terminal mirror of `packages/ui/src/app/workloads-view.tsx` and
 //! `workload-card.tsx`'s **Vault** section — the list of every workload this
-//! account holds, and a detail pane for whichever one is selected. What is
-//! NOT here, on purpose, and left to TOON_Network#144 (which reuses
-//! `widgets::confirm` the same way this view does): auto-extend, rotation and
-//! the gateway handover/withdraw actions (`a`, `r`, `g`). This view's own
-//! actions are the three the ticket names — `e` extend, `x` terminate, `y`
-//! copy access — and both spending/destructive ones go through the same
-//! confirmation modal.
+//! account holds, and a detail pane for whichever one is selected.
+//! TOON_Network#143 built `e` extend, `x` terminate and `y` copy access;
+//! TOON_Network#144 adds the rest of a workload's actions: `a` sets or
+//! clears its auto-extend budget (`workload-card.tsx`'s `AutoExtend`,
+//! `use-workloads.ts`'s `arm`/`disarm`), `r` rotates its Continuation Token
+//! across the whole Standby Set (`rotation-panel.tsx`, `use-rotation.ts`,
+//! spec §6.8, ADR 0018), and `g` hands it over to a Workload Gateway or
+//! withdraws it (`gateway-panel.tsx`, `use-gateway.ts`, spec §12). All three
+//! reuse `widgets::confirm` the same way `e`/`x` already do.
 //!
-//! **The gateway hostname is derived, not fetched.** Spec §12.2 makes it a
-//! pure function of the workload id and the profile's `gatewayDomain`
-//! (`format::gateway_hostname_for`, mirroring
-//! `packages/daemon/src/gateway-name.ts`), so a row shows it the instant the
-//! dashboard loads — no extra packet per row, and nothing here to disagree
-//! with what a gateway actually serves. Checking that live is `g`'s job
-//! (TOON_Network#144, spec §12.3's `probe`), not this list's.
+//! **The gateway hostname is derived, not fetched**, for the ROW (spec
+//! §12.2 makes it a pure function of the workload id and the profile's
+//! `gatewayDomain` — `format::gateway_hostname_for`, mirroring
+//! `packages/daemon/src/gateway-name.ts` — so a row shows it the instant the
+//! dashboard loads, no extra packet per row). The DETAIL pane and `g` itself
+//! need the live rotation and gateway state, which are not part of a
+//! `WorkloadCard` — they are their own routes (`GET …/rotation`,
+//! `GET …/gateway`), so `main.rs` fetches them lazily whenever the selected
+//! workload's cached copy ([`WorkloadsViewState::rotation`],
+//! [`WorkloadsViewState::gateway`]) does not match, via
+//! [`selected_workload_id`] and [`detail_needed`].
 //!
 //! **Row actions act on the primary.** The web card also offers a per-member
 //! `Extend` on a Standby Set's own standbys (`workload-card.tsx`'s
 //! `Members`); that finer control is left to a later ticket. `e`/`x` here
 //! extend or terminate the workload the way its top-level `Actions` do (no
 //! `member` in the request, which the daemon reads as the primary).
+//!
+//! **The budget field is a private state machine, not a shared widget.** It
+//! is three keys wide (digits, Backspace, Enter/Esc), so giving it its own
+//! `widgets::` module would be more ceremony than the thing it replaces (see
+//! [`BudgetEntry`]).
 
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::app::Command;
 use crate::format::{duration, gateway_hostname_for};
-use crate::types::{Dashboard, LeaseAccess, LeaseLife, WorkloadCard, WorkloadStatus};
+use crate::types::{
+    Dashboard, GatewayView, LeaseAccess, LeaseLife, RotationView, WorkloadCard, WorkloadStatus,
+};
 use crate::widgets::confirm::{self, Confirm, ConfirmOutcome};
 use crate::widgets::list::{ListOutcome, ListState};
 
@@ -44,8 +57,9 @@ use crate::widgets::list::{ListOutcome, ListState};
 const LOW_RUNWAY_SECONDS: i64 = 24 * 3600;
 const WARNING_SYMBOL: &str = "\u{26a0}"; // ⚠
 
-/// What a confirmed `e`/`x` becomes, once the person has typed `yes`. Carried
-/// out by `main.rs`, which is the only place this crate calls the network.
+/// What a confirmed `e`/`x`/`a`/`r`/`g` becomes, once the person has typed
+/// `yes`. Carried out by `main.rs`, which is the only place this crate calls
+/// the network.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkloadAction {
     Extend {
@@ -55,6 +69,54 @@ pub enum WorkloadAction {
     Terminate {
         workload_id: String,
     },
+    /// `POST …/auto-extend` with `confirm: true` (TOON_Network#144). Arms a
+    /// FRESH budget every time — there is no separate "change": rearming
+    /// while already armed replaces the old figure, mirroring
+    /// `armAutoExtend` in `packages/ui/src/lib/daemon.ts`.
+    ArmAutoExtend {
+        workload_id: String,
+        budget: String,
+        agreed_price: String,
+    },
+    /// `DELETE …/auto-extend`. Turns extension off; the budget is still
+    /// shown, remembered, with `armed: false` (`workload-card.tsx`'s own
+    /// only affordance once a budget exists).
+    DisarmAutoExtend {
+        workload_id: String,
+    },
+    /// `POST …/rotate` (spec §6.8, ADR 0018). Replaces the Continuation
+    /// Token at every member of the Standby Set from a fresh Root Secret —
+    /// or, sent again on a set left part-way through, finishes it without
+    /// starting a second rotation.
+    Rotate {
+        workload_id: String,
+    },
+    /// `POST …/gateway/handover`.
+    HandOver {
+        workload_id: String,
+    },
+    /// `POST …/gateway/withdraw`. Ends SERVING, not reading (spec §12.7) —
+    /// the gateway keeps a working grant until the moment it was derived
+    /// for; rotating is what ends the reading.
+    Withdraw {
+        workload_id: String,
+    },
+}
+
+/// The auto-extend budget's own tiny state machine (TOON_Network#144): open
+/// while typing a whole number of base units, closed by `Enter` (which opens
+/// a [`Confirm`] to arm it) or `Esc` (which cancels). Kept private to this
+/// view rather than given its own `widgets::` module — see the module doc.
+#[derive(Debug, Clone)]
+pub struct BudgetEntry {
+    pub workload_id: String,
+    /// The Standby Set's own round price (`card.set.price_per_interval`),
+    /// read at the moment `a` was pressed — not the primary's price alone
+    /// (see `AutoExtendView`'s doc in `types.rs`). `None` when the daemon has
+    /// not reported one yet, in which case arming is refused rather than
+    /// guessed.
+    pub price: Option<String>,
+    pub typed: String,
 }
 
 #[derive(Default)]
@@ -63,9 +125,25 @@ pub struct WorkloadsViewState {
     pub dashboard: Option<Dashboard>,
     pub loading: bool,
     pub confirm: Option<Confirm<WorkloadAction>>,
-    /// A message from the last `y`/`e`/`x` press or the last refresh's
-    /// answer — cleared by the next keypress that changes anything, so it
-    /// never lingers past the moment it stops being true.
+    /// Open while typing a budget for `a` (TOON_Network#144); see
+    /// [`BudgetEntry`].
+    pub budget_entry: Option<BudgetEntry>,
+    /// The selected workload's rotation state, from `GET …/rotation`
+    /// (TOON_Network#144) — `main.rs` fetches it lazily; see the module doc.
+    /// Checked against [`RotationView::workload_id`] before it is trusted:
+    /// a stale value from a workload that was selected a moment ago is worse
+    /// than none.
+    pub rotation: Option<RotationView>,
+    /// The selected workload's gateway state, from `GET …/gateway`
+    /// (TOON_Network#144). Same staleness rule as [`Self::rotation`].
+    pub gateway: Option<GatewayView>,
+    /// The workload id `main.rs` last spawned a rotation/gateway fetch for —
+    /// sending exactly one attempt per distinct selection, not a request
+    /// every event-loop tick until one lands (see [`detail_needed`]).
+    pub last_detail_request: Option<String>,
+    /// A message from the last `y`/`e`/`x`/`a`/`r`/`g` press or the last
+    /// refresh's answer — cleared by the next keypress that changes
+    /// anything, so it never lingers past the moment it stops being true.
     pub status: Option<String>,
     pub error: Option<String>,
 }
@@ -74,6 +152,38 @@ impl WorkloadsViewState {
     pub fn new() -> Self {
         Self::default()
     }
+}
+
+/// The currently selected (filtered) card's id, if any — `main.rs`'s main
+/// loop uses this to know which workload's rotation/gateway state to keep
+/// fresh (TOON_Network#144).
+pub fn selected_workload_id(state: &WorkloadsViewState) -> Option<String> {
+    let dashboard = state.dashboard.as_ref()?;
+    filtered(dashboard, &state.list)
+        .get(state.list.selected)
+        .map(|card| card.workload_id.clone())
+}
+
+/// Whether `workload_id`'s rotation or gateway state is missing, stale (a
+/// different id than the one cached) or has simply never been asked for —
+/// AND no fetch for this exact id has been sent yet
+/// ([`WorkloadsViewState::last_detail_request`]). One attempt per distinct
+/// selection: a daemon build with rotation or gateway unwired answers the
+/// same way every time, and retrying it every tick would be a request per
+/// frame for nothing.
+pub fn detail_needed(state: &WorkloadsViewState, workload_id: &str) -> bool {
+    if state.last_detail_request.as_deref() == Some(workload_id) {
+        return false;
+    }
+    let rotation_fresh = state
+        .rotation
+        .as_ref()
+        .is_some_and(|view| view.workload_id == workload_id);
+    let gateway_fresh = state
+        .gateway
+        .as_ref()
+        .is_some_and(|view| view.workload_id == workload_id);
+    !(rotation_fresh && gateway_fresh)
 }
 
 /// Every card whose text matches the current filter, in dashboard order —
@@ -280,8 +390,88 @@ pub fn handle_key(state: &mut WorkloadsViewState, key: KeyEvent) -> Option<Comma
                     WorkloadAction::Terminate { workload_id } => {
                         Command::TerminateWorkload { workload_id }
                     }
+                    WorkloadAction::ArmAutoExtend {
+                        workload_id,
+                        budget,
+                        agreed_price,
+                    } => Command::ArmAutoExtend {
+                        workload_id,
+                        budget,
+                        agreed_price,
+                    },
+                    WorkloadAction::DisarmAutoExtend { workload_id } => {
+                        Command::DisarmAutoExtend { workload_id }
+                    }
+                    WorkloadAction::Rotate { workload_id } => {
+                        Command::RotateWorkload { workload_id }
+                    }
+                    WorkloadAction::HandOver { workload_id } => {
+                        Command::HandOverWorkload { workload_id }
+                    }
+                    WorkloadAction::Withdraw { workload_id } => {
+                        Command::WithdrawWorkload { workload_id }
+                    }
                 }
             }
+        });
+    }
+
+    // The budget field's own tiny modal (TOON_Network#144): every key is
+    // consumed here while it is open, the same way a `Confirm` swallows
+    // everything above — a stray digit must go into the number being typed,
+    // never into view-switching.
+    if let Some(entry) = &mut state.budget_entry {
+        return Some(match key.code {
+            KeyCode::Esc => {
+                state.budget_entry = None;
+                state.status = Some("Cancelled. No budget was set.".to_string());
+                Command::None
+            }
+            KeyCode::Backspace => {
+                entry.typed.pop();
+                Command::None
+            }
+            KeyCode::Char(digit) if digit.is_ascii_digit() => {
+                entry.typed.push(digit);
+                Command::None
+            }
+            KeyCode::Char(_) => Command::None,
+            KeyCode::Enter => {
+                if entry.typed.is_empty() {
+                    Command::None
+                } else {
+                    let workload_id = entry.workload_id.clone();
+                    let budget = entry.typed.clone();
+                    match entry.price.clone() {
+                        Some(agreed_price) => {
+                            state.budget_entry = None;
+                            state.confirm = Some(Confirm::new(
+                                "Auto-extend",
+                                vec![
+                                    format!(
+                                        "Spends up to {budget} base units without asking, at no more than {agreed_price} base units a round."
+                                    ),
+                                    "It stops early if the price moves, a provider refuses, or the lease ends.".to_string(),
+                                ],
+                                WorkloadAction::ArmAutoExtend {
+                                    workload_id,
+                                    budget,
+                                    agreed_price,
+                                },
+                            ));
+                        }
+                        None => {
+                            state.budget_entry = None;
+                            state.status = Some(
+                                "The round price is not known yet; try again after the next refresh."
+                                    .to_string(),
+                            );
+                        }
+                    }
+                    Command::None
+                }
+            }
+            _ => Command::None,
         });
     }
 
@@ -380,6 +570,150 @@ pub fn handle_key(state: &mut WorkloadsViewState, key: KeyEvent) -> Option<Comma
                 }
             }
         }
+        KeyCode::Char('a') => {
+            state.status = None;
+            let Some(card) = cards.get(state.list.selected) else {
+                return Some(Command::None);
+            };
+            if has_ended(card) {
+                state.status = Some(
+                    "This lease has ended; there is nothing to extend automatically.".to_string(),
+                );
+                return Some(Command::None);
+            }
+            match &card.auto_extend {
+                // Armed or off: this workload already has a budget, and the
+                // one action left for it is turning extension off —
+                // `workload-card.tsx`'s own only affordance once one exists.
+                // Setting a DIFFERENT budget is disarming, then `a` again.
+                Some(armed) => {
+                    let lines = if armed.armed {
+                        vec![
+                            "Stops extending this workload automatically.".to_string(),
+                            format!(
+                                "{} of {} base units were spent over {} extension(s); the rest is never spent.",
+                                armed.spent, armed.budget, armed.extensions
+                            ),
+                        ]
+                    } else {
+                        vec![
+                            "Forgets this budget. Nothing more is spent until armed again."
+                                .to_string(),
+                        ]
+                    };
+                    state.confirm = Some(Confirm::new(
+                        "Auto-extend",
+                        lines,
+                        WorkloadAction::DisarmAutoExtend {
+                            workload_id: card.workload_id.clone(),
+                        },
+                    ));
+                }
+                None => {
+                    state.budget_entry = Some(BudgetEntry {
+                        workload_id: card.workload_id.clone(),
+                        price: card.set.price_per_interval.clone(),
+                        typed: String::new(),
+                    });
+                }
+            }
+            Some(Command::None)
+        }
+        KeyCode::Char('r') => {
+            state.status = None;
+            let Some(card) = cards.get(state.list.selected) else {
+                return Some(Command::None);
+            };
+            if has_ended(card) {
+                state.status =
+                    Some("This lease has ended; there is nothing to rotate.".to_string());
+                return Some(Command::None);
+            }
+            let rotation = state
+                .rotation
+                .as_ref()
+                .filter(|view| view.workload_id == card.workload_id);
+            let (title, lines) = match rotation {
+                Some(view) if view.under_way => (
+                    "Finish rotating",
+                    vec![
+                        format!(
+                            "Finishes a rotation already under way: {} of {} member(s) confirmed.",
+                            view.confirmed, view.of
+                        ),
+                        "The old token still works at the member(s) that have not confirmed yet — this sends only to those.".to_string(),
+                    ],
+                ),
+                Some(view) => (
+                    "Rotate",
+                    vec![
+                        format!(
+                            "Replaces this lease's Continuation Token at {} member(s), from a fresh Root Secret.",
+                            view.of
+                        ),
+                        "The old token stops working at once, and so does every Gateway Grant derived from it. There is no grace period.".to_string(),
+                    ],
+                ),
+                None => (
+                    "Rotate",
+                    vec![
+                        "Replaces this lease's Continuation Token at every member of its Standby Set, from a fresh Root Secret.".to_string(),
+                        "The old token stops working at once, and so does every Gateway Grant derived from it. There is no grace period.".to_string(),
+                    ],
+                ),
+            };
+            state.confirm = Some(Confirm::new(
+                title,
+                lines,
+                WorkloadAction::Rotate {
+                    workload_id: card.workload_id.clone(),
+                },
+            ));
+            Some(Command::None)
+        }
+        KeyCode::Char('g') => {
+            state.status = None;
+            let Some(card) = cards.get(state.list.selected) else {
+                return Some(Command::None);
+            };
+            let gateway = state
+                .gateway
+                .as_ref()
+                .filter(|view| view.workload_id == card.workload_id);
+            match gateway {
+                Some(view) if view.held => {
+                    let lines = vec![
+                        "Stops the gateway SERVING this workload.".to_string(),
+                        "This ends serving, not reading (spec §12.7): the gateway keeps a working grant until the moment it was derived for. Rotate the token to end reading too.".to_string(),
+                    ];
+                    state.confirm = Some(Confirm::new(
+                        "Withdraw",
+                        lines,
+                        WorkloadAction::Withdraw {
+                            workload_id: card.workload_id.clone(),
+                        },
+                    ));
+                }
+                _ => {
+                    let hostname = gateway.and_then(|view| view.hostname.clone());
+                    let lines = match hostname {
+                        Some(host) => vec![format!(
+                            "Hands this workload to the Workload Gateway at {host}, for 24 hours."
+                        )],
+                        None => vec!["Hands this workload to the Workload Gateway, for 24 hours."
+                            .to_string()],
+                    };
+                    state.confirm = Some(Confirm::new(
+                        "Hand over",
+                        lines,
+                        WorkloadAction::HandOver {
+                            workload_id: card.workload_id.clone(),
+                        },
+                    ));
+                }
+            }
+            Some(Command::None)
+        }
         _ => None,
     }
 }
@@ -418,12 +752,63 @@ pub fn draw(
         frame,
         cols[1],
         cards.get(state.list.selected).copied(),
+        state,
         gateway_domain,
     );
 
     if let Some(confirm) = &state.confirm {
         confirm::draw(frame, area, confirm);
     }
+    if let Some(entry) = &state.budget_entry {
+        draw_budget_entry(frame, area, entry);
+    }
+}
+
+/// The budget field's own tiny popup — a text field, not the whole
+/// `widgets::confirm` shape, since typing a number is not yet a confirmed
+/// action (arming still asks `yes` afterwards, through the ordinary
+/// `Confirm` this view already uses for everything else).
+fn draw_budget_entry(frame: &mut Frame, area: Rect, entry: &BudgetEntry) {
+    let width = 50u16.min(area.width.saturating_sub(4)).max(20);
+    let height = 7u16.min(area.height.saturating_sub(2));
+    let x = area.x + area.width.saturating_sub(width) / 2;
+    let y = area.y + area.height.saturating_sub(height) / 2;
+    let popup = Rect {
+        x,
+        y,
+        width: width.min(area.width),
+        height: height.min(area.height),
+    };
+    frame.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .title(" Auto-extend budget ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let price_line = match &entry.price {
+        Some(price) => format!("Spends at no more than {price} base units a round."),
+        None => "The round price is not known yet.".to_string(),
+    };
+    let lines = vec![
+        Line::from(price_line),
+        Line::raw(""),
+        Line::from(vec![
+            Span::styled("Budget, base units: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                entry.typed.clone(),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("\u{2588}", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(Span::styled(
+            "Digits only. Enter to continue, Esc to cancel.",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
 fn draw_message(frame: &mut Frame, area: Rect, message: &str, is_error: bool) {
@@ -618,6 +1003,7 @@ fn draw_detail(
     frame: &mut Frame,
     area: Rect,
     card: Option<&WorkloadCard>,
+    state: &WorkloadsViewState,
     gateway_domain: Option<&str>,
 ) {
     let block = Block::default().title(" Detail ").borders(Borders::ALL);
@@ -663,12 +1049,6 @@ fn draw_detail(
         label("Runway "),
         Span::styled(runway_sentence(card), runway_style),
     ]));
-
-    if let Some(domain) = gateway_domain {
-        if let Some(hostname) = gateway_hostname_for(&card.workload_id, domain) {
-            lines.push(Line::from(vec![label("Gateway "), Span::raw(hostname)]));
-        }
-    }
 
     lines.push(Line::raw(""));
     lines.push(Line::from(label("Leases (primary first)")));
@@ -759,6 +1139,116 @@ fn draw_detail(
         }
         None => lines.push(Line::from(Span::styled(
             "  No Takeover has happened for this workload.",
+            Style::default().fg(Color::DarkGray),
+        ))),
+    }
+
+    lines.push(Line::raw(""));
+    lines.push(Line::from(label("Auto-extend")));
+    match &card.auto_extend {
+        Some(budget) => {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    if budget.armed {
+                        "  Extending automatically. "
+                    } else {
+                        "  Off. "
+                    },
+                    if budget.armed {
+                        Style::default().fg(Color::Green)
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    },
+                ),
+                Span::raw(format!(
+                    "{} of {} spent over {} extension(s), {} left, at no more than {} a round.",
+                    budget.spent,
+                    budget.budget,
+                    budget.extensions,
+                    budget.remaining,
+                    budget.agreed_price
+                )),
+            ]));
+            if let Some(because) = &budget.stopped_because {
+                lines.push(Line::from(Span::styled(
+                    format!("  Stopped: {because}"),
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
+        }
+        None => lines.push(Line::from(Span::styled(
+            "  No budget set. Press `a` to set one.",
+            Style::default().fg(Color::DarkGray),
+        ))),
+    }
+
+    lines.push(Line::raw(""));
+    lines.push(Line::from(label("Gateway")));
+    match state
+        .gateway
+        .as_ref()
+        .filter(|view| view.workload_id == card.workload_id)
+    {
+        Some(view) => match &view.hostname {
+            Some(host) => lines.push(Line::from(vec![
+                Span::raw(format!("  {host}")),
+                Span::styled(
+                    if view.held {
+                        " — served"
+                    } else {
+                        " — not handed over"
+                    },
+                    if view.held {
+                        Style::default().fg(Color::Green)
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    },
+                ),
+            ])),
+            None => lines.push(Line::from(Span::styled(
+                "  This network names no Workload Gateway.",
+                Style::default().fg(Color::DarkGray),
+            ))),
+        },
+        None => {
+            let derived =
+                gateway_domain.and_then(|domain| gateway_hostname_for(&card.workload_id, domain));
+            lines.push(Line::from(match derived {
+                Some(host) => vec![
+                    Span::raw(format!("  {host}")),
+                    Span::styled(" — reading…", Style::default().fg(Color::DarkGray)),
+                ],
+                None => vec![Span::styled(
+                    "  Reading…",
+                    Style::default().fg(Color::DarkGray),
+                )],
+            }));
+        }
+    }
+
+    lines.push(Line::raw(""));
+    lines.push(Line::from(label("Continuation Token")));
+    match state
+        .rotation
+        .as_ref()
+        .filter(|view| view.workload_id == card.workload_id)
+    {
+        Some(view) if view.under_way => lines.push(Line::from(Span::styled(
+            format!(
+                "  Rotation under way — {} of {} confirmed.",
+                view.confirmed, view.of
+            ),
+            Style::default().fg(Color::Yellow),
+        ))),
+        Some(view) => lines.push(Line::from(Span::styled(
+            match &view.rotated_at {
+                Some(at) => format!("  Rotated {at}."),
+                None => "  Not rotated.".to_string(),
+            },
+            Style::default().fg(Color::DarkGray),
+        ))),
+        None => lines.push(Line::from(Span::styled(
+            "  Reading…",
             Style::default().fg(Color::DarkGray),
         ))),
     }
@@ -863,8 +1353,10 @@ mod tests {
             set: StandbySetView {
                 members: 1,
                 warm: false,
+                price_per_interval: Some("1000".to_string()),
                 takeover: None,
             },
+            auto_extend: None,
         }
     }
 
@@ -954,6 +1446,7 @@ mod tests {
         warm.set = StandbySetView {
             members: 3,
             warm: true,
+            price_per_interval: Some("1400".to_string()),
             takeover: None,
         };
         warm.members.push(WorkloadMemberView {
@@ -985,6 +1478,7 @@ mod tests {
         taken.set = StandbySetView {
             members: 2,
             warm: true,
+            price_per_interval: Some("1400".to_string()),
             takeover: Some(TakeoverReport {
                 winner: "f".repeat(64),
                 from: Some("d".repeat(64)),
@@ -1010,6 +1504,448 @@ mod tests {
         let mut state = WorkloadsViewState::new();
         state.dashboard = Some(dashboard);
         render(&state);
+    }
+
+    /* ---------------------------------------------------------------------- */
+    /* TOON_Network#144: auto-extend, rotation, gateway.                      */
+    /* ---------------------------------------------------------------------- */
+
+    fn fixture<T: serde::de::DeserializeOwned>(name: &str) -> T {
+        let path = format!(
+            "{}/../packages/daemon/fixtures/api/{name}.json",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let text = fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("could not read fixture {path}: {err}"));
+        serde_json::from_str(&text)
+            .unwrap_or_else(|err| panic!("fixture {path} did not deserialize: {err}"))
+    }
+
+    #[test]
+    fn renders_the_real_auto_extend_fixtures_without_panicking() {
+        for name in ["workload-auto-extend-armed", "workload-auto-extend-off"] {
+            let card: WorkloadCard = fixture(name);
+            let mut state = WorkloadsViewState::new();
+            state.dashboard = Some(dashboard(vec![card]));
+            render(&state);
+        }
+    }
+
+    #[test]
+    fn renders_the_real_rotation_fixtures_without_panicking() {
+        for name in ["workload-rotation", "workload-rotation-partial"] {
+            let view: crate::types::RotationView = fixture(name);
+            let mut state = WorkloadsViewState::new();
+            let mut one = card(&view.workload_id, LeaseLife::Running);
+            one.workload_id.clone_from(&view.workload_id);
+            one.lease.workload_id.clone_from(&view.workload_id);
+            state.dashboard = Some(dashboard(vec![one]));
+            state.rotation = Some(view);
+            render(&state);
+        }
+    }
+
+    #[test]
+    fn renders_the_real_gateway_fixtures_without_panicking() {
+        for name in ["workload-gateway", "workload-gateway-served"] {
+            let view: crate::types::GatewayView = fixture(name);
+            let mut state = WorkloadsViewState::new();
+            let mut one = card(&view.workload_id, LeaseLife::Running);
+            one.workload_id.clone_from(&view.workload_id);
+            one.lease.workload_id.clone_from(&view.workload_id);
+            state.dashboard = Some(dashboard(vec![one]));
+            state.gateway = Some(view);
+            render(&state);
+        }
+    }
+
+    #[test]
+    fn snapshot_auto_extend_armed() {
+        let mut state = WorkloadsViewState::new();
+        let mut armed = card(&"a".repeat(64), LeaseLife::Running);
+        armed.auto_extend = Some(crate::types::AutoExtendView {
+            armed: true,
+            budget: "3000".to_string(),
+            spent: "1000".to_string(),
+            remaining: "2000".to_string(),
+            extensions: 1,
+            agreed_price: "1000".to_string(),
+            lead_seconds: 900,
+            armed_at: "2026-09-24T00:00:00.000Z".to_string(),
+            last_run: None,
+            stopped_because: None,
+        });
+        state.dashboard = Some(dashboard(vec![armed]));
+        insta::assert_snapshot!(render(&state));
+    }
+
+    #[test]
+    fn snapshot_auto_extend_off() {
+        let mut state = WorkloadsViewState::new();
+        let mut off = card(&"a".repeat(64), LeaseLife::Running);
+        off.auto_extend = Some(crate::types::AutoExtendView {
+            armed: false,
+            budget: "3000".to_string(),
+            spent: "0".to_string(),
+            remaining: "3000".to_string(),
+            extensions: 0,
+            agreed_price: "1000".to_string(),
+            lead_seconds: 900,
+            armed_at: "2026-09-24T00:00:00.000Z".to_string(),
+            last_run: None,
+            stopped_because: Some("It was turned off by hand.".to_string()),
+        });
+        state.dashboard = Some(dashboard(vec![off]));
+        insta::assert_snapshot!(render(&state));
+    }
+
+    #[test]
+    fn snapshot_rotation_partial_standby_set() {
+        let mut state = WorkloadsViewState::new();
+        let workload_id = "a".repeat(64);
+        state.dashboard = Some(dashboard(vec![card(&workload_id, LeaseLife::Running)]));
+        state.rotation = Some(crate::types::RotationView {
+            workload_id: workload_id.clone(),
+            under_way: true,
+            ok: true,
+            problems: vec![],
+            members: vec![],
+            confirmed: 1,
+            of: 2,
+            started_at: Some("2026-09-24T00:00:00.000Z".to_string()),
+            rotated_at: None,
+        });
+        insta::assert_snapshot!(render(&state));
+    }
+
+    #[test]
+    fn snapshot_rotation_done() {
+        let mut state = WorkloadsViewState::new();
+        let workload_id = "a".repeat(64);
+        state.dashboard = Some(dashboard(vec![card(&workload_id, LeaseLife::Running)]));
+        state.rotation = Some(crate::types::RotationView {
+            workload_id: workload_id.clone(),
+            under_way: false,
+            ok: true,
+            problems: vec![],
+            members: vec![],
+            confirmed: 0,
+            of: 1,
+            started_at: None,
+            rotated_at: Some("2026-09-24T00:00:00.000Z".to_string()),
+        });
+        insta::assert_snapshot!(render(&state));
+    }
+
+    #[test]
+    fn snapshot_gateway_served() {
+        let mut state = WorkloadsViewState::new();
+        let workload_id = "a".repeat(64);
+        state.dashboard = Some(dashboard(vec![card(&workload_id, LeaseLife::Running)]));
+        state.gateway = Some(crate::types::GatewayView {
+            workload_id: workload_id.clone(),
+            hostname: Some("gy3kac2vsozt.gw.example".to_string()),
+            gateway: None,
+            handover: None,
+            held: true,
+            expired: Some(false),
+            problems: vec![],
+            ok: true,
+            ports: vec![80],
+            http_port: Some(80),
+        });
+        insta::assert_snapshot!(render(&state));
+    }
+
+    #[test]
+    fn snapshot_gateway_not_held() {
+        let mut state = WorkloadsViewState::new();
+        let workload_id = "a".repeat(64);
+        state.dashboard = Some(dashboard(vec![card(&workload_id, LeaseLife::Running)]));
+        state.gateway = Some(crate::types::GatewayView {
+            workload_id: workload_id.clone(),
+            hostname: Some("mwpkjctszw2w.gw.example".to_string()),
+            gateway: None,
+            handover: None,
+            held: false,
+            expired: None,
+            problems: vec![],
+            ok: true,
+            ports: vec![80],
+            http_port: Some(80),
+        });
+        insta::assert_snapshot!(render(&state));
+    }
+
+    #[test]
+    fn budget_entry_draws_without_panicking_typed_or_empty() {
+        let mut state = WorkloadsViewState::new();
+        state.dashboard = Some(dashboard(vec![card(&"a".repeat(64), LeaseLife::Running)]));
+        state.budget_entry = Some(BudgetEntry {
+            workload_id: "a".repeat(64),
+            price: Some("1000".to_string()),
+            typed: String::new(),
+        });
+        render(&state);
+
+        state.budget_entry = Some(BudgetEntry {
+            workload_id: "a".repeat(64),
+            price: None,
+            typed: "3000".to_string(),
+        });
+        render(&state);
+    }
+
+    #[test]
+    fn a_with_no_budget_opens_the_budget_entry_not_a_confirm() {
+        let mut state = WorkloadsViewState::new();
+        state.dashboard = Some(dashboard(vec![card(&"a".repeat(64), LeaseLife::Running)]));
+
+        let command = handle_key(&mut state, key(KeyCode::Char('a')));
+        assert_eq!(command, Some(Command::None));
+        assert!(state.budget_entry.is_some());
+        assert!(state.confirm.is_none());
+    }
+
+    #[test]
+    fn budget_entry_only_accepts_digits_and_enter_opens_a_priced_confirm() {
+        let mut state = WorkloadsViewState::new();
+        let workload_id = "a".repeat(64);
+        state.dashboard = Some(dashboard(vec![card(&workload_id, LeaseLife::Running)]));
+        handle_key(&mut state, key(KeyCode::Char('a')));
+
+        for c in "3x0y00".chars() {
+            handle_key(&mut state, key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            state.budget_entry.as_ref().unwrap().typed,
+            "3000",
+            "non-digit characters are swallowed, not typed"
+        );
+
+        let command = handle_key(&mut state, key(KeyCode::Enter));
+        assert_eq!(command, Some(Command::None));
+        assert!(state.budget_entry.is_none(), "Enter closes the entry field");
+        let confirm = state.confirm.as_ref().expect("Enter opens a confirmation");
+        assert!(confirm.lines.iter().any(|line| line.contains("3000")));
+
+        for c in "yes".chars() {
+            handle_key(&mut state, key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            handle_key(&mut state, key(KeyCode::Enter)),
+            Some(Command::ArmAutoExtend {
+                workload_id,
+                budget: "3000".to_string(),
+                agreed_price: "1000".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn esc_cancels_the_budget_entry_without_opening_a_confirm() {
+        let mut state = WorkloadsViewState::new();
+        state.dashboard = Some(dashboard(vec![card(&"a".repeat(64), LeaseLife::Running)]));
+        handle_key(&mut state, key(KeyCode::Char('a')));
+        handle_key(&mut state, key(KeyCode::Char('3')));
+
+        let command = handle_key(&mut state, key(KeyCode::Esc));
+        assert_eq!(command, Some(Command::None));
+        assert!(state.budget_entry.is_none());
+        assert!(state.confirm.is_none());
+    }
+
+    #[test]
+    fn a_on_an_already_armed_workload_opens_a_disarm_confirm_directly() {
+        let mut state = WorkloadsViewState::new();
+        let workload_id = "a".repeat(64);
+        let mut armed = card(&workload_id, LeaseLife::Running);
+        armed.auto_extend = Some(crate::types::AutoExtendView {
+            armed: true,
+            budget: "3000".to_string(),
+            spent: "0".to_string(),
+            remaining: "3000".to_string(),
+            extensions: 0,
+            agreed_price: "1000".to_string(),
+            lead_seconds: 900,
+            armed_at: "2026-09-24T00:00:00.000Z".to_string(),
+            last_run: None,
+            stopped_because: None,
+        });
+        state.dashboard = Some(dashboard(vec![armed]));
+
+        handle_key(&mut state, key(KeyCode::Char('a')));
+        assert!(state.budget_entry.is_none());
+        assert!(state.confirm.is_some());
+
+        for c in "yes".chars() {
+            handle_key(&mut state, key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            handle_key(&mut state, key(KeyCode::Enter)),
+            Some(Command::DisarmAutoExtend { workload_id })
+        );
+    }
+
+    #[test]
+    fn r_opens_a_rotate_confirm_and_typing_yes_confirms_it() {
+        let mut state = WorkloadsViewState::new();
+        let workload_id = "a".repeat(64);
+        state.dashboard = Some(dashboard(vec![card(&workload_id, LeaseLife::Running)]));
+
+        let command = handle_key(&mut state, key(KeyCode::Char('r')));
+        assert_eq!(command, Some(Command::None));
+        assert!(state.confirm.is_some());
+
+        for c in "yes".chars() {
+            handle_key(&mut state, key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            handle_key(&mut state, key(KeyCode::Enter)),
+            Some(Command::RotateWorkload { workload_id })
+        );
+    }
+
+    #[test]
+    fn r_offers_to_finish_a_rotation_already_under_way() {
+        let mut state = WorkloadsViewState::new();
+        let workload_id = "a".repeat(64);
+        state.dashboard = Some(dashboard(vec![card(&workload_id, LeaseLife::Running)]));
+        state.rotation = Some(crate::types::RotationView {
+            workload_id: workload_id.clone(),
+            under_way: true,
+            ok: true,
+            problems: vec![],
+            members: vec![],
+            confirmed: 1,
+            of: 2,
+            started_at: Some("2026-09-24T00:00:00.000Z".to_string()),
+            rotated_at: None,
+        });
+
+        handle_key(&mut state, key(KeyCode::Char('r')));
+        let confirm = state.confirm.as_ref().expect("r opens a confirmation");
+        assert!(confirm.lines.iter().any(|line| line.contains("Finish")));
+        assert!(confirm.lines.iter().any(|line| line.contains("1 of 2")));
+    }
+
+    #[test]
+    fn g_opens_a_handover_confirm_when_no_grant_is_held() {
+        let mut state = WorkloadsViewState::new();
+        let workload_id = "a".repeat(64);
+        state.dashboard = Some(dashboard(vec![card(&workload_id, LeaseLife::Running)]));
+
+        let command = handle_key(&mut state, key(KeyCode::Char('g')));
+        assert_eq!(command, Some(Command::None));
+        assert!(state.confirm.is_some());
+
+        for c in "yes".chars() {
+            handle_key(&mut state, key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            handle_key(&mut state, key(KeyCode::Enter)),
+            Some(Command::HandOverWorkload { workload_id })
+        );
+    }
+
+    #[test]
+    fn g_opens_a_withdraw_confirm_when_the_gateway_is_held() {
+        let mut state = WorkloadsViewState::new();
+        let workload_id = "a".repeat(64);
+        state.dashboard = Some(dashboard(vec![card(&workload_id, LeaseLife::Running)]));
+        state.gateway = Some(crate::types::GatewayView {
+            workload_id: workload_id.clone(),
+            hostname: Some("gy3kac2vsozt.gw.example".to_string()),
+            gateway: None,
+            handover: None,
+            held: true,
+            expired: Some(false),
+            problems: vec![],
+            ok: true,
+            ports: vec![80],
+            http_port: Some(80),
+        });
+
+        handle_key(&mut state, key(KeyCode::Char('g')));
+        let confirm = state.confirm.as_ref().expect("g opens a confirmation");
+        assert!(confirm.lines.iter().any(|line| line.contains("serving")));
+
+        for c in "yes".chars() {
+            handle_key(&mut state, key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            handle_key(&mut state, key(KeyCode::Enter)),
+            Some(Command::WithdrawWorkload { workload_id })
+        );
+    }
+
+    #[test]
+    fn selected_workload_id_reads_the_currently_selected_filtered_card() {
+        let mut state = WorkloadsViewState::new();
+        assert_eq!(selected_workload_id(&state), None, "no dashboard yet");
+
+        let first = "a".repeat(64);
+        let second = "b".repeat(64);
+        state.dashboard = Some(dashboard(vec![
+            card(&first, LeaseLife::Running),
+            card(&second, LeaseLife::Running),
+        ]));
+        assert_eq!(selected_workload_id(&state), Some(first));
+
+        handle_key(&mut state, key(KeyCode::Char('j')));
+        assert_eq!(selected_workload_id(&state), Some(second));
+    }
+
+    #[test]
+    fn detail_needed_is_true_until_both_caches_match_and_false_once_a_request_is_marked_sent() {
+        let mut state = WorkloadsViewState::new();
+        let workload_id = "a".repeat(64);
+        assert!(detail_needed(&state, &workload_id));
+
+        state.rotation = Some(crate::types::RotationView {
+            workload_id: workload_id.clone(),
+            under_way: false,
+            ok: true,
+            problems: vec![],
+            members: vec![],
+            confirmed: 0,
+            of: 1,
+            started_at: None,
+            rotated_at: None,
+        });
+        assert!(
+            detail_needed(&state, &workload_id),
+            "gateway is still missing"
+        );
+
+        state.gateway = Some(crate::types::GatewayView {
+            workload_id: workload_id.clone(),
+            hostname: None,
+            gateway: None,
+            handover: None,
+            held: false,
+            expired: None,
+            problems: vec![],
+            ok: true,
+            ports: vec![],
+            http_port: None,
+        });
+        assert!(
+            !detail_needed(&state, &workload_id),
+            "both are now fresh for this id"
+        );
+
+        let other = "b".repeat(64);
+        assert!(
+            detail_needed(&state, &other),
+            "a different selection is stale until it is asked for"
+        );
+
+        state.last_detail_request = Some(other.clone());
+        assert!(
+            !detail_needed(&state, &other),
+            "one attempt already sent for this id — do not retry every tick"
+        );
     }
 
     #[test]

@@ -147,6 +147,28 @@ pub enum Command {
     TerminateWorkload {
         workload_id: String,
     },
+    /// `POST …/auto-extend` with `confirm: true` (TOON_Network#144).
+    ArmAutoExtend {
+        workload_id: String,
+        budget: String,
+        agreed_price: String,
+    },
+    /// `DELETE …/auto-extend`.
+    DisarmAutoExtend {
+        workload_id: String,
+    },
+    /// `POST …/rotate` (spec §6.8, ADR 0018).
+    RotateWorkload {
+        workload_id: String,
+    },
+    /// `POST …/gateway/handover`.
+    HandOverWorkload {
+        workload_id: String,
+    },
+    /// `POST …/gateway/withdraw`.
+    WithdrawWorkload {
+        workload_id: String,
+    },
     CopyToClipboard(String),
 }
 
@@ -216,9 +238,12 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> Command {
         KeyCode::Char('r') | KeyCode::Char('R') if app.view == View::Health => {
             Command::RefreshHealth
         }
-        KeyCode::Char('r') | KeyCode::Char('R') if app.view == View::Workloads => {
-            Command::RefreshWorkloads
-        }
+        // TOON_Network#144 frees lowercase `r` for the Workloads view's own
+        // rotate action (`views::workloads::handle_key`, which gets first
+        // refusal on every key and already claims it there) — matching
+        // ADR 0028's Main area line, "j/k move, Enter opens, / filters and
+        // R refreshes". Only capital `R` refreshes here now.
+        KeyCode::Char('R') if app.view == View::Workloads => Command::RefreshWorkloads,
         _ => Command::None,
     }
 }

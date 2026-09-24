@@ -1,0 +1,49 @@
+{
+  "sent": true,
+  "problems": [],
+  "route": {
+    "route": "g.toon.workload-gateway.handover",
+    "payAt": "https://gateway.example/ilp",
+    "via": "provider-connector",
+    "reason": "https://gateway.example/ilp prices g.toon.workload-gateway.handover at nothing, so this packet is bought where it is free (spec §5, §12). A connector that merely forwards charges its own fee to carry it.",
+    "price": "0",
+    "chain": "evm:31337",
+    "channelId": "0xchannel"
+  },
+  "hostname": "rvupmfhg2jiu6ysearam5xc4kh35h74eex4a2nxyq7vyal5cjbnq.gw.example",
+  "expectedHostname": "rvupmfhg2jiu6ysearam5xc4kh35h74eex4a2nxyq7vyal5cjbnq.gw.example",
+  "matches": true,
+  "expiresAt": 1790257410,
+  "view": {
+    "workloadId": "8d68f614e6d2514f62440440cedc5c51f7d3ff8425f80d36f887eb802fa2485b",
+    "hostname": "rvupmfhg2jiu6ysearam5xc4kh35h74eex4a2nxyq7vyal5cjbnq.gw.example",
+    "gateway": {
+      "connectorUrl": "https://gateway.example/ilp",
+      "ilpAddress": "g.toon.workload-gateway",
+      "route": "g.toon.workload-gateway.handover",
+      "price": "0",
+      "domain": "gw.example"
+    },
+    "handover": {
+      "hostname": "rvupmfhg2jiu6ysearam5xc4kh35h74eex4a2nxyq7vyal5cjbnq.gw.example",
+      "expiresAt": 1790257410,
+      "httpPort": 80,
+      "name": "blog",
+      "standbySet": [
+        "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      ],
+      "connectorUrl": "https://gateway.example/ilp",
+      "route": "g.toon.workload-gateway.handover",
+      "at": "2026-09-24T12:43:30.272Z"
+    },
+    "held": true,
+    "expired": false,
+    "problems": [],
+    "ok": true,
+    "ports": [
+      80
+    ],
+    "httpPort": 80,
+    "checkedAt": "2026-09-24T12:43:30.273Z"
+  }
+}

@@ -330,6 +330,13 @@ pub struct TakeoverReport {
 pub struct StandbySetView {
     pub members: i64,
     pub warm: bool,
+    /// What one round of extensions for every member costs, base units — the
+    /// figure a budget arms against (TOON_Network#144), not the primary's own
+    /// price: a budget armed against one member would let the reservations
+    /// lapse, and a lapsed reservation has stopped protecting anything (§7).
+    #[serde(rename = "pricePerInterval")]
+    #[serde(default)]
+    pub price_per_interval: Option<String>,
     #[serde(default)]
     pub takeover: Option<TakeoverReport>,
 }
@@ -374,6 +381,47 @@ pub struct CardExtend {
     pub route: Option<OpRouteView>,
 }
 
+/// `AutoExtendView['lastRun']` in `daemon.ts` (TOON_Network#144).
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct AutoExtendLastRun {
+    pub at: String,
+    /// `"extended" | "waited" | "stopped"` in `daemon.ts`. Kept as a `String`
+    /// (this module's own convention for a kind that is only ever shown, not
+    /// matched on — see `AnonTransportView.state`).
+    pub outcome: String,
+    pub reason: String,
+    #[serde(default)]
+    pub cost: Option<String>,
+    #[serde(default)]
+    pub members: Option<Vec<String>>,
+}
+
+/// `AutoExtendView` in `daemon.ts` (TOON_Network#144, spec §6.4): a standing
+/// instruction to keep extending a workload while nobody is watching, inside
+/// a budget the tenant set. Present on a `WorkloadCard` once `a` has armed
+/// one, whether or not it is currently `armed` — "off" is a remembered state,
+/// not an absence (`workload-auto-extend-off.json`).
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct AutoExtendView {
+    pub armed: bool,
+    pub budget: String,
+    pub spent: String,
+    pub remaining: String,
+    pub extensions: i64,
+    #[serde(rename = "agreedPrice")]
+    pub agreed_price: String,
+    #[serde(rename = "leadSeconds")]
+    pub lead_seconds: i64,
+    #[serde(rename = "armedAt")]
+    pub armed_at: String,
+    #[serde(rename = "lastRun")]
+    #[serde(default)]
+    pub last_run: Option<AutoExtendLastRun>,
+    #[serde(rename = "stoppedBecause")]
+    #[serde(default)]
+    pub stopped_because: Option<String>,
+}
+
 /// `WorkloadCard` in `daemon.ts` (TOON_Network#93): one row of the dashboard.
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct WorkloadCard {
@@ -388,6 +436,9 @@ pub struct WorkloadCard {
     #[serde(default)]
     pub members: Vec<WorkloadMemberView>,
     pub set: StandbySetView,
+    #[serde(rename = "autoExtend")]
+    #[serde(default)]
+    pub auto_extend: Option<AutoExtendView>,
 }
 
 /// `Dashboard` in `daemon.ts`.
@@ -439,6 +490,229 @@ pub struct TerminateResult {
     #[serde(default)]
     pub message: Option<String>,
     pub card: WorkloadCard,
+}
+
+/* -------------------------------------------------------------------------- */
+/* Rotation (TOON_Network#144, spec §6.8, ADR 0018)                          */
+/*                                                                            */
+/* Note the fields that are NOT here and never will be: a Root Secret, a     */
+/* Continuation Token, or anything derived from either. Rotation has TWO     */
+/* secrets in flight — the one this lease holds and the one it is moving to  */
+/* — and this surface has no field for one.                                  */
+/* -------------------------------------------------------------------------- */
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct RotationMemberView {
+    pub pubkey: String,
+    pub index: i64,
+    pub role: String,
+    /// True once this member holds a token of the new Root Secret.
+    pub confirmed: bool,
+    pub ok: bool,
+    #[serde(default)]
+    pub problems: Vec<String>,
+    #[serde(default)]
+    pub route: Option<OpRouteView>,
+    /// Left out: this member's own spawn was refused, so it holds no lease.
+    #[serde(default)]
+    pub skipped: Option<bool>,
+}
+
+/// `RotationView` in `daemon.ts`: how far a rotation has got. A partially
+/// rotated Standby Set (`underWay: true`, `confirmed < of`) is a state (§6.8,
+/// ADR 0018), not an error, and the detail pane shows it as one.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct RotationView {
+    #[serde(rename = "workloadId")]
+    pub workload_id: String,
+    #[serde(rename = "underWay")]
+    pub under_way: bool,
+    pub ok: bool,
+    #[serde(default)]
+    pub problems: Vec<String>,
+    pub members: Vec<RotationMemberView>,
+    pub confirmed: i64,
+    pub of: i64,
+    #[serde(rename = "startedAt")]
+    #[serde(default)]
+    pub started_at: Option<String>,
+    #[serde(rename = "rotatedAt")]
+    #[serde(default)]
+    pub rotated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct RotationMemberResult {
+    pub pubkey: String,
+    pub index: i64,
+    pub role: String,
+    pub sent: bool,
+    pub rotated: bool,
+    /// The answer was lost and a free `status` with the new token settled it.
+    #[serde(default)]
+    pub recovered: Option<bool>,
+    #[serde(default)]
+    pub already: Option<bool>,
+    /// Worth asking again with nothing changed — `unavailable`, or silence.
+    #[serde(default)]
+    pub retryable: Option<bool>,
+    #[serde(default)]
+    pub route: Option<OpRouteView>,
+    #[serde(default)]
+    pub cost: Option<String>,
+    #[serde(rename = "providerError")]
+    #[serde(default)]
+    pub provider_error: Option<String>,
+    #[serde(default)]
+    pub message: Option<String>,
+    #[serde(default)]
+    pub problems: Option<Vec<String>>,
+}
+
+/// `RotationResult` in `daemon.ts`: what one `POST …/rotate` did.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct RotationResult {
+    #[serde(rename = "workloadId")]
+    pub workload_id: String,
+    /// False when the new Root Secret could not be recorded: nothing was sent.
+    pub started: bool,
+    /// True only when EVERY member confirmed.
+    pub rotated: bool,
+    #[serde(default)]
+    pub problems: Vec<String>,
+    pub members: Vec<RotationMemberResult>,
+    pub confirmed: i64,
+    pub of: i64,
+    #[serde(default)]
+    pub cost: Option<String>,
+    #[serde(rename = "vaultCost")]
+    #[serde(default)]
+    pub vault_cost: Option<String>,
+    #[serde(rename = "vaultBehind")]
+    #[serde(default)]
+    pub vault_behind: Option<String>,
+    pub view: RotationView,
+}
+
+/* -------------------------------------------------------------------------- */
+/* The hostname (TOON_Network#144, spec §12)                                 */
+/*                                                                            */
+/* Note the field that is NOT here and never will be: the Gateway Grant. It  */
+/* reads one lease's `status` until the moment it names, so it is a secret   */
+/* exactly as the Continuation Token it derives from is. Nothing on this     */
+/* surface has a field for one.                                              */
+/* -------------------------------------------------------------------------- */
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct GatewayEdgeView {
+    #[serde(rename = "connectorUrl")]
+    pub connector_url: String,
+    #[serde(rename = "ilpAddress")]
+    pub ilp_address: String,
+    pub route: String,
+    #[serde(default)]
+    pub price: Option<String>,
+    pub domain: String,
+}
+
+/// What this console handed to a Workload Gateway (`GatewayHandoverNote` in
+/// `daemon.ts`).
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct GatewayHandoverNote {
+    pub hostname: String,
+    #[serde(rename = "expiresAt")]
+    pub expires_at: i64,
+    #[serde(rename = "httpPort")]
+    pub http_port: i64,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(rename = "standbySet")]
+    #[serde(default)]
+    pub standby_set: Vec<String>,
+    #[serde(rename = "connectorUrl")]
+    pub connector_url: String,
+    pub route: String,
+    pub at: String,
+    #[serde(rename = "withdrawnAt")]
+    #[serde(default)]
+    pub withdrawn_at: Option<String>,
+}
+
+/// `GatewayView` in `daemon.ts`: the hostname, and whether it is currently
+/// held.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct GatewayView {
+    #[serde(rename = "workloadId")]
+    pub workload_id: String,
+    #[serde(default)]
+    pub hostname: Option<String>,
+    #[serde(default)]
+    pub gateway: Option<GatewayEdgeView>,
+    #[serde(default)]
+    pub handover: Option<GatewayHandoverNote>,
+    pub held: bool,
+    #[serde(default)]
+    pub expired: Option<bool>,
+    #[serde(default)]
+    pub problems: Vec<String>,
+    pub ok: bool,
+    #[serde(default)]
+    pub ports: Vec<i64>,
+    #[serde(rename = "httpPort")]
+    #[serde(default)]
+    pub http_port: Option<i64>,
+}
+
+/// `HandoverResult` in `daemon.ts`.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct HandoverResult {
+    pub sent: bool,
+    #[serde(default)]
+    pub problems: Vec<String>,
+    #[serde(default)]
+    pub route: Option<OpRouteView>,
+    #[serde(default)]
+    pub cost: Option<String>,
+    /// What the gateway answered.
+    #[serde(default)]
+    pub hostname: Option<String>,
+    /// What the daemon derived for itself from the workload id (§12.2).
+    #[serde(rename = "expectedHostname")]
+    #[serde(default)]
+    pub expected_hostname: Option<String>,
+    #[serde(default)]
+    pub matches: Option<bool>,
+    #[serde(rename = "expiresAt")]
+    #[serde(default)]
+    pub expires_at: Option<i64>,
+    #[serde(rename = "gatewayError")]
+    #[serde(default)]
+    pub gateway_error: Option<String>,
+    #[serde(default)]
+    pub message: Option<String>,
+    pub view: GatewayView,
+}
+
+/// `WithdrawalResult` in `daemon.ts`.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct WithdrawalResult {
+    pub sent: bool,
+    #[serde(default)]
+    pub problems: Vec<String>,
+    #[serde(default)]
+    pub route: Option<OpRouteView>,
+    #[serde(default)]
+    pub cost: Option<String>,
+    #[serde(default)]
+    pub hostname: Option<String>,
+    #[serde(default)]
+    pub withdrawn: Option<bool>,
+    #[serde(rename = "gatewayError")]
+    #[serde(default)]
+    pub gateway_error: Option<String>,
+    #[serde(default)]
+    pub message: Option<String>,
+    pub view: GatewayView,
 }
 
 #[cfg(test)]

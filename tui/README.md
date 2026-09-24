@@ -93,9 +93,11 @@ step is a failing test, not a silently-unchecked file.
   and again only on `r` — `packages/ui/src/hooks/use-console.ts` has no
   auto-poll for Health, so neither does this.
 - **Workloads polls every 30 seconds**, matching `POLL_MS` in
-  `packages/ui/src/hooks/use-workloads.ts` (TOON_Network#143) — `r` asks for
-  one early. Extend and terminate go through `widgets::confirm`, never
-  straight from `e`/`x`.
+  `packages/ui/src/hooks/use-workloads.ts` (TOON_Network#143) — `R` asks for
+  one early (capital, per ADR 0028's "R refreshes"; lowercase `r` is the
+  Workloads view's own rotate action, TOON_Network#144). Extend, terminate,
+  auto-extend, rotate and gateway handover/withdraw all go through
+  `widgets::confirm`, never straight from their key.
 
 ## Testing
 

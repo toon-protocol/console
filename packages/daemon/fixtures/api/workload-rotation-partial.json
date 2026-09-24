@@ -1,0 +1,70 @@
+{
+  "workloadId": "c71d311e115dbd844dc0fc4588863624b629d5a6cf04326710d9694a7fc8b7ff",
+  "underWay": true,
+  "ok": true,
+  "problems": [],
+  "members": [
+    {
+      "pubkey": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "index": 0,
+      "role": "primary",
+      "confirmed": true,
+      "ok": true,
+      "problems": [],
+      "route": {
+        "route": "g.toon.provider.rotate",
+        "payAt": "https://provider.example/ilp",
+        "via": "provider-connector",
+        "reason": "https://provider.example/ilp prices g.toon.provider.rotate at nothing, so this packet is bought where it is free (spec §5). A connector that merely forwards charges its own fee to carry it.",
+        "price": "0",
+        "chain": "evm:31337",
+        "channelId": "0xchannel"
+      }
+    },
+    {
+      "pubkey": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "index": 1,
+      "role": "standby",
+      "confirmed": false,
+      "ok": true,
+      "problems": [],
+      "route": {
+        "route": "g.toon.provider2.rotate",
+        "payAt": "https://provider2.example/ilp",
+        "via": "provider-connector",
+        "reason": "https://provider2.example/ilp prices g.toon.provider2.rotate at nothing, so this packet is bought where it is free (spec §5). A connector that merely forwards charges its own fee to carry it.",
+        "price": "0",
+        "chain": "evm:31337",
+        "channelId": "0xchannel2"
+      }
+    }
+  ],
+  "confirmed": 1,
+  "of": 2,
+  "startedAt": "2026-09-24T12:43:31.357Z",
+  "vault": {
+    "relays": [
+      "wss://own.relay.test"
+    ],
+    "plan": [
+      {
+        "url": "wss://own.relay.test",
+        "ready": true,
+        "destination": "g.toon.relay",
+        "payAt": "https://connector.test/ilp",
+        "price": "1",
+        "chain": "evm:31337",
+        "channelId": "0xchannel",
+        "via": "document"
+      }
+    ],
+    "destination": "g.toon.relay",
+    "payAt": "https://connector.test/ilp",
+    "price": "1",
+    "totalPrice": "1",
+    "chain": "evm:31337",
+    "channelId": "0xchannel",
+    "ready": true
+  },
+  "localOnly": false
+}

@@ -3,8 +3,8 @@ source: src/views/workloads.rs
 expression: render(&state)
 ---
 ┌ Workloads────────────────────────────────────────────────────────┐┌ Detail ────────────────────────────────────────────────────────────────────────┐
-│  ID            LISTING    STATUS      RUNWAY      SB   GW        ││b2e292ee009eb3fc064aaa7a1bc70a28adc1039f495751d4caa0cb9c08fd8abd                │
-│> b2e292ee009e… basic v1   running     3 d 0 h          ✓         ││Listing basic v1  Provider g.toon.provider                                      │
+│  ID            LISTING    STATUS      RUNWAY      SB   GW        ││aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa                │
+│> aaaaaaaaaaaa… basic v1   running     3 d 0 h          ✓         ││Listing basic v1  Provider g.toon.provider                                      │
 │                                                                  ││Runway 3 d 0 h                                                                  │
 │                                                                  ││                                                                                │
 │                                                                  ││Leases (primary first)                                                          │
@@ -18,15 +18,15 @@ expression: render(&state)
 │                                                                  ││  No Takeover has happened for this workload.                                   │
 │                                                                  ││                                                                                │
 │                                                                  ││Auto-extend                                                                     │
-│                                                                  ││  No budget set. Press `a` to set one.                                          │
+│                                                                  ││  Extending automatically. 1000 of 3000 spent over 1 extension(s), 2000 left, at│
+│                                                                  ││no more than 1000 a round.                                                      │
 │                                                                  ││                                                                                │
 │                                                                  ││Gateway                                                                         │
-│                                                                  ││  wlrjf3qat2z7ybskvj5bxrykfcw4ca47jflvdvgkudfzych5rk6q.gw.devnet.toonprotocol.de│
+│                                                                  ││  vkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkvkva.gw.devnet.toonprotocol.de│
 │                                                                  ││v — reading…                                                                    │
 │                                                                  ││                                                                                │
 │                                                                  ││Continuation Token                                                              │
 │                                                                  ││  Reading…                                                                      │
-│                                                                  ││                                                                                │
 │                                                                  ││                                                                                │
 │                                                                  ││                                                                                │
 │                                                                  ││                                                                                │

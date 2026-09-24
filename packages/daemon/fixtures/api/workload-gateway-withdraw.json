@@ -1,0 +1,47 @@
+{
+  "sent": true,
+  "problems": [],
+  "route": {
+    "route": "g.toon.workload-gateway.handover",
+    "payAt": "https://gateway.example/ilp",
+    "via": "provider-connector",
+    "reason": "https://gateway.example/ilp prices g.toon.workload-gateway.handover at nothing, so this packet is bought where it is free (spec §5, §12). A connector that merely forwards charges its own fee to carry it.",
+    "price": "0",
+    "chain": "evm:31337",
+    "channelId": "0xchannel"
+  },
+  "hostname": "x6o2roiqnlrp2u5iipqe3vonyo5u2wwctmyl2spxxjbr62ofnkdq.gw.example",
+  "withdrawn": true,
+  "message": "x6o2roiqnlrp2u5iipqe3vonyo5u2wwctmyl2spxxjbr62ofnkdq.gw.example is no longer served here. The gateway KEEPS the grant it was handed until 2026-09-24T13:43:30.000Z: a withdrawal ends serving, not reading (spec §12.7). Rotating this lease's Continuation Token is what ends the reading, and it ends every grant of the old token at once (spec §6.8, ADR 0018).",
+  "view": {
+    "workloadId": "bf9da8b9106ae2fd53a843e04dd5cdc3bb4d5ac29b30bd49f7ba431f69c56a87",
+    "hostname": "x6o2roiqnlrp2u5iipqe3vonyo5u2wwctmyl2spxxjbr62ofnkdq.gw.example",
+    "gateway": {
+      "connectorUrl": "https://gateway.example/ilp",
+      "ilpAddress": "g.toon.workload-gateway",
+      "route": "g.toon.workload-gateway.handover",
+      "price": "0",
+      "domain": "gw.example"
+    },
+    "handover": {
+      "hostname": "x6o2roiqnlrp2u5iipqe3vonyo5u2wwctmyl2spxxjbr62ofnkdq.gw.example",
+      "expiresAt": 1790257410,
+      "httpPort": 80,
+      "standbySet": [
+        "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      ],
+      "connectorUrl": "https://gateway.example/ilp",
+      "route": "g.toon.workload-gateway.handover",
+      "at": "2026-09-24T12:43:30.527Z",
+      "withdrawnAt": "2026-09-24T12:43:30.548Z"
+    },
+    "held": false,
+    "problems": [],
+    "ok": true,
+    "ports": [
+      80
+    ],
+    "httpPort": 80,
+    "checkedAt": "2026-09-24T12:43:30.548Z"
+  }
+}
