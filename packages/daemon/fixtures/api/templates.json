@@ -54,7 +54,7 @@
               "mediaType": "application/vnd.oci.image.manifest.v1+json",
               "source": {
                 "type": "toon-store",
-                "blobRecordTxid": "aaaaaaaaaaaaaaaaaaaaaa0000"
+                "blobRecordTxid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000"
               }
             },
             {

@@ -94,6 +94,21 @@ const IDENTIFIER_SHAPES: readonly { pattern: RegExp; family: string }[] = [
  * charset `npub1` addresses use. */
 const FILLER = 'a';
 
+/**
+ * A base58 identifier's own encoded length is not fixed the way hex, a UUID
+ * or an `0x` address is: base58-encoding 32 random bytes gives 43 characters
+ * most of the time and 44 the rest (a run whose bytes happen to start with a
+ * zero byte encodes one character shorter), so two runs of the SAME test
+ * legitimately produce two DIFFERENT real lengths for what is semantically
+ * the same field — a Solana address, say. `placeholderFor` used to keep
+ * `original.length`, so `funding.json` kept changing shape on an
+ * otherwise-unchanged `npm test` run even though every other volatile field
+ * normalised to something fixed. A canonical length here, the same on every
+ * run regardless of what the real address happened to encode to, is what
+ * makes THIS family deterministic the way the others already were.
+ */
+const BASE58_PLACEHOLDER_LENGTH = 44;
+
 function placeholderFor(original: string, family: string, index: number): string {
   const suffix = index.toString(16).padStart(4, '0');
   switch (family) {
@@ -109,9 +124,13 @@ function placeholderFor(original: string, family: string, index: number): string
       const domain = original.slice(dot); // includes the leading '.'
       return FILLER.repeat(Math.max(0, label.length - suffix.length)) + suffix + domain;
     }
+    case 'base58':
+      return FILLER.repeat(Math.max(0, BASE58_PLACEHOLDER_LENGTH - suffix.length)) + suffix;
     default:
-      // hex, npub, base58: a flat run of the filler with the suffix at the
-      // end is valid in all three alphabets and keeps the original length.
+      // hex, npub: both are fixed-length by construction (a Nostr key or
+      // event id is always 64 hex characters, an `npub1` address always the
+      // same bech32 length), so a flat run of the filler with the suffix at
+      // the end, keeping the original length, is already deterministic.
       return FILLER.repeat(Math.max(0, original.length - suffix.length)) + suffix;
   }
 }
@@ -141,7 +160,7 @@ function placeholderFor(original: string, family: string, index: number): string
  * inside a faucet `command`) — a plain field-by-field pass alone would miss
  * those, since they are not themselves one whole field's value.
  */
-function normalise(value: unknown): unknown {
+export function normalise(value: unknown): unknown {
   const seen = new Map<string, string>();
   const nextIndex: Record<string, number> = {};
 

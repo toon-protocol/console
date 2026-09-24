@@ -70,9 +70,9 @@
     {
       "chain": "solana",
       "kind": "solana",
-      "counterparty": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
+      "counterparty": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
       "token": {
-        "address": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001",
+        "address": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001",
         "decimals": 6
       },
       "deposit": {
