@@ -86,6 +86,19 @@ impl Default for FundsState {
 }
 
 impl FundsState {
+    /// True while some chain has an open in flight (`channel.phase ==
+    /// "opening"`) — mirrors `use-funding.ts`'s own `pending`, which is what
+    /// its 2-second poll is gated on: "poll only while something is
+    /// happening", never as a standing timer.
+    pub fn pending(&self) -> bool {
+        self.funding.as_ref().is_some_and(|status| {
+            status
+                .chains
+                .iter()
+                .any(|chain| chain.channel.phase == "opening")
+        })
+    }
+
     pub fn apply_funding(&mut self, result: Result<FundingStatus, String>) {
         self.funding_loading = false;
         self.funding_busy = false;
@@ -1143,6 +1156,38 @@ mod tests {
             reason: None,
             checked_at: "2026-09-24T00:00:00.000Z".to_string(),
         }
+    }
+
+    #[test]
+    fn pending_is_false_with_no_funding_loaded_yet() {
+        let state = FundsState::default();
+        assert!(!state.pending());
+    }
+
+    #[test]
+    fn pending_is_false_while_no_chain_is_opening() {
+        let mut state = FundsState::default();
+        state.funding = Some(sample_funding(
+            "ready",
+            vec![
+                sample_chain("evm:84532", true, "present", "none"),
+                sample_chain("solana", false, "none", "open"),
+            ],
+        ));
+        assert!(!state.pending());
+    }
+
+    #[test]
+    fn pending_is_true_while_a_chain_is_opening() {
+        let mut state = FundsState::default();
+        state.funding = Some(sample_funding(
+            "ready",
+            vec![
+                sample_chain("evm:84532", true, "present", "opening"),
+                sample_chain("solana", false, "none", "none"),
+            ],
+        ));
+        assert!(state.pending());
     }
 
     #[test]

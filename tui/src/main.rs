@@ -39,6 +39,7 @@ use toon_console_tui::types::{
     TemplateSpawnRequestBody, TerminateResult, WithdrawalResult, WorkloadCard,
 };
 use toon_console_tui::ui;
+use toon_console_tui::views::account as account_view;
 use toon_console_tui::views::new_workload;
 use toon_console_tui::views::workloads as workloads_view;
 
@@ -56,6 +57,17 @@ const CLOCK_TICK_MS: u64 = 1_000;
 /// acceptance criterion is "refreshing at its cadence", so this is that
 /// number, not a TUI-only guess.
 const WORKLOADS_POLL_MS: u64 = 30_000;
+
+/// `POLL_MS` in `packages/ui/src/hooks/use-funding.ts` — checked every tick
+/// against [`views::funds::FundsState::pending`], the same "poll only while
+/// something is happening" gate the web hook applies, so the header's
+/// channel balance keeps moving while an open is in flight without a
+/// standing timer running the rest of the time.
+const FUNDING_POLL_MS: u64 = 2_000;
+
+/// `POLL_MS` in `packages/ui/src/hooks/use-account.ts` — checked every tick
+/// against [`views::account::poll_needed`].
+const ACCOUNT_POLL_MS: u64 = 1_500;
 
 enum RuntimeEvent {
     Connected(Arc<DaemonClient>),
@@ -166,6 +178,8 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()
 
     let mut events = EventStream::new();
     let mut clock = tokio::time::interval(Duration::from_millis(CLOCK_TICK_MS));
+    let mut funding_clock = tokio::time::interval(Duration::from_millis(FUNDING_POLL_MS));
+    let mut account_clock = tokio::time::interval(Duration::from_millis(ACCOUNT_POLL_MS));
 
     loop {
         terminal.draw(|frame| {
@@ -862,6 +876,25 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()
             }
             _ = clock.tick() => {
                 app.now_ms = now_ms();
+            }
+            // TOON_Network#138's code review: the web UI's own hooks poll
+            // Funds and Account too, each gated on its own "something is
+            // happening" condition rather than a standing timer — see
+            // `FUNDING_POLL_MS`/`ACCOUNT_POLL_MS`'s doc comments.
+            _ = funding_clock.tick() => {
+                if let Some(client) = &client {
+                    if app.funds.pending() {
+                        spawn_funding_fetch(client.clone(), tx.clone(), false);
+                    }
+                }
+            }
+            _ = account_clock.tick() => {
+                if let Some(client) = &client {
+                    let needed = app.account.as_ref().is_some_and(account_view::poll_needed);
+                    if needed {
+                        spawn_account_fetch(client.clone(), tx.clone());
+                    }
+                }
             }
         }
 

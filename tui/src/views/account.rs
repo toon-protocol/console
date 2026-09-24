@@ -47,11 +47,32 @@ use ratatui::Frame;
 use crate::app::Command;
 use crate::format::account_display_name;
 use crate::types::{
-    ChainSeedStatus, LocalSignerMode, LocalSignerRequest, Profiles, SessionStatus, SignerKind,
+    ChainSeedStatus, InvitationState, LocalSignerMode, LocalSignerRequest, ProfileState, Profiles,
+    SessionStatus, SignerKind,
 };
 use crate::views::chain_seed::{self, ChainSeedViewState};
 use crate::widgets::confirm::ConfirmOutcome;
 use crate::widgets::input::TextField;
+
+/// Whether `Command::RefreshAccount` should be asked for again on the next
+/// tick of the account poll (TOON_Network#138's code review: matches
+/// `use-account.ts`'s own condition, "two things are polled, and only while
+/// they are outstanding" — a `nostrconnect://` invitation still `waiting`
+/// for a phone to accept it, or the account's kind-0 still being read off
+/// relays in the background). Nothing is polled otherwise: a console that
+/// re-read every second would keep a laptop awake for a screen that only
+/// changes when someone signs in or out.
+pub fn poll_needed(status: &SessionStatus) -> bool {
+    let waiting = status
+        .invitation
+        .as_ref()
+        .is_some_and(|invitation| invitation.state == InvitationState::Waiting);
+    let reading_profile = status
+        .account
+        .as_ref()
+        .is_some_and(|account| account.profile_state == ProfileState::Loading);
+    waiting || reading_profile
+}
 
 /// One focusable thing on screen, in the order `j`/`k` walk them and `draw`
 /// lays them out. Built fresh from the current `SessionStatus`/`Profiles` by
@@ -906,6 +927,53 @@ mod tests {
                 },
             ],
         }
+    }
+
+    // -- poll_needed: matches use-account.ts's own polling condition -------
+
+    #[test]
+    fn poll_not_needed_when_signed_out() {
+        let status = signed_out(false, vec![]);
+        assert!(!poll_needed(&status));
+    }
+
+    #[test]
+    fn poll_not_needed_once_the_profile_is_ready() {
+        let status = signed_in();
+        assert!(!poll_needed(&status));
+    }
+
+    #[test]
+    fn poll_needed_while_the_profile_is_still_loading() {
+        let mut status = signed_in();
+        let mut account = status.account.take().unwrap();
+        account.profile_state = ProfileState::Loading;
+        status.account = Some(account);
+        assert!(poll_needed(&status));
+    }
+
+    #[test]
+    fn poll_needed_while_a_bunker_invitation_is_waiting() {
+        let mut status = signed_out(false, vec![]);
+        status.invitation = Some(crate::types::Invitation {
+            uri: "nostrconnect://abc".to_string(),
+            state: InvitationState::Waiting,
+            expires_at: "2026-09-24T00:05:00.000Z".to_string(),
+            error: None,
+        });
+        assert!(poll_needed(&status));
+    }
+
+    #[test]
+    fn poll_not_needed_once_a_bunker_invitation_failed() {
+        let mut status = signed_out(false, vec![]);
+        status.invitation = Some(crate::types::Invitation {
+            uri: "nostrconnect://abc".to_string(),
+            state: InvitationState::Failed,
+            expires_at: "2026-09-24T00:05:00.000Z".to_string(),
+            error: Some("timed out".to_string()),
+        });
+        assert!(!poll_needed(&status));
     }
 
     // -- key handling: pure state, no rendering ----------------------------
