@@ -49,6 +49,24 @@
       "configured": false,
       "active": false,
       "overriddenFields": []
+    },
+    {
+      "id": "my-devnet",
+      "label": "My devnet fork",
+      "description": "",
+      "connectorUrl": "https://my-fork.example/ilp",
+      "relayUrl": "wss://my-fork.example",
+      "gatewayDomain": "",
+      "gatewayConnectorUrl": "",
+      "gasConnectorUrl": "",
+      "rpc": {},
+      "origin": "user",
+      "configured": true,
+      "active": false,
+      "overriddenFields": [
+        "connectorUrl",
+        "relayUrl"
+      ]
     }
   ]
 }

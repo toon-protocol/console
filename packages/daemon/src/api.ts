@@ -37,7 +37,18 @@ import {
 } from './keystore.js';
 import type { ConsolePaths } from './paths.js';
 import { isConfigured, type NetworkProfile } from './profiles.js';
-import { UnknownProfileError, type ProfileStore } from './profile-store.js';
+import {
+  ActiveProfileError,
+  InvalidProfileIdError,
+  UnknownProfileError,
+  type ProfileEndpointsInput,
+  type ProfileStore,
+} from './profile-store.js';
+import {
+  isSandboxLike,
+  validateProfileEndpoints,
+  type ProfileEndpointInput,
+} from './profile-validation.js';
 import { RelayListError, type RelayMode } from './relay-list.js';
 import { RotationError, type RotationResult, type RotationView } from './rotation.js';
 import { RelayWriteError } from './relay-write.js';
@@ -226,6 +237,10 @@ export interface ApiResponse {
 export interface ProfileView extends NetworkProfile {
   readonly configured: boolean;
   readonly active: boolean;
+  /** Which endpoint fields a person has overridden (or, for a profile with
+   * no built-in, simply set) — `ENDPOINT_FIELD_NAMES`'s own spelling,
+   * `"rpc.evm"` included. Empty for a built-in nobody has touched. */
+  readonly overriddenFields: readonly string[];
 }
 
 export async function handleApi(deps: ApiDeps, request: ApiRequest): Promise<ApiResponse> {
@@ -253,6 +268,18 @@ export async function handleApi(deps: ApiDeps, request: ApiRequest): Promise<Api
       throw error;
     }
     return { status: 200, body: profilesBody(deps) };
+  }
+
+  if (
+    path.startsWith('/api/profiles/') &&
+    path !== '/api/profiles/active' &&
+    (method === 'PUT' || method === 'DELETE')
+  ) {
+    const id = decodeURIComponent(path.slice('/api/profiles/'.length));
+    if (id.length === 0 || id.includes('/')) {
+      return problem(404, 'not_found', 'no route matches this path and method.');
+    }
+    return method === 'PUT' ? putProfile(deps, id, request.body) : deleteProfile(deps, id);
   }
 
   if (path === '/api/desktop' || path.startsWith('/api/desktop/')) {
@@ -1573,7 +1600,7 @@ async function healthBody(deps: ApiDeps, request: ApiRequest) {
         Math.round((now.getTime() - deps.startedAt.getTime()) / 1000)
       ),
     },
-    profile: toProfileView(profile, profile),
+    profile: toProfileView(profile, profile, deps.profiles.overriddenFields(profile.id)),
     connector,
     ...(anon === undefined ? {} : { anon }),
     storage: {
@@ -1590,12 +1617,143 @@ function profilesBody(deps: ApiDeps) {
   const active = deps.profiles.active();
   return {
     activeId: active.id,
-    profiles: deps.profiles.list().map((profile) => toProfileView(profile, active)),
+    profiles: deps.profiles
+      .list()
+      .map((profile) =>
+        toProfileView(profile, active, deps.profiles.overriddenFields(profile.id))
+      ),
   };
 }
 
-function toProfileView(profile: NetworkProfile, active: NetworkProfile): ProfileView {
-  return { ...profile, configured: isConfigured(profile), active: profile.id === active.id };
+function toProfileView(
+  profile: NetworkProfile,
+  active: NetworkProfile,
+  overriddenFields: readonly string[]
+): ProfileView {
+  return {
+    ...profile,
+    configured: isConfigured(profile),
+    active: profile.id === active.id,
+    overriddenFields: [...overriddenFields],
+  };
+}
+
+/**
+ * `PUT /api/profiles/<id>` (TOON_Network#150): overrides a subset of a
+ * built-in's endpoints, or adds a profile under a new id. Every URL is
+ * validated per field before anything is stored — `putProfile` never calls
+ * `ProfileStore.setEndpoints` with something `validateProfileEndpoints` has
+ * not already looked at, so a bad field never reaches disk even for the one
+ * `catch` below (`InvalidProfileIdError`, which is about the id, not a URL).
+ */
+function putProfile(deps: ApiDeps, id: string, body: unknown): ApiResponse {
+  const parsed = readProfileEndpointsBody(body);
+  if ('error' in parsed) return problem(400, 'invalid_request', parsed.error);
+
+  const endpoints: ProfileEndpointInput = {
+    connectorUrl: parsed.value.connectorUrl,
+    relayUrl: parsed.value.relayUrl,
+    gatewayDomain: parsed.value.gatewayDomain,
+    gatewayConnectorUrl: parsed.value.gatewayConnectorUrl,
+    gasConnectorUrl: parsed.value.gasConnectorUrl,
+    faucetUrl: parsed.value.faucetUrl,
+    rpc: parsed.value.rpc,
+  };
+  const errors = validateProfileEndpoints(endpoints, { sandboxLike: isSandboxLike(id) });
+  if (Object.keys(errors).length > 0) {
+    return problem(400, 'invalid_profile', 'One or more endpoints are invalid.', { errors });
+  }
+
+  // A brand-new id needs a label — the only thing a switcher would have to
+  // show for it otherwise. An id already known (built-in, or already added)
+  // needs none: it already has one.
+  const known = deps.profiles.list().some((profile) => profile.id === id);
+  if (!known && (parsed.value.label === undefined || parsed.value.label.trim().length === 0)) {
+    return problem(400, 'invalid_profile', 'A new profile needs a label.', {
+      errors: { label: 'A new profile needs a label.' },
+    });
+  }
+
+  try {
+    deps.profiles.setEndpoints(id, parsed.value);
+  } catch (error) {
+    if (error instanceof InvalidProfileIdError) {
+      return problem(400, 'invalid_profile_id', error.message);
+    }
+    throw error;
+  }
+  return { status: 200, body: profilesBody(deps) };
+}
+
+/**
+ * `DELETE /api/profiles/<id>`: resets a built-in's override, or removes a
+ * profile added under a new id — refused while that profile is the active
+ * one, so a person is never left with the active profile switched out from
+ * under them.
+ */
+function deleteProfile(deps: ApiDeps, id: string): ApiResponse {
+  try {
+    deps.profiles.resetOrRemove(id);
+  } catch (error) {
+    if (error instanceof UnknownProfileError)
+      return problem(404, 'unknown_profile', error.message);
+    if (error instanceof ActiveProfileError)
+      return problem(409, 'active_profile', error.message);
+    throw error;
+  }
+  return { status: 200, body: profilesBody(deps) };
+}
+
+/** `PUT /api/profiles/<id>`'s body: every field a string if present at all —
+ * `profile-store.ts#ProfileEndpointsInput`'s own shape, read defensively out
+ * of `unknown`. */
+function readProfileEndpointsBody(
+  body: unknown
+): { value: ProfileEndpointsInput } | { error: string } {
+  if (typeof body !== 'object' || body === null) {
+    return { error: 'Body must be a JSON object of profile fields.' };
+  }
+  const value = body as Record<string, unknown>;
+  const stringFields = [
+    'label',
+    'description',
+    'connectorUrl',
+    'relayUrl',
+    'gatewayDomain',
+    'gatewayConnectorUrl',
+    'gasConnectorUrl',
+    'faucetUrl',
+  ] as const;
+  const out: Record<string, string> = {};
+  for (const field of stringFields) {
+    const raw = value[field];
+    if (raw === undefined) continue;
+    if (typeof raw !== 'string') return { error: `\`${field}\` must be a string.` };
+    out[field] = raw;
+  }
+
+  let rpc: { evm?: string; solana?: string } | undefined;
+  if (value.rpc !== undefined) {
+    if (typeof value.rpc !== 'object' || value.rpc === null) {
+      return { error: '`rpc` must be an object.' };
+    }
+    const rpcValue = value.rpc as Record<string, unknown>;
+    const rpcOut: { evm?: string; solana?: string } = {};
+    for (const field of ['evm', 'solana'] as const) {
+      const raw = rpcValue[field];
+      if (raw === undefined) continue;
+      if (typeof raw !== 'string') return { error: `\`rpc.${field}\` must be a string.` };
+      rpcOut[field] = raw;
+    }
+    rpc = rpcOut;
+  }
+
+  return {
+    value: {
+      ...out,
+      ...(rpc !== undefined ? { rpc } : {}),
+    } as ProfileEndpointsInput,
+  };
 }
 
 /**

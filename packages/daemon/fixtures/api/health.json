@@ -20,7 +20,8 @@
     "rpc": {},
     "origin": "built-in",
     "configured": true,
-    "active": true
+    "active": true,
+    "overriddenFields": []
   },
   "connector": {
     "state": "ok",

@@ -44,6 +44,12 @@ pub struct ProfileView {
     pub gateway_domain: String,
     #[serde(rename = "gatewayConnectorUrl")]
     pub gateway_connector_url: String,
+    /// The gas station's own connector (TOON_Network#119, #150) — present on
+    /// every `ProfileView` the daemon has ever answered, but only worth
+    /// showing (and overriding) from TOON_Network#150's network editor on.
+    #[serde(rename = "gasConnectorUrl")]
+    #[serde(default)]
+    pub gas_connector_url: String,
     #[serde(rename = "faucetUrl")]
     #[serde(default)]
     pub faucet_url: Option<String>,
@@ -52,6 +58,12 @@ pub struct ProfileView {
     pub origin: String,
     pub configured: bool,
     pub active: bool,
+    /// Which endpoint fields a person has overridden (or, for a profile with
+    /// no built-in, simply set) — `"connectorUrl"`, `"rpc.evm"`, etc. Empty
+    /// for a built-in nobody has touched (TOON_Network#150).
+    #[serde(rename = "overriddenFields")]
+    #[serde(default)]
+    pub overridden_fields: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -647,6 +659,57 @@ pub struct SignInRequest {
 #[derive(Debug, Clone, serde::Serialize, PartialEq)]
 pub struct ProfileSwitchRequest {
     pub id: String,
+}
+
+/// `PUT /api/profiles/<id>`'s body (TOON_Network#150) — every field the
+/// whole override for this call (a field left out falls through to the
+/// built-in, or stays unset for an added profile), mirroring
+/// `profile-store.ts`'s `ProfileEndpointsInput`. `views::network` builds one
+/// of these from whichever of its `TextField`s are non-empty.
+#[derive(Debug, Clone, Default, serde::Serialize, PartialEq)]
+pub struct ProfileEndpointsRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "connectorUrl")]
+    pub connector_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "relayUrl")]
+    pub relay_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "gatewayDomain")]
+    pub gateway_domain: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "gatewayConnectorUrl")]
+    pub gateway_connector_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "gasConnectorUrl")]
+    pub gas_connector_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "faucetUrl")]
+    pub faucet_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rpc: Option<ProfileRpcRequest>,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, PartialEq)]
+pub struct ProfileRpcRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evm: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub solana: Option<String>,
+}
+
+/// A `PUT /api/profiles/<id>` 400 or 409 — `problem()` in `api.ts`'s own
+/// shape. `errors` is per-field (`"connectorUrl"`, `"rpc.evm"`, ...) and
+/// absent (default: empty) on a 409 "this is the active profile" refusal,
+/// which is about the id, not a field.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct ProfileEndpointsError {
+    pub error: String,
+    pub message: String,
+    #[serde(default)]
+    pub errors: std::collections::HashMap<String, String>,
 }
 
 /* -------------------------------------------------------------------------- */

@@ -281,6 +281,7 @@ mod tests {
                 gateway_domain: "gw.devnet.toonprotocol.dev".to_string(),
                 gateway_connector_url: "https://proxy.gateway.devnet.toonprotocol.dev/ilp"
                     .to_string(),
+                gas_connector_url: "https://proxy.gas.devnet.toonprotocol.dev/ilp".to_string(),
                 faucet_url: Some("https://faucet.devnet.toonprotocol.dev".to_string()),
                 rpc: Some(ProfileRpc {
                     evm: None,
@@ -289,6 +290,7 @@ mod tests {
                 origin: "built-in".to_string(),
                 configured: true,
                 active: true,
+                overridden_fields: Vec::new(),
             },
             connector: ConnectorHealth::Ok {
                 endpoint: "https://connector.example".to_string(),
