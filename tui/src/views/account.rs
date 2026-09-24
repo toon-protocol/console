@@ -200,6 +200,19 @@ impl AccountViewState {
             chain_seed: ChainSeedViewState::new(),
         }
     }
+
+    /// Moves the cursor directly to `index` — what a mouse click on a
+    /// targeted row asks for ([`draw`]'s own `target_hits`). Never fires a
+    /// command and never opens/edits anything: the same "select, then Enter
+    /// acts" rule `j`/`k` already follows. A no-op while a field is being
+    /// typed into or a confirm is open — neither one has a row to click
+    /// through in the first place (see `RowLines`' doc comment and `draw`'s
+    /// early return while the Chain Seed confirm is open).
+    pub fn select(&mut self, index: usize) {
+        if !self.editing {
+            self.cursor = index;
+        }
+    }
 }
 
 impl Default for AccountViewState {
@@ -434,6 +447,56 @@ fn take_if(field: &mut TextField, condition: bool) -> Option<String> {
 // Drawing
 // ---------------------------------------------------------------------------
 
+/// A `Vec<Line>` paired with which [`Target`] (if any) each line IS, so a
+/// form-drawing function below can hand back mouse row hits without a
+/// second pass over the same rows it already built. [`Self::push`] is a
+/// line with no target (description text, a blank spacer);
+/// [`Self::push_target`] is one line that IS exactly one `Target` — the
+/// "one row, one target" shape `draw_remote_signer`, `draw_local_keystore`
+/// and `draw_signed_in` all happen to already have, which is what makes a
+/// mouse click on one of THEIR rows natural (ADR 0028: "mouse clicks select
+/// tabs and rows") in a view whose other sections (`draw_profiles`'
+/// side-by-side buttons, `draw_saved_signers`' three targets sharing one
+/// row) are not.
+#[derive(Default)]
+struct RowLines<'a> {
+    lines: Vec<Line<'a>>,
+    targets: Vec<Option<Target>>,
+}
+
+impl<'a> RowLines<'a> {
+    fn push(&mut self, line: Line<'a>) {
+        self.lines.push(line);
+        self.targets.push(None);
+    }
+
+    fn push_target(&mut self, target: Target, line: Line<'a>) {
+        self.lines.push(line);
+        self.targets.push(Some(target));
+    }
+
+    /// Renders into `inner` and returns each visible targeted row's `y`
+    /// paired with the `Target` it is.
+    fn finish(self, frame: &mut Frame, inner: Rect) -> Vec<(u16, Target)> {
+        let hits = self
+            .targets
+            .iter()
+            .enumerate()
+            .filter_map(|(index, target)| target.map(|t| (inner.y + index as u16, t)))
+            .filter(|(row, _)| *row < inner.y + inner.height)
+            .collect();
+        frame.render_widget(Paragraph::new(self.lines).wrap(Wrap { trim: false }), inner);
+        hits
+    }
+}
+
+/// Returns the on-screen targeted rows' `y`, translated from a `Target` into
+/// its index in `list` — `app::handle_mouse` moves `AccountViewState::cursor`
+/// to that index, the same "select, do not act" a click on a Workloads or
+/// Directory row already does. Only the forms this view draws one target per
+/// LINE for ([`draw_remote_signer`], [`draw_local_keystore`],
+/// [`draw_signed_in`]'s "Sign out") hand any back — see [`RowLines`]'s own
+/// doc comment for why the rest do not.
 pub fn draw(
     frame: &mut Frame,
     area: Rect,
@@ -442,7 +505,7 @@ pub fn draw(
     profiles: Option<&Profiles>,
     chain_seed_status: Option<&ChainSeedStatus>,
     error: Option<&str>,
-) {
+) -> Vec<(u16, usize)> {
     let list = targets(
         Some(status),
         profiles,
@@ -456,7 +519,7 @@ pub fn draw(
     let error_height = if error.is_some() { 2 } else { 0 };
     let profiles_height = profiles.map(|p| p.profiles.len() as u16 + 2).unwrap_or(3);
 
-    if status.signed_in {
+    let target_hits = if status.signed_in {
         let chain_seed_height = chain_seed::height(chain_seed_status);
         let rows = Layout::default()
             .direction(Direction::Vertical)
@@ -468,7 +531,7 @@ pub fn draw(
                 Constraint::Min(0),
             ])
             .split(area);
-        draw_signed_in(frame, rows[0], status, focused);
+        let hits = draw_signed_in(frame, rows[0], status, focused);
         chain_seed::draw(
             frame,
             rows[1],
@@ -483,7 +546,9 @@ pub fn draw(
         // the whole screen — see the module doc comment.
         if let Some(confirm) = &state.chain_seed.confirm {
             crate::widgets::confirm::draw(frame, area, confirm);
+            return Vec::new();
         }
+        hits
     } else {
         let saved_height = if status.signers.is_empty() {
             0
@@ -505,15 +570,25 @@ pub fn draw(
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(rows[0]);
-        draw_remote_signer(frame, top[0], state, status, focused);
-        draw_local_keystore(frame, top[1], state, status, focused);
+        let mut hits = draw_remote_signer(frame, top[0], state, status, focused);
+        hits.extend(draw_local_keystore(frame, top[1], state, status, focused));
 
         if !status.signers.is_empty() {
             draw_saved_signers(frame, rows[1], state, status, focused);
         }
         draw_profiles(frame, rows[2], profiles, focused);
         draw_error(frame, rows[3], error);
-    }
+        hits
+    };
+
+    target_hits
+        .into_iter()
+        .filter_map(|(row, target)| {
+            list.iter()
+                .position(|candidate| *candidate == target)
+                .map(|index| (row, index))
+        })
+        .collect()
 }
 
 fn card_style(focused: bool) -> Style {
@@ -549,34 +624,40 @@ fn draw_remote_signer(
     state: &AccountViewState,
     status: &SessionStatus,
     focused: impl Fn(Target) -> bool,
-) {
+) -> Vec<(u16, Target)> {
     let block = Block::default()
         .title(" Connect a remote signer ")
         .borders(Borders::ALL);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let mut lines = vec![
-        Line::from(Span::styled(
-            "NIP-46: Amber, nsec.app or `nak bunker`. The key never leaves it.",
-            Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::ITALIC),
-        )),
-        Line::raw(""),
+    let mut rows = RowLines::default();
+    rows.push(Line::from(Span::styled(
+        "NIP-46: Amber, nsec.app or `nak bunker`. The key never leaves it.",
+        Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::ITALIC),
+    )));
+    rows.push(Line::raw(""));
+    rows.push_target(
+        Target::BunkerUri,
         state.bunker_uri.line(focused(Target::BunkerUri)),
-    ];
+    );
     if status.keystore.needs_passphrase {
-        lines.push(
+        rows.push_target(
+            Target::BunkerPassphrase,
             state
                 .bunker_passphrase
                 .line(focused(Target::BunkerPassphrase)),
         );
     }
-    lines.push(Line::raw(""));
-    lines.push(button_line("Connect", focused(Target::ConnectBunker)));
+    rows.push(Line::raw(""));
+    rows.push_target(
+        Target::ConnectBunker,
+        button_line("Connect", focused(Target::ConnectBunker)),
+    );
 
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+    rows.finish(frame, inner)
 }
 
 fn draw_local_keystore(
@@ -585,7 +666,7 @@ fn draw_local_keystore(
     state: &AccountViewState,
     status: &SessionStatus,
     focused: impl Fn(Target) -> bool,
-) {
+) -> Vec<(u16, Target)> {
     let backend = match status.keystore.backend {
         crate::types::KeystoreBackend::Libsecret => "gnome-keyring",
         crate::types::KeystoreBackend::File => "encrypted file",
@@ -595,51 +676,68 @@ fn draw_local_keystore(
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let mut lines = vec![
-        Line::from(Span::styled(
-            format!("Sealed into {}.", status.keystore.location),
-            Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::ITALIC),
-        )),
-        Line::raw(""),
+    let mut rows = RowLines::default();
+    rows.push(Line::from(Span::styled(
+        format!("Sealed into {}.", status.keystore.location),
+        Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::ITALIC),
+    )));
+    rows.push(Line::raw(""));
+    rows.push_target(
+        Target::ModeGenerate,
         mode_line(
             "Generate",
             state.local_mode == LocalSignerMode::Generate,
             focused(Target::ModeGenerate),
         ),
+    );
+    rows.push_target(
+        Target::ModeNsec,
         mode_line(
             "Import nsec",
             state.local_mode == LocalSignerMode::Nsec,
             focused(Target::ModeNsec),
         ),
+    );
+    rows.push_target(
+        Target::ModeNip06,
         mode_line(
             "Import mnemonic",
             state.local_mode == LocalSignerMode::Nip06,
             focused(Target::ModeNip06),
         ),
-    ];
+    );
 
     match state.local_mode {
         LocalSignerMode::Generate => {}
-        LocalSignerMode::Nsec => lines.push(state.nsec.line(focused(Target::Nsec))),
-        LocalSignerMode::Nip06 => lines.push(state.mnemonic.line(focused(Target::Mnemonic))),
+        LocalSignerMode::Nsec => {
+            rows.push_target(Target::Nsec, state.nsec.line(focused(Target::Nsec)))
+        }
+        LocalSignerMode::Nip06 => rows.push_target(
+            Target::Mnemonic,
+            state.mnemonic.line(focused(Target::Mnemonic)),
+        ),
     }
     if status.keystore.needs_passphrase {
-        lines.push(
+        rows.push_target(
+            Target::LocalPassphrase,
             state
                 .local_passphrase
                 .line(focused(Target::LocalPassphrase)),
         );
     }
-    lines.push(Line::raw(""));
+    rows.push(Line::raw(""));
     let submit_label = match state.local_mode {
         LocalSignerMode::Generate => "Generate and sign in",
         LocalSignerMode::Nsec | LocalSignerMode::Nip06 => "Import and sign in",
     };
-    lines.push(button_line(submit_label, focused(Target::SubmitLocal)));
+    rows.push_target(
+        Target::SubmitLocal,
+        button_line(submit_label, focused(Target::SubmitLocal)),
+    );
 
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+    rows.finish(frame, inner)
 }
 
 fn draw_saved_signers(
@@ -692,7 +790,7 @@ fn draw_signed_in(
     area: Rect,
     status: &SessionStatus,
     focused: impl Fn(Target) -> bool,
-) {
+) -> Vec<(u16, Target)> {
     let block = Block::default().title(" Account ").borders(Borders::ALL);
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -702,7 +800,7 @@ fn draw_signed_in(
             Paragraph::new("Signed in, waiting on the account's details…"),
             inner,
         );
-        return;
+        return Vec::new();
     };
 
     let name = account_display_name(view);
@@ -711,23 +809,28 @@ fn draw_signed_in(
         SignerKind::Local => "local keystore",
     };
 
-    let mut lines = vec![
-        Line::from(Span::styled(
-            name,
-            Style::default().add_modifier(Modifier::BOLD),
-        )),
-        Line::from(Span::styled(
-            view.npub.clone(),
-            Style::default().fg(Color::DarkGray),
-        )),
-        Line::raw(""),
-        field_line("Signer", format!("{} ({signer_kind})", view.signer_label)),
-        field_line("Relays", relays_summary(view)),
-    ];
-    lines.push(Line::raw(""));
-    lines.push(button_line("Sign out", focused(Target::SignOut)));
+    let mut rows = RowLines::default();
+    rows.push(Line::from(Span::styled(
+        name,
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
+    rows.push(Line::from(Span::styled(
+        view.npub.clone(),
+        Style::default().fg(Color::DarkGray),
+    )));
+    rows.push(Line::raw(""));
+    rows.push(field_line(
+        "Signer",
+        format!("{} ({signer_kind})", view.signer_label),
+    ));
+    rows.push(field_line("Relays", relays_summary(view)));
+    rows.push(Line::raw(""));
+    rows.push_target(
+        Target::SignOut,
+        button_line("Sign out", focused(Target::SignOut)),
+    );
 
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+    rows.finish(frame, inner)
 }
 
 /// Mirrors `describeProfile` in `packages/ui/src/app/account-view.tsx`, plus
@@ -1207,6 +1310,94 @@ mod tests {
             key(KeyCode::Char('1')),
         );
         assert_eq!(command, None);
+    }
+
+    // -- mouse row hits (ADR 0028: "mouse clicks select tabs and rows") ------
+
+    #[test]
+    fn select_moves_the_cursor_directly() {
+        let mut state = AccountViewState::new();
+        assert_eq!(state.cursor, 0);
+        state.select(3);
+        assert_eq!(state.cursor, 3);
+    }
+
+    #[test]
+    fn select_does_nothing_while_a_field_is_being_edited() {
+        let mut state = AccountViewState::new();
+        state.editing = true;
+        state.cursor = 1;
+        state.select(4);
+        assert_eq!(state.cursor, 1, "a click must not steal focus mid-edit");
+    }
+
+    #[test]
+    fn draw_hits_cover_the_remote_signer_and_local_keystore_forms_signed_out() {
+        let state = AccountViewState::new();
+        let status = signed_out(false, vec![]);
+        let backend = TestBackend::new(110, 34);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut hits = Vec::new();
+        terminal
+            .draw(|frame| {
+                hits = draw(frame, frame.area(), &state, &status, None, None, None);
+            })
+            .unwrap();
+
+        let list = targets(Some(&status), None, None, state.local_mode, false);
+        let index_of = |target: Target| list.iter().position(|t| *t == target).unwrap();
+        let indices: Vec<usize> = hits.iter().map(|(_, index)| *index).collect();
+        for target in [
+            Target::BunkerUri,
+            Target::ConnectBunker,
+            Target::ModeGenerate,
+            Target::ModeNsec,
+            Target::ModeNip06,
+            Target::SubmitLocal,
+        ] {
+            assert!(
+                indices.contains(&index_of(target)),
+                "expected a hit for {target:?}"
+            );
+        }
+        // No target shares a row with another in these two forms — one row,
+        // one target — so there is exactly one hit per target above and
+        // nothing else (no hit for the two description lines or the blank
+        // spacers).
+        assert_eq!(hits.len(), 6);
+    }
+
+    #[test]
+    fn draw_hits_include_sign_out_signed_in() {
+        let mut state = AccountViewState::new();
+        let status = signed_in();
+        state.cursor = 0; // SignOut is the first (only) target signed in with no profiles
+        let backend = TestBackend::new(110, 34);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut hits = Vec::new();
+        terminal
+            .draw(|frame| {
+                hits = draw(frame, frame.area(), &state, &status, None, None, None);
+            })
+            .unwrap();
+        assert_eq!(hits, vec![(hits[0].0, 0)], "SignOut is target index 0");
+    }
+
+    #[test]
+    fn draw_hands_back_no_hits_while_the_chain_seed_confirm_covers_the_view() {
+        use crate::widgets::confirm::Confirm;
+        let mut state = AccountViewState::new();
+        let status = signed_in();
+        state.chain_seed.confirm = Some(Confirm::new("Publish", vec!["...".to_string()], ()));
+        let backend = TestBackend::new(110, 34);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut hits = Vec::new();
+        terminal
+            .draw(|frame| {
+                hits = draw(frame, frame.area(), &state, &status, None, None, None);
+            })
+            .unwrap();
+        assert!(hits.is_empty());
     }
 
     // -- rendering -----------------------------------------------------------

@@ -759,12 +759,15 @@ pub fn handle_key(state: &mut WorkloadsViewState, key: KeyEvent) -> Option<Comma
     }
 }
 
+/// Returns the card list's row hits ([`draw_list`]) — empty while a confirm
+/// or the budget-entry popup covers the screen, the same "a popup blocks
+/// what is under it" rule `handle_key` already follows for those two.
 pub fn draw(
     frame: &mut Frame,
     area: Rect,
     state: &WorkloadsViewState,
     gateway_domain: Option<&str>,
-) {
+) -> Vec<(u16, usize)> {
     let content = if let Some(message) = state.error.as_deref().or(state.status.as_deref()) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -778,7 +781,7 @@ pub fn draw(
 
     let Some(dashboard) = &state.dashboard else {
         draw_placeholder(frame, content, "Reading Workloads\u{2026}");
-        return;
+        return Vec::new();
     };
 
     let cards = filtered(dashboard, &state.list);
@@ -788,7 +791,7 @@ pub fn draw(
         .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
         .split(content);
 
-    draw_list(frame, cols[0], &cards, state, gateway_domain);
+    let hits = draw_list(frame, cols[0], &cards, state, gateway_domain);
     draw_detail(
         frame,
         cols[1],
@@ -803,6 +806,11 @@ pub fn draw(
     if let Some(entry) = &state.budget_entry {
         draw_budget_entry(frame, area, entry);
     }
+
+    if state.confirm.is_some() || state.budget_entry.is_some() {
+        return Vec::new();
+    }
+    hits
 }
 
 /// The budget field's own tiny popup — a text field, not the whole
@@ -878,13 +886,18 @@ fn draw_placeholder(frame: &mut Frame, area: Rect, message: &str) {
     );
 }
 
+/// Draws the card list and returns each visible row's screen `y` alongside
+/// its index into `cards` — what a mouse click selects (ADR 0028: "mouse
+/// clicks select tabs and rows"), matching [`WorkloadsViewState::list`]'s
+/// own `selected`. Offset by one for [`header_line`], which is drawn but
+/// never itself a hit.
 fn draw_list(
     frame: &mut Frame,
     area: Rect,
     cards: &[&WorkloadCard],
     state: &WorkloadsViewState,
     gateway_domain: Option<&str>,
-) {
+) -> Vec<(u16, usize)> {
     let title = format!(
         " Workloads{}",
         state.list.title_suffix(
@@ -906,7 +919,7 @@ fn draw_list(
             Paragraph::new(message).style(Style::default().fg(Color::DarkGray)),
             inner,
         );
-        return;
+        return Vec::new();
     }
 
     let mut lines = Vec::with_capacity(cards.len() + 1);
@@ -916,6 +929,12 @@ fn draw_list(
         lines.push(row_line(card, selected, gateway_domain));
     }
     frame.render_widget(Paragraph::new(lines), inner);
+
+    (0..cards.len())
+        .map(|index| inner.y + 1 + index as u16)
+        .take_while(|row| *row < inner.y + inner.height)
+        .zip(0..cards.len())
+        .collect()
 }
 
 /// Cuts `text` to at most `max` characters, `…`-suffixed when it had to.
@@ -1473,7 +1492,7 @@ mod tests {
                     frame.area(),
                     state,
                     Some("gw.devnet.toonprotocol.dev"),
-                )
+                );
             })
             .unwrap();
         buffer_to_string(terminal.backend().buffer())
@@ -1489,6 +1508,74 @@ mod tests {
             out.push('\n');
         }
         out
+    }
+
+    // ---- mouse row hits (ADR 0028: "mouse clicks select tabs and rows") ----
+
+    #[test]
+    fn draw_hits_skip_the_header_row_and_index_into_the_card_list() {
+        let mut state = WorkloadsViewState::new();
+        state.dashboard = Some(dashboard(vec![
+            card(
+                "b2e292ee009eb3fc064aaa7a1bc70a28adc1039f495751d4caa0cb9c08fd8abd",
+                LeaseLife::Running,
+            ),
+            card(
+                "c3e292ee009eb3fc064aaa7a1bc70a28adc1039f495751d4caa0cb9c08fd8ab1",
+                LeaseLife::Running,
+            ),
+        ]));
+        let backend = TestBackend::new(150, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut hits = Vec::new();
+        terminal
+            .draw(|frame| {
+                hits = draw(frame, frame.area(), &state, None);
+            })
+            .unwrap();
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].1, 0);
+        assert_eq!(hits[1].1, 1);
+        assert_eq!(hits[1].0, hits[0].0 + 1, "rows are consecutive");
+    }
+
+    #[test]
+    fn clicking_a_row_only_selects_it_never_opens_a_confirm() {
+        let mut state = WorkloadsViewState::new();
+        state.dashboard = Some(dashboard(vec![
+            card(
+                "b2e292ee009eb3fc064aaa7a1bc70a28adc1039f495751d4caa0cb9c08fd8abd",
+                LeaseLife::Running,
+            ),
+            card(
+                "c3e292ee009eb3fc064aaa7a1bc70a28adc1039f495751d4caa0cb9c08fd8ab1",
+                LeaseLife::Running,
+            ),
+        ]));
+        assert_eq!(state.list.selected, 0);
+        state.list.selected = 1;
+        assert_eq!(state.list.selected, 1);
+        assert!(state.confirm.is_none());
+    }
+
+    #[test]
+    fn draw_hands_back_no_hits_while_a_confirm_or_the_budget_entry_covers_the_list() {
+        let mut state = WorkloadsViewState::new();
+        state.dashboard = Some(dashboard(vec![card(
+            "b2e292ee009eb3fc064aaa7a1bc70a28adc1039f495751d4caa0cb9c08fd8abd",
+            LeaseLife::Running,
+        )]));
+        handle_key(&mut state, key(KeyCode::Char('x'))); // opens a terminate confirm
+        assert!(state.confirm.is_some());
+        let backend = TestBackend::new(150, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut hits = Vec::new();
+        terminal
+            .draw(|frame| {
+                hits = draw(frame, frame.area(), &state, None);
+            })
+            .unwrap();
+        assert!(hits.is_empty());
     }
 
     #[test]

@@ -161,7 +161,13 @@ impl ListingPicker {
     /// Draws the flattened Provider/Listing list into `area`, scrolled so
     /// the selected row is always on screen. `now_ms` ages every Liveness
     /// shown (see module docs).
-    pub fn draw(&self, frame: &mut Frame, area: Rect, now_ms: i64) {
+    ///
+    /// Returns each on-screen Listing row's `y`, paired with its index into
+    /// [`Self::rows`] — what [`Self::select`] takes — for mouse hit-testing
+    /// (ADR 0028: "mouse clicks select tabs and rows"). A header row is
+    /// never one of them, the same "never selectable" rule
+    /// [`Self::move_selection`] already follows for `j`/`k`.
+    pub fn draw(&self, frame: &mut Frame, area: Rect, now_ms: i64) -> Vec<(u16, usize)> {
         let lines: Vec<Line> = self
             .rows
             .iter()
@@ -176,8 +182,29 @@ impl ListingPicker {
                 .saturating_sub(height.saturating_sub(1))
                 .min(lines.len().saturating_sub(height))
         };
-        let visible: Vec<Line> = lines.into_iter().skip(offset).take(height).collect();
+        let visible: Vec<Line> = lines.iter().skip(offset).take(height).cloned().collect();
         frame.render_widget(Paragraph::new(visible), area);
+
+        self.rows
+            .iter()
+            .enumerate()
+            .skip(offset)
+            .take(height)
+            .filter(|(_, row)| matches!(row, PickerRow::Listing(..)))
+            .map(|(index, _)| (area.y + (index - offset) as u16, index))
+            .collect()
+    }
+
+    /// Selects `rows_index` directly — what a mouse click on a Listing row
+    /// asks for ([`Self::draw`] never hands one back for a header row, so
+    /// this defensively ignores one too, mirroring `move_selection`'s own
+    /// "never a header" rule). Never fires an action: a click only moves
+    /// the selection, same as `j`/`k` — `Enter` (or, embedding this,
+    /// whatever key opens the detail) still does the opening.
+    pub fn select(&mut self, rows_index: usize) {
+        if matches!(self.rows.get(rows_index), Some(PickerRow::Listing(..))) {
+            self.selected = rows_index;
+        }
     }
 
     fn row_line(&self, row: &PickerRow, now_ms: i64) -> Line<'static> {
@@ -707,7 +734,17 @@ fn message_paragraph(text: &str) -> Paragraph<'static> {
 /// Draws the whole Directory view: filter bar, relay line, the Provider/
 /// Listing list (or a message when there is nothing to show), and the
 /// detail overlay when one is open.
-pub fn draw(frame: &mut Frame, area: Rect, state: &DirectoryViewState, now_ms: i64, loading: bool) {
+///
+/// Returns the picker's own row hits ([`ListingPicker::draw`]) — empty while
+/// the detail popup covers them, since a click through a popup must not
+/// reach what is underneath it, the same rule its own key handling follows.
+pub fn draw(
+    frame: &mut Frame,
+    area: Rect,
+    state: &DirectoryViewState,
+    now_ms: i64,
+    loading: bool,
+) -> Vec<(u16, usize)> {
     let block = Block::default().title(" Directory ").borders(Borders::ALL);
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -728,6 +765,7 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &DirectoryViewState, now_ms: i
         None => frame.render_widget(Paragraph::new(Line::raw("")), rows[1]),
     }
 
+    let mut hits = Vec::new();
     if let Some(reason) = &state.unconfigured_reason {
         frame.render_widget(message_paragraph(reason), rows[2]);
     } else if state.picker.is_empty() {
@@ -740,14 +778,17 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &DirectoryViewState, now_ms: i
         };
         frame.render_widget(message_paragraph(message), rows[2]);
     } else {
-        state.picker.draw(frame, rows[2], now_ms);
+        hits = state.picker.draw(frame, rows[2], now_ms);
     }
 
     if state.detail_open {
         if let Some((provider, listing)) = state.picker.selected_listing() {
             draw_detail(frame, area, provider, listing, now_ms);
         }
+        return Vec::new();
     }
+
+    hits
 }
 
 fn draw_detail(
@@ -1297,13 +1338,90 @@ mod tests {
         assert!(!state.detail_open);
     }
 
+    // ---- mouse row hits (ADR 0028: "mouse clicks select tabs and rows") ----
+
+    #[test]
+    fn picker_draw_hits_never_include_a_header_row() {
+        let mut state = DirectoryViewState::new();
+        state.apply(ok_directory());
+        let backend = TestBackend::new(100, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut hits = Vec::new();
+        terminal
+            .draw(|frame| {
+                hits = state.picker.draw(frame, frame.area(), 0);
+            })
+            .unwrap();
+        // rows: Header(acme), basic, ci, gpu, Header(shady), quiet — six
+        // rows, four of them Listings.
+        assert_eq!(hits.len(), 4);
+        let indices: Vec<usize> = hits.iter().map(|(_, index)| *index).collect();
+        assert_eq!(indices, vec![1, 2, 3, 5]);
+    }
+
+    #[test]
+    fn clicking_a_listing_row_selects_it_but_never_opens_the_detail() {
+        let mut state = DirectoryViewState::new();
+        state.apply(ok_directory());
+        assert_eq!(state.picker.selected_listing().unwrap().1.name, "basic");
+        state.picker.select(3); // the "gpu" row
+        assert_eq!(state.picker.selected_listing().unwrap().1.name, "gpu");
+        assert!(!state.detail_open, "a click only selects, never opens");
+    }
+
+    #[test]
+    fn clicking_a_header_row_does_nothing() {
+        let mut state = DirectoryViewState::new();
+        state.apply(ok_directory());
+        state.picker.select(4); // Header(shady) — never a hit in practice,
+                                // but select() is defensive about it too.
+        assert_eq!(
+            state.picker.selected_listing().unwrap().1.name,
+            "basic",
+            "selection unchanged"
+        );
+    }
+
+    #[test]
+    fn the_whole_views_draw_hands_back_the_pickers_own_hits() {
+        let mut state = DirectoryViewState::new();
+        state.apply(ok_directory());
+        let backend = TestBackend::new(100, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut hits = Vec::new();
+        terminal
+            .draw(|frame| {
+                hits = draw(frame, frame.area(), &state, 0, false);
+            })
+            .unwrap();
+        assert_eq!(hits.len(), 4);
+    }
+
+    #[test]
+    fn draw_hands_back_no_hits_while_the_detail_popup_covers_the_list() {
+        let mut state = DirectoryViewState::new();
+        state.apply(ok_directory());
+        state.detail_open = true;
+        let backend = TestBackend::new(100, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut hits = Vec::new();
+        terminal
+            .draw(|frame| {
+                hits = draw(frame, frame.area(), &state, 0, false);
+            })
+            .unwrap();
+        assert!(hits.is_empty());
+    }
+
     // ---- rendering ----
 
     fn render(state: &DirectoryViewState, now_ms: i64, loading: bool) -> String {
         let backend = TestBackend::new(100, 30);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
-            .draw(|frame| draw(frame, frame.area(), state, now_ms, loading))
+            .draw(|frame| {
+                draw(frame, frame.area(), state, now_ms, loading);
+            })
             .unwrap();
         buffer_to_string(terminal.backend().buffer())
     }

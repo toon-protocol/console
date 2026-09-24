@@ -155,20 +155,27 @@ pub fn handle_key(state: &mut DocsViewState, key: KeyEvent) -> Option<Command> {
     }
 }
 
-pub fn draw(frame: &mut Frame, area: Rect, state: &DocsViewState) {
+/// Returns the reading list's row hits (empty while an article is open —
+/// [`draw_article`] has no list of its own to click a row of) — what a
+/// mouse click selects (ADR 0028: "mouse clicks select tabs and rows"),
+/// matching [`DocsViewState::selected`].
+pub fn draw(frame: &mut Frame, area: Rect, state: &DocsViewState) -> Vec<(u16, usize)> {
     match &state.page {
-        Some(page) => draw_article(
-            frame,
-            area,
-            &page.doc.title,
-            &page.doc.source,
-            page.doc.address.as_deref(),
-            page.index.fallback.as_deref(),
-            &page.doc.markdown,
-            state.scroll,
-            state.link_index,
-            state.open_error.as_deref(),
-        ),
+        Some(page) => {
+            draw_article(
+                frame,
+                area,
+                &page.doc.title,
+                &page.doc.source,
+                page.doc.address.as_deref(),
+                page.index.fallback.as_deref(),
+                &page.doc.markdown,
+                state.scroll,
+                state.link_index,
+                state.open_error.as_deref(),
+            );
+            Vec::new()
+        }
         None => draw_list(
             frame,
             area,
@@ -230,7 +237,7 @@ fn draw_list(
     error: Option<&str>,
     open_error: Option<&str>,
     selected: usize,
-) {
+) -> Vec<(u16, usize)> {
     let title = if loading {
         " Docs — reading… "
     } else {
@@ -251,23 +258,40 @@ fn draw_list(
     lines.extend(error_lines("That page could not be opened", open_error));
     lines.extend(fallback_lines(index.and_then(|i| i.fallback.as_deref())));
 
-    match index {
-        None => lines.push(Line::from(Span::styled(
-            "Reading the documentation…",
-            Style::default().fg(Color::DarkGray),
-        ))),
-        Some(index) if index.docs.is_empty() => lines.push(Line::from(Span::styled(
-            "No documentation pages.",
-            Style::default().fg(Color::DarkGray),
-        ))),
+    // However many lines came before it, this is where the first doc row
+    // will land — the offset every hit below is anchored to.
+    let first_row = lines.len();
+
+    let docs_len = match index {
+        None => {
+            lines.push(Line::from(Span::styled(
+                "Reading the documentation…",
+                Style::default().fg(Color::DarkGray),
+            )));
+            0
+        }
+        Some(index) if index.docs.is_empty() => {
+            lines.push(Line::from(Span::styled(
+                "No documentation pages.",
+                Style::default().fg(Color::DarkGray),
+            )));
+            0
+        }
         Some(index) => {
             for (at, doc) in index.docs.iter().enumerate() {
                 lines.push(doc_row(doc, at == selected));
             }
+            index.docs.len()
         }
-    }
+    };
 
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+
+    (0..docs_len)
+        .map(|at| inner.y + (first_row + at) as u16)
+        .take_while(|row| *row < inner.y + inner.height)
+        .zip(0..docs_len)
+        .collect()
 }
 
 fn subtitle(index: Option<&DocsIndex>) -> String {
@@ -388,7 +412,9 @@ mod tests {
         let backend = TestBackend::new(100, 30);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
-            .draw(|frame| draw(frame, frame.area(), state))
+            .draw(|frame| {
+                draw(frame, frame.area(), state);
+            })
             .unwrap();
         buffer_to_string(terminal.backend().buffer())
     }
@@ -502,6 +528,52 @@ mod tests {
         let mut state = DocsViewState::new();
         state.index = Some(sample_index());
         render(&state);
+    }
+
+    // ---- mouse row hits (ADR 0028: "mouse clicks select tabs and rows") ---
+
+    #[test]
+    fn draw_hits_index_into_the_reading_list_past_the_subtitle_and_blank_line() {
+        let mut state = DocsViewState::new();
+        state.index = Some(sample_index());
+        let backend = TestBackend::new(100, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut hits = Vec::new();
+        terminal
+            .draw(|frame| {
+                hits = draw(frame, frame.area(), &state);
+            })
+            .unwrap();
+        // sample_index() has two docs, and no error/fallback lines here.
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].1, 0);
+        assert_eq!(hits[1].1, 1);
+        assert_eq!(hits[1].0, hits[0].0 + 1, "rows are consecutive");
+    }
+
+    #[test]
+    fn draw_hands_back_no_hits_while_an_article_is_open() {
+        let mut state = DocsViewState::new();
+        state.page = Some(sample_page());
+        let backend = TestBackend::new(100, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut hits = Vec::new();
+        terminal
+            .draw(|frame| {
+                hits = draw(frame, frame.area(), &state);
+            })
+            .unwrap();
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn clicking_a_row_only_selects_it_and_a_second_click_reselects() {
+        let mut state = DocsViewState::new();
+        state.index = Some(sample_index());
+        assert_eq!(state.selected, 0);
+        state.selected = 1;
+        assert_eq!(state.selected, 1);
+        assert!(state.page.is_none(), "a click never opens the article");
     }
 
     #[test]

@@ -16,7 +16,21 @@ use ratatui::Frame;
 use crate::app::{App, DaemonStatus, View};
 use crate::views;
 
-pub fn draw(frame: &mut Frame, app: &App) -> Vec<(u16, View)> {
+/// Where things landed on screen this frame, for `app::handle_mouse` to test
+/// a click against next event (ADR 0028: "mouse clicks select tabs and
+/// rows") — the App has no business knowing its own screen coordinates, only
+/// `ui` draws, so only `ui` can say.
+#[derive(Default)]
+pub struct Hits {
+    /// Each sidebar row's `y`, paired with the [`View`] it selects.
+    pub sidebar: Vec<(u16, View)>,
+    /// The current view's own main list, if it has one — each visible row's
+    /// `y`, paired with its index into that view's own (already filtered)
+    /// item list, the same index `j`/`k` would land the selection on.
+    pub rows: Vec<(u16, usize)>,
+}
+
+pub fn draw(frame: &mut Frame, app: &App) -> Hits {
     let area = frame.area();
     let outer = Layout::default()
         .direction(Direction::Vertical)
@@ -34,15 +48,15 @@ pub fn draw(frame: &mut Frame, app: &App) -> Vec<(u16, View)> {
         .constraints([Constraint::Length(16), Constraint::Min(20)])
         .split(outer[1]);
 
-    let hits = draw_sidebar(frame, body[0], app.view);
-    draw_content(frame, body[1], app);
+    let sidebar = draw_sidebar(frame, body[0], app.view);
+    let rows = draw_content(frame, body[1], app);
     draw_footer(frame, outer[2], app);
 
     if app.help_open {
         draw_help(frame, area);
     }
 
-    hits
+    Hits { sidebar, rows }
 }
 
 fn status_span(status: &DaemonStatus) -> Span<'static> {
@@ -134,19 +148,28 @@ fn draw_sidebar(frame: &mut Frame, area: Rect, current: View) -> Vec<(u16, View)
     hits
 }
 
-fn draw_content(frame: &mut Frame, area: Rect, app: &App) {
+/// Draws the current view and returns its main list's row hits, if it has
+/// one — empty for Health and Funds (no list `handle_mouse` selects a row
+/// of today) and for the daemon-down screen.
+fn draw_content(frame: &mut Frame, area: Rect, app: &App) -> Vec<(u16, usize)> {
     match (app.view, &app.daemon_status) {
-        (_, DaemonStatus::Down(message)) => draw_down(frame, area, message),
-        (View::Health, _) => match &app.health {
-            Some(health) => views::health::draw(frame, area, health),
-            None => draw_loading(frame, area, "Health"),
-        },
+        (_, DaemonStatus::Down(message)) => {
+            draw_down(frame, area, message);
+            Vec::new()
+        }
+        (View::Health, _) => {
+            match &app.health {
+                Some(health) => views::health::draw(frame, area, health),
+                None => draw_loading(frame, area, "Health"),
+            }
+            Vec::new()
+        }
         (View::Workloads, _) => {
             let gateway_domain = app
                 .health
                 .as_ref()
                 .map(|h| h.profile.gateway_domain.as_str());
-            views::workloads::draw(frame, area, &app.workloads, gateway_domain);
+            views::workloads::draw(frame, area, &app.workloads, gateway_domain)
         }
         (View::Directory, _) => views::directory::draw(
             frame,
@@ -173,13 +196,19 @@ fn draw_content(frame: &mut Frame, area: Rect, app: &App) {
                     error.as_deref(),
                 )
             }
-            None => draw_loading(frame, area, "Account"),
+            None => {
+                draw_loading(frame, area, "Account");
+                Vec::new()
+            }
         },
         // Funds (TOON_Network#147) draws its own loading/not-yet/ready
         // states from `app.funds` — unlike Health there is no separate
         // `draw_loading` arm here, since the view's own first line already
         // says "Reading your funds…".
-        (View::Funds, _) => views::funds::draw(frame, area, &app.funds),
+        (View::Funds, _) => {
+            views::funds::draw(frame, area, &app.funds);
+            Vec::new()
+        }
         // New workload (TOON_Network#146) draws its own per-stage
         // loading/empty states from `app.new_workload`, the same as Funds.
         // Every one of the seven sidebar views now has a dedicated arm —
@@ -301,7 +330,7 @@ const HELP_LINES: &[&str] = &[
     "Enter      Account: edit a field, or act on a button",
     "Esc        Account: stop typing (while editing a field)",
     "y, Enter   Account: confirm a Chain Seed publish (two keys, on purpose)",
-    "mouse      click a sidebar row to select it",
+    "mouse      click a sidebar row to select it, or a list row to select IT",
     "?          toggle this help",
     "q / Esc    quit",
     "-- Funds --",
@@ -399,12 +428,13 @@ mod tests {
         let app = App::new();
         let backend = TestBackend::new(100, 30);
         let mut terminal = Terminal::new(backend).unwrap();
-        let mut hits = Vec::new();
+        let mut hits = Hits::default();
         terminal
             .draw(|frame| {
                 hits = draw(frame, &app);
             })
             .unwrap();
+        let hits = hits.sidebar;
         assert_eq!(hits.len(), View::ALL.len());
         for (offset, (_, view)) in hits.iter().enumerate() {
             assert_eq!(*view, View::ALL[offset]);

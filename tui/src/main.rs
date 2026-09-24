@@ -171,7 +171,7 @@ fn restore_terminal() -> io::Result<()> {
 async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()> {
     let mut app = App::new();
     let mut client: Option<Arc<DaemonClient>> = None;
-    let mut sidebar_hits = Vec::new();
+    let mut hits = ui::Hits::default();
     let (tx, mut rx) = unbounded_channel::<RuntimeEvent>();
 
     spawn_connect_loop(tx.clone());
@@ -183,7 +183,7 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()
 
     loop {
         terminal.draw(|frame| {
-            sidebar_hits = ui::draw(frame, &app);
+            hits = ui::draw(frame, &app);
         })?;
 
         tokio::select! {
@@ -451,7 +451,7 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Result<()
                         }
                     }
                     Event::Mouse(mouse) => {
-                        handle_mouse(&mut app, mouse, &sidebar_hits);
+                        handle_mouse(&mut app, mouse, &hits.sidebar, &hits.rows);
                     }
                     _ => {}
                 }

@@ -896,17 +896,35 @@ fn preflight_handle_key(state: &mut NewWorkloadViewState, key: KeyEvent) -> Opti
 /* Drawing                                                                    */
 /* -------------------------------------------------------------------------- */
 
-pub fn draw(frame: &mut Frame, area: Rect, state: &NewWorkloadViewState, now_ms: i64) {
-    match state.stage {
+/// Returns the current stage's row hits — the Gallery's Template list or a
+/// picker's Listing rows — what a mouse click selects (ADR 0028: "mouse
+/// clicks select tabs and rows"). Form and Preflight have no row list of
+/// their own, and a confirm open covers whatever hits the stage underneath
+/// it would have had, the same rule every other popup here follows.
+pub fn draw(
+    frame: &mut Frame,
+    area: Rect,
+    state: &NewWorkloadViewState,
+    now_ms: i64,
+) -> Vec<(u16, usize)> {
+    let hits = match state.stage {
         Stage::Gallery => draw_gallery(frame, area, state),
-        Stage::Form => draw_form(frame, area, state),
+        Stage::Form => {
+            draw_form(frame, area, state);
+            Vec::new()
+        }
         Stage::Listing => draw_listing(frame, area, state, now_ms),
         Stage::Standbys => draw_standbys(frame, area, state, now_ms),
-        Stage::Preflight => draw_preflight(frame, area, state),
-    }
+        Stage::Preflight => {
+            draw_preflight(frame, area, state);
+            Vec::new()
+        }
+    };
     if let Some(confirm) = &state.confirm {
         crate::widgets::confirm::draw(frame, area, confirm);
+        return Vec::new();
     }
+    hits
 }
 
 fn label_span(text: &str) -> Span<'static> {
@@ -943,7 +961,7 @@ fn push_error(lines: &mut Vec<Line<'static>>, errors: &[(FormTarget, String)], t
     }
 }
 
-fn draw_gallery(frame: &mut Frame, area: Rect, state: &NewWorkloadViewState) {
+fn draw_gallery(frame: &mut Frame, area: Rect, state: &NewWorkloadViewState) -> Vec<(u16, usize)> {
     let rows = gallery_rows(state);
     let title = format!(
         " Templates{} ",
@@ -965,14 +983,14 @@ fn draw_gallery(frame: &mut Frame, area: Rect, state: &NewWorkloadViewState) {
                 "Nothing read yet."
             };
             frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }), inner);
-            return;
+            return Vec::new();
         }
         Some(TemplateGallery::Unconfigured { reason }) => {
             frame.render_widget(
                 Paragraph::new(reason.as_str()).wrap(Wrap { trim: false }),
                 inner,
             );
-            return;
+            return Vec::new();
         }
         Some(TemplateGallery::Ok { .. }) => {}
     }
@@ -983,7 +1001,7 @@ fn draw_gallery(frame: &mut Frame, area: Rect, state: &NewWorkloadViewState) {
                 .wrap(Wrap { trim: false }),
             inner,
         );
-        return;
+        return Vec::new();
     }
 
     let mut lines: Vec<Line> = rows
@@ -999,6 +1017,12 @@ fn draw_gallery(frame: &mut Frame, area: Rect, state: &NewWorkloadViewState) {
         )));
     }
     frame.render_widget(Paragraph::new(lines), inner);
+
+    (0..rows.len())
+        .map(|index| inner.y + index as u16)
+        .take_while(|row| *row < inner.y + inner.height)
+        .zip(0..rows.len())
+        .collect()
 }
 
 fn template_line(template: &TemplateView, selected: bool) -> Line<'static> {
@@ -1096,7 +1120,12 @@ fn draw_form(frame: &mut Frame, area: Rect, state: &NewWorkloadViewState) {
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
-fn draw_listing(frame: &mut Frame, area: Rect, state: &NewWorkloadViewState, now_ms: i64) {
+fn draw_listing(
+    frame: &mut Frame,
+    area: Rect,
+    state: &NewWorkloadViewState,
+    now_ms: i64,
+) -> Vec<(u16, usize)> {
     let block = Block::default()
         .title(" Choose a Listing ")
         .borders(Borders::ALL);
@@ -1108,7 +1137,7 @@ fn draw_listing(frame: &mut Frame, area: Rect, state: &NewWorkloadViewState, now
             Paragraph::new(reason.as_str()).wrap(Wrap { trim: false }),
             inner,
         );
-        return;
+        return Vec::new();
     }
     if state.picker.is_empty() {
         frame.render_widget(
@@ -1116,12 +1145,17 @@ fn draw_listing(frame: &mut Frame, area: Rect, state: &NewWorkloadViewState, now
                 .wrap(Wrap { trim: false }),
             inner,
         );
-        return;
+        return Vec::new();
     }
-    state.picker.draw(frame, inner, now_ms);
+    state.picker.draw(frame, inner, now_ms)
 }
 
-fn draw_standbys(frame: &mut Frame, area: Rect, state: &NewWorkloadViewState, now_ms: i64) {
+fn draw_standbys(
+    frame: &mut Frame,
+    area: Rect,
+    state: &NewWorkloadViewState,
+    now_ms: i64,
+) -> Vec<(u16, usize)> {
     let added_height = (state.standbys.len() as u16 + 2).max(3);
     let rows = Layout::default()
         .direction(Direction::Vertical)
@@ -1162,8 +1196,9 @@ fn draw_standbys(frame: &mut Frame, area: Rect, state: &NewWorkloadViewState, no
                 .wrap(Wrap { trim: false }),
             picker_inner,
         );
+        Vec::new()
     } else {
-        state.standby_picker.draw(frame, picker_inner, now_ms);
+        state.standby_picker.draw(frame, picker_inner, now_ms)
     }
 }
 
@@ -1787,7 +1822,9 @@ mod tests {
         let backend = TestBackend::new(120, 30);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
-            .draw(|frame| draw(frame, frame.area(), state, 0))
+            .draw(|frame| {
+                draw(frame, frame.area(), state, 0);
+            })
             .unwrap();
         buffer_to_string(terminal.backend().buffer())
     }
@@ -1802,6 +1839,82 @@ mod tests {
             out.push('\n');
         }
         out
+    }
+
+    // ---- mouse row hits (ADR 0028: "mouse clicks select tabs and rows") ---
+
+    #[test]
+    fn gallery_draw_hits_index_into_the_template_list() {
+        let mut state = NewWorkloadViewState::new();
+        state.gallery = Some(gallery(vec![
+            available_template("static-site"),
+            unavailable_template("broken-image"),
+        ]));
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut hits = Vec::new();
+        terminal
+            .draw(|frame| {
+                hits = draw(frame, frame.area(), &state, 0);
+            })
+            .unwrap();
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].1, 0);
+        assert_eq!(hits[1].1, 1);
+    }
+
+    #[test]
+    fn listing_stage_draw_hits_come_from_the_embedded_picker() {
+        let mut state = NewWorkloadViewState::new();
+        state.stage = Stage::Listing;
+        state.all_providers = vec![
+            provider(&"1".repeat(64), true),
+            provider(&"2".repeat(64), true),
+        ];
+        state.picker.set_providers(state.all_providers.clone());
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut hits = Vec::new();
+        terminal
+            .draw(|frame| {
+                hits = draw(frame, frame.area(), &state, 0);
+            })
+            .unwrap();
+        // Two providers, one listing each: two Header rows, two Listing rows.
+        assert_eq!(hits.len(), 2);
+    }
+
+    #[test]
+    fn form_and_preflight_stages_have_no_row_hits() {
+        let mut state = NewWorkloadViewState::new();
+        state.template = Some(available_template("static-site"));
+        state.form = FormFields::new(state.template.as_ref().unwrap());
+        state.stage = Stage::Form;
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut hits = Vec::new();
+        terminal
+            .draw(|frame| {
+                hits = draw(frame, frame.area(), &state, 0);
+            })
+            .unwrap();
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn a_click_on_a_picker_row_only_selects_it_never_chooses() {
+        let mut state = NewWorkloadViewState::new();
+        state.all_providers = vec![
+            provider(&"1".repeat(64), true),
+            provider(&"2".repeat(64), true),
+        ];
+        state.picker.set_providers(state.all_providers.clone());
+        state.picker.select(2); // the second provider's Listing row
+        assert_eq!(
+            state.stage,
+            Stage::Gallery,
+            "a click never advances the stage"
+        );
     }
 
     #[test]

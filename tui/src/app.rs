@@ -467,7 +467,17 @@ fn global_key(app: &mut App, key: KeyEvent) -> Command {
 /// `sidebar_hits` is the on-screen row for each view, built by the layout
 /// code that drew the sidebar this frame — the App has no idea where things
 /// are on screen, and it should not have to.
-pub fn handle_mouse(app: &mut App, mouse: MouseEvent, sidebar_hits: &[(u16, View)]) -> Command {
+/// `row_hits` is the current view's own main list, if it has one —
+/// `ui::Hits::rows`, built by the same frame's `ui::draw` — and a click on
+/// one of them only MOVES that view's own selection to the row's index,
+/// the same as `j`/`k`: a click never fires an action of its own, and
+/// `Enter` (or whatever key opens/acts on the selection) still does that.
+pub fn handle_mouse(
+    app: &mut App,
+    mouse: MouseEvent,
+    sidebar_hits: &[(u16, View)],
+    row_hits: &[(u16, usize)],
+) -> Command {
     if app.help_open {
         return Command::None;
     }
@@ -478,8 +488,38 @@ pub fn handle_mouse(app: &mut App, mouse: MouseEvent, sidebar_hits: &[(u16, View
                 return Command::None;
             }
         }
+        for (row, index) in row_hits {
+            if *row == mouse.row {
+                select_row(app, *index);
+                return Command::None;
+            }
+        }
     }
     Command::None
+}
+
+/// Selects row `index` of whatever list the current view is showing — see
+/// [`handle_mouse`]'s own doc comment. A view with no clickable list of its
+/// own (Health, Funds) does nothing, matching `ui::draw_content` never
+/// handing back a row hit for either.
+fn select_row(app: &mut App, index: usize) {
+    match app.view {
+        View::Workloads => app.workloads.list.selected = index,
+        View::New => match app.new_workload.stage {
+            new_workload::Stage::Gallery => app.new_workload.gallery_list.selected = index,
+            new_workload::Stage::Listing => app.new_workload.picker.select(index),
+            new_workload::Stage::Standbys => app.new_workload.standby_picker.select(index),
+            new_workload::Stage::Form | new_workload::Stage::Preflight => {}
+        },
+        View::Directory => app.directory.picker.select(index),
+        View::Docs => {
+            if app.docs.page.is_none() {
+                app.docs.selected = index;
+            }
+        }
+        View::Account => app.account_view.select(index),
+        View::Funds | View::Health => {}
+    }
 }
 
 #[cfg(test)]
@@ -610,7 +650,7 @@ mod tests {
             row: 2,
             modifiers: KeyModifiers::NONE,
         };
-        handle_mouse(&mut app, click, &hits);
+        handle_mouse(&mut app, click, &hits, &[]);
         assert_eq!(app.view, View::New);
     }
 
@@ -626,12 +666,58 @@ mod tests {
             row: 1,
             modifiers: KeyModifiers::NONE,
         };
-        handle_mouse(&mut app, click, &hits);
+        handle_mouse(&mut app, click, &hits, &[]);
         assert_eq!(
             app.view,
             View::Health,
             "click ignored while help covers the screen"
         );
+    }
+
+    #[test]
+    fn clicking_a_row_hit_selects_it_on_the_current_view_and_fires_no_command() {
+        let mut app = App::new();
+        app.view = View::Workloads;
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 2,
+            row: 7,
+            modifiers: KeyModifiers::NONE,
+        };
+        let row_hits = [(7, 2usize)];
+        let command = handle_mouse(&mut app, click, &[], &row_hits);
+        assert_eq!(command, Command::None, "a click only selects, never acts");
+        assert_eq!(app.workloads.list.selected, 2);
+    }
+
+    #[test]
+    fn clicking_a_row_hit_on_the_docs_view_moves_its_selection() {
+        let mut app = App::new();
+        app.view = View::Docs;
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 2,
+            row: 4,
+            modifiers: KeyModifiers::NONE,
+        };
+        handle_mouse(&mut app, click, &[], &[(4, 1usize)]);
+        assert_eq!(app.docs.selected, 1);
+    }
+
+    #[test]
+    fn a_click_that_matches_no_row_or_sidebar_hit_does_nothing() {
+        let mut app = App::new();
+        app.view = View::Workloads;
+        app.workloads.list.selected = 0;
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 2,
+            row: 99,
+            modifiers: KeyModifiers::NONE,
+        };
+        let command = handle_mouse(&mut app, click, &[], &[(7, 2)]);
+        assert_eq!(command, Command::None);
+        assert_eq!(app.workloads.list.selected, 0, "row 99 hit nothing");
     }
 
     #[test]
