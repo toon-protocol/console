@@ -41,7 +41,7 @@ const LIVE = {
       ready: true,
       chainId: 84532,
       drips: { usdc: '1000' },
-      tokenAddress: '0x49beE1Bca5d15Fb0963117923403F9498119a9Ce',
+      tokenAddress: '0x0C996d7c934c79a6255254875607Fe69df25C0E1',
       faucetKey: '0x7eC0c44Fcd62042711b7005c5E96E2Ccc7a30dBd',
       rpcUrl: 'https://sepolia.base.org',
       mintMode: 'ungated-mint',
