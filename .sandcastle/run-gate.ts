@@ -39,7 +39,7 @@ export interface GateResult {
 const MAX_OUTPUT_CHARS = 12_000;
 
 /**
- * npm gate: the steps of ci.yml's `build` job, in the same order. `npm ci` is the
+ * npm gate: the steps of ci.yml's `build` job, in the same order (`npm ci` aside). `npm ci` is the
  * runner's `onSandboxReady` hook, not a step here.
  */
 export const NPM_STEPS: readonly GateStep[] = [
@@ -48,6 +48,8 @@ export const NPM_STEPS: readonly GateStep[] = [
   { name: 'npm test', command: 'npm test' },
   { name: 'npm test:packaging', command: 'npm run test:packaging' },
   { name: 'npm build', command: 'npm run build' },
+  { name: 'sandcastle typecheck', command: 'npm run sandcastle:typecheck' },
+  { name: 'sandcastle test', command: 'npm run sandcastle:test' },
 ];
 
 /**
