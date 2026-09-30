@@ -20,7 +20,9 @@ name: CI
 on:
   push:
     branches: [main]
+  # `synchronize` is what catches a PR that becomes a no-op after its branch is updated.
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
@@ -89,14 +91,33 @@ jobs:
         working-directory: tui
         run: cargo test
 
-  # Fleet no-op merge guard (toon-meta#405), wired INTO this repo's aggregate
-  # required check so it blocks a human merge and not only the auto-merge pass
-  # (toon-meta#408). No `if:` — this workflow also runs on push, where the
-  # guard passes with "no merge result to evaluate", and a job-level `if:`
-  # would make it `skipped` there; a skipped gating job must never read as a
-  # pass (toon-meta#279). No `secrets: inherit` — the guard writes nothing.
+  # No-op merge guard, wired INTO this repo's aggregate required check so it blocks a
+  # human merge and not only the auto-merge pass. It was toon-meta's reusable
+  # empty-pr-guard.yml; the logic now lives in .github/scripts/no-op-merge-guard.sh.
+  # No `if:` — this workflow also runs on push, where the guard passes with "no merge
+  # result to evaluate", and a job-level `if:` would make it `skipped` there; a skipped
+  # gating job must never read as a pass. Its triggers are this workflow's
+  # `on.pull_request` types.
   no-op-merge:
-    uses: toon-protocol/toon-meta/.github/workflows/empty-pr-guard.yml@main
+    name: No-op merge guard
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # The merge commit and both parents; depth 3 as in toon-meta's original.
+      - name: Check out the merge result
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 3
+
+      - name: A merge that changes nothing must not merge green
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
+        run: .github/scripts/no-op-merge-guard.sh
 
   ci-ok:
     name: CI OK
