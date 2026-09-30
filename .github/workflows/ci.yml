@@ -52,6 +52,12 @@ jobs:
 
       - run: npm run test:packaging
 
+      # The AFK factory's runner (.sandcastle/): not a workspace, so `npm run typecheck`
+      # and `npm test` do not reach it.
+      - run: npm run sandcastle:typecheck
+
+      - run: npm run sandcastle:test
+
       # The UI has to actually build — a type error is not the only way a
       # Tailwind 4 or shadcn wiring mistake shows up.
       - run: npm run build
