@@ -14,7 +14,8 @@ function git(dir, ...args) {
   return execFileSync('git', args, { cwd: dir, encoding: 'utf8' }).trim();
 }
 
-// `headChange` is what the PR branch commits; `baseAlso` lands the same content on main.
+// The PR branch changes a.txt; `baseAlso` lands that same content on main first, so the
+// merge result equals main.
 function mergeResult({ baseAlso }) {
   const dir = mkdtempSync(join(tmpdir(), 'no-op-guard-'));
   git(dir, 'init', '-q', '-b', 'main');
@@ -43,7 +44,7 @@ function mergeResult({ baseAlso }) {
 
 function run({ dir, head }, event = 'pull_request') {
   const summary = join(dir, 'summary.md');
-  const r = spawnSync('bash', [guard], {
+  return spawnSync('bash', [guard], {
     cwd: dir,
     encoding: 'utf8',
     env: {
@@ -56,7 +57,6 @@ function run({ dir, head }, event = 'pull_request') {
       PR_CHANGED_FILES: '1',
     },
   });
-  return r;
 }
 
 test('passes a PR whose merge changes files', () => {
