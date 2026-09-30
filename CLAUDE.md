@@ -5,15 +5,24 @@ The TOON Console: a local daemon plus a web UI, opened as an Omarchy web app. Se
 
 ### Issue tracker
 
-Issues are tracked in GitHub Issues on toon-protocol/TOON_Network (via `gh`), not in this
-repository — TOON_Network holds the specs and the tickets for every repo in the fleet
-(ADR 0001). A console change cites its TOON_Network issue number.
+Issues live in this repo's GitHub Issues (`toon-protocol/console`, via the `gh` CLI). See
+`docs/agents/issue-tracker.md`. The fleet's specs and cross-repo tickets live in
+`toon-protocol/TOON_Network` (ADR 0001); a console change cites its TOON_Network issue number.
+
+### Triage labels
+
+The five canonical triage labels, names unchanged. See `docs/agents/triage-labels.md`.
+`ready-for-agent` is also the AFK factory's queue: `agent-implement.yml` builds each unblocked
+`ready-for-agent` issue with `/implement` then `/code-review`, runs this repo's CI gate
+(`.sandcastle/run-gate.ts`, the commands of `ci.yml`'s `build` and `tui` jobs, path-aware), and
+opens a PR labelled `ready-for-human`. `npm run sandcastle:test` covers the runner.
 
 ### Domain docs
 
-The vocabulary and the decisions live in TOON_Network: `CONTEXT.md` (the **Console**
-section: Console, Account, Signer, Chain Seed, Lease Vault) and `docs/adr/` (0019, 0020 and
-0021 for the console). Use those terms here; do not start a second glossary.
+Single-context, with the vocabulary and the decisions in TOON_Network: `CONTEXT.md` (the
+**Console** section: Console, Account, Signer, Chain Seed, Lease Vault) and `docs/adr/` (0019,
+0020 and 0021 for the console). Use those terms here; do not start a second glossary. See
+`docs/agents/domain.md`.
 
 ## House rules
 
