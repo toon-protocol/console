@@ -78,6 +78,8 @@ const NPM_ROOT_FILES = new Set([
  * module exists to prevent. Two things reach across the toolchains:
  *   - `tui/tests/fixture_contract.rs` reads the API fixtures committed under
  *     `packages/daemon/fixtures/api/`, so a change there is a tui change too.
+ *   - `npm run lint` is `eslint .`, which lints `.sandcastle/` too, so a change there is an
+ *     npm change.
  *   - `ci.yml` defines both gates, so a change to it runs both.
  */
 export function stepsForFiles(files: readonly string[]): readonly GateStep[] {
@@ -93,6 +95,7 @@ export function stepsForFiles(files: readonly string[]): readonly GateStep[] {
     (f) =>
       f.startsWith('packages/') ||
       f.startsWith('packaging/') ||
+      f.startsWith('.sandcastle/') ||
       NPM_ROOT_FILES.has(f) ||
       f === '.github/workflows/ci.yml'
   );

@@ -40,6 +40,7 @@ describe('the gate is path-aware', () => {
     for (const file of [
       'packages/ui/src/App.tsx',
       'packaging/packaging.test.mjs',
+      '.sandcastle/run-gate.ts',
       'package.json',
       'package-lock.json',
       'eslint.config.js',
@@ -61,8 +62,8 @@ describe('the gate is path-aware', () => {
     assert.equal(stepsForFiles(['.github/workflows/ci.yml']).length, 8);
   });
 
-  it('docs and runner changes run nothing', () => {
-    assert.deepEqual(stepsForFiles(['docs/spec.md', '.sandcastle/run-gate.ts', 'README.md']), []);
+  it('docs changes run nothing', () => {
+    assert.deepEqual(stepsForFiles(['docs/spec.md', 'README.md']), []);
   });
 
   it('an empty file list runs everything rather than skipping silently', () => {
