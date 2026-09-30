@@ -5,7 +5,7 @@ import { fixPrompt, NPM_STEPS, stepsForFiles, TUI_STEPS } from './run-gate.ts';
 const commands = (files: string[]) => stepsForFiles(files).map((s) => s.command);
 
 describe('the gate mirrors ci.yml', () => {
-  it('runs the build job in order: lint, typecheck, test, test:packaging, build', () => {
+  it('runs the build job in order, ending with the runner own checks', () => {
     assert.deepEqual(
       NPM_STEPS.map((s) => s.command),
       [
@@ -14,6 +14,8 @@ describe('the gate mirrors ci.yml', () => {
         'npm test',
         'npm run test:packaging',
         'npm run build',
+        'npm run sandcastle:typecheck',
+        'npm run sandcastle:test',
       ]
     );
   });
@@ -50,7 +52,7 @@ describe('the gate is path-aware', () => {
   });
 
   it('a change to the committed API fixtures runs both, since the tui reads them', () => {
-    assert.equal(stepsForFiles(['packages/daemon/fixtures/api/status.json']).length, 8);
+    assert.equal(stepsForFiles(['packages/daemon/fixtures/api/status.json']).length, 10);
   });
 
   it('a change under packages/ and tui/ runs both, npm first', () => {
@@ -59,7 +61,7 @@ describe('the gate is path-aware', () => {
   });
 
   it('a change to ci.yml runs both', () => {
-    assert.equal(stepsForFiles(['.github/workflows/ci.yml']).length, 8);
+    assert.equal(stepsForFiles(['.github/workflows/ci.yml']).length, 10);
   });
 
   it('docs changes run nothing', () => {
@@ -67,7 +69,7 @@ describe('the gate is path-aware', () => {
   });
 
   it('an empty file list runs everything rather than skipping silently', () => {
-    assert.equal(stepsForFiles([]).length, 8);
+    assert.equal(stepsForFiles([]).length, 10);
   });
 });
 

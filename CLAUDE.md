@@ -42,4 +42,4 @@ Single-context, with the vocabulary and the decisions in TOON_Network: `CONTEXT.
   `packages/daemon/src/api-account.test.ts` is the test that says so.
 - `npm run lint && npm run typecheck && npm test && npm run test:packaging` before a PR, and
   `npm run sandcastle:typecheck && npm run sandcastle:test` too when you touch `.sandcastle/`
-  (`npm run typecheck` does not cover it; `agent-image.yml` does).
+  (`npm run typecheck` does not cover it; `ci.yml` runs both).
