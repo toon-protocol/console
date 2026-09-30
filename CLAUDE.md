@@ -40,4 +40,6 @@ Single-context, with the vocabulary and the decisions in TOON_Network: `CONTEXT.
   lives in a **Signer** — a NIP-46 remote signer, or the local keystore in libsecret or the
   passphrase-encrypted file (ADR 0020). Write against `ConsoleSigner`, never against a key;
   `packages/daemon/src/api-account.test.ts` is the test that says so.
-- `npm run lint && npm run typecheck && npm test && npm run test:packaging` before a PR.
+- `npm run lint && npm run typecheck && npm test && npm run test:packaging` before a PR, and
+  `npm run sandcastle:typecheck && npm run sandcastle:test` too when you touch `.sandcastle/`
+  (`npm run typecheck` does not cover it; `agent-image.yml` does).
