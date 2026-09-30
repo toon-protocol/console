@@ -23,14 +23,20 @@
     "dev:site": "npm run dev -w @toon-protocol/console-site",
     "docs:publish": "npm run docs:publish -w @toon-protocol/console-daemon --",
     "smoke:console": "npm run smoke:console -w @toon-protocol/console-daemon --",
+    "sandcastle:ready": "tsx .sandcastle/ready-issues.ts",
+    "sandcastle:implement": "tsx .sandcastle/agent-implement-issue.ts",
+    "sandcastle:test": "tsx --test .sandcastle/run-gate.test.ts",
+    "sandcastle:typecheck": "tsc -p .sandcastle",
     "template:publish": "npm run template:publish -w @toon-protocol/console-daemon --"
   },
   "devDependencies": {
+    "@ai-hero/sandcastle": "0.12.0",
     "@eslint/js": "^9.17.0",
     "eslint": "^9.17.0",
     "eslint-config-prettier": "^9.1.0",
     "eslint-plugin-react-hooks": "^5.1.0",
     "prettier": "^3.4.2",
+    "tsx": "^4.23.15",
     "typescript": "^5.6.0",
     "typescript-eslint": "^8.18.0"
   },

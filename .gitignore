@@ -31,3 +31,8 @@ npm-debug.log*
 
 # Claude Code local settings
 .claude/settings.local.json
+
+# Sandcastle
+.sandcastle/.env
+.sandcastle/logs/
+.sandcastle/worktrees/
