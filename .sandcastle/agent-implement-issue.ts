@@ -211,7 +211,8 @@ async function main() {
         ISSUE_URL: issue.url,
         ISSUE_NUMBER: issueNumber,
         BRANCH: branch,
-        TARGET_BRANCH: BASE,
+        // Not TARGET_BRANCH: sandcastle sets that built-in to the sandbox's own branch and rejects an override.
+        BASE_BRANCH: BASE,
       },
     });
     const summary = reviewSummary(review.stdout);
