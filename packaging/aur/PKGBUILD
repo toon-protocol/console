@@ -1,4 +1,4 @@
-# Maintainer: TOON Network <https://github.com/toon-protocol/console>
+# Maintainer: TOON Compute <https://github.com/toon-protocol/console>
 #
 # The AUR package for the TOON Console (TOON_Network#100).
 #
@@ -26,7 +26,7 @@
 pkgname=toon-console
 pkgver=0.1.0
 pkgrel=1
-pkgdesc="Run workloads on TOON Network: a local daemon and web UI, as an Omarchy app"
+pkgdesc="Run workloads on TOON Compute: a local daemon and web UI, as an Omarchy app"
 arch=('any')
 url="https://github.com/toon-protocol/console"
 license=('Apache-2.0')

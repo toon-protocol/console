@@ -14,7 +14,7 @@ import { routePriceFor } from './relay-write.js';
  * (TOON_Network#119).
  *
  * #90 established the wall and left it standing: opening a payment channel is
- * an on-chain transaction, it costs the chain's own coin, TOON Network settles
+ * an on-chain transaction, it costs the chain's own coin, TOON Compute settles
  * in a token and mints no coin, and no faucet in this network gives any. A
  * person with a fresh Chain Seed is outside the network on every chain at
  * once, and the funding view's job was to say so before a transaction failed
@@ -1183,7 +1183,7 @@ const FIRST_CHANNEL = (profile: NetworkProfile): string =>
   `The FIRST channel on the FIRST chain has no route through this, and buying gas cannot give ` +
   `it one. A gas station is paid over a payment channel, and this account holds none anywhere; ` +
   `opening one is a transaction on a chain, which costs that chain's own coin, which nothing ` +
-  `in TOON Network can mint. So one chain has to be funded from outside ${profile.label} — an ` +
+  `in TOON Compute can mint. So one chain has to be funded from outside ${profile.label} — an ` +
   `airdrop where a cluster allows one, or coin sent from a wallet that already holds some. ` +
   `After that, and only after that, this console can buy the rest.`;
 

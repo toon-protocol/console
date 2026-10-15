@@ -30,7 +30,7 @@ import { queryRelays, type RelayOutcome, type RelayReadResult } from './relay-po
  * how to get those three is one of the pages being loaded.
  *
  * **Whose articles** is configuration, not a constant. `TOON_CONSOLE_DOCS_NPUB`
- * names TOON Network's docs key; with none set, this serves the bundle and
+ * names TOON Compute's docs key; with none set, this serves the bundle and
  * says so. There is no default npub baked into this repository, for the same
  * reason there is no chain id in `profiles.ts`: a key that appears in source is
  * a key nobody can rotate.

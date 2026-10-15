@@ -70,7 +70,7 @@ export function WorkloadsView({
           <CardTitle>Sign in to run a workload</CardTitle>
           <CardDescription>
             A lease&rsquo;s Root Secret is sealed to the account that holds it, and nothing in
-            TOON Network can recover one that is lost. There is no account to seal it to until
+            TOON Compute can recover one that is lost. There is no account to seal it to until
             you sign in.
           </CardDescription>
         </CardHeader>

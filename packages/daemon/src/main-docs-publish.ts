@@ -25,7 +25,7 @@ import { LiveRelayWritePort } from './relay-write-route.js';
  *
  * A **separate program from the console daemon on purpose**, sharing its code
  * and none of its identity. The daemon signs as whoever is signed in and pays
- * from that Account's channel; this signs as TOON Network's documentation key
+ * from that Account's channel; this signs as TOON Compute's documentation key
  * and pays from the project's own channel. Running it is a release step, a
  * human decision, and it spends money each time — so it is a command somebody
  * types, never something a daemon does on a timer.

@@ -21,7 +21,7 @@ import { normalizeRelayUrl } from './relay-list.js';
  * (TOON_Network#120).
  *
  * The rule it exists to enforce is the network's, not the console's: a relay
- * write on TOON Network is a PAID packet (ADR 0007), and a TOON relay answers
+ * write on TOON Compute is a PAID packet (ADR 0007), and a TOON relay answers
  * a plain websocket `EVENT` with `restricted: writes require ILP payment` and
  * nothing else. The provider's `tools/publisher` has always written its
  * Profile, its Listings and its Liveness this way; until #120 the console was

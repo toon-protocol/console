@@ -6,7 +6,7 @@ the workload they rented — nothing else runs, nothing else listens
 
 ## Why this exists
 
-A TOON Network provider forwards `access.ssh_port` to a workload's container
+A TOON Compute provider forwards `access.ssh_port` to a workload's container
 port 22 and hands the tenant's public key in as the environment variable
 `SSH_PUBLIC_KEY` (provider/README.md, "SSH."). It never writes a file into
 the image, never sets an entrypoint of its own, and issues no password. A

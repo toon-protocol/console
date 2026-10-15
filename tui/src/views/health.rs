@@ -330,7 +330,7 @@ mod tests {
             profile: ProfileView {
                 id: "devnet".to_string(),
                 label: "Devnet".to_string(),
-                description: "TOON Network's public test network.".to_string(),
+                description: "TOON Compute's public test network.".to_string(),
                 connector_url: "https://proxy.relay.devnet.toonprotocol.dev/ilp".to_string(),
                 relay_url: "wss://relay-ws.devnet.toonprotocol.dev".to_string(),
                 gateway_domain: "gw.devnet.toonprotocol.dev".to_string(),

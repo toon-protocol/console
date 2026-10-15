@@ -1,5 +1,5 @@
 pkgbase = toon-console
-	pkgdesc = Run workloads on TOON Network: a local daemon and web UI, as an Omarchy app
+	pkgdesc = Run workloads on TOON Compute: a local daemon and web UI, as an Omarchy app
 	pkgver = 0.1.0
 	pkgrel = 1
 	url = https://github.com/toon-protocol/console

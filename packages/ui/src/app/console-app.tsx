@@ -51,7 +51,7 @@ import { WorkloadsView } from './workloads-view';
  *
  * The console is NOT gated on signing in, and that is deliberate. Reading the
  * directory and asking the connector what it settles in are free, they need no
- * key, and a person deciding whether TOON Network is worth an account should be
+ * key, and a person deciding whether TOON Compute is worth an account should be
  * able to look first. Sign-in is a view like the others; the tickets that spend
  * money are what will need it.
  *

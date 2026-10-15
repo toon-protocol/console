@@ -2,7 +2,7 @@
   "name": "toon-console",
   "version": "0.1.0",
   "private": true,
-  "description": "The TOON Console: a local daemon and web UI for running workloads on TOON Network",
+  "description": "The TOON Console: a local daemon and web UI for running workloads on TOON Compute",
   "license": "Apache-2.0",
   "type": "module",
   "workspaces": [

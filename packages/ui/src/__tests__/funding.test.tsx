@@ -58,7 +58,7 @@ const evmChain = (overrides: Partial<ChainFundingView> = {}): ChainFundingView =
     headline:
       'Opening a payment channel is a transaction on evm:84532, so it costs ETH — the ' +
       "chain's own coin, which is not the token this network is priced in and which no part " +
-      'of TOON Network can give you.',
+      'of TOON Compute can give you.',
     detail:
       'This address holds no ETH, so an open would be refused by the chain before it cost ' +
       "anything. This network's faucet gives the settlement token and reports no ETH to " +

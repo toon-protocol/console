@@ -5,7 +5,7 @@ import { defineConfig } from 'vite';
 
 /**
  * The public site: one static build, served by Caddy on the relay Linode for
- * now, and moved onto TOON Network behind a Workload Gateway later
+ * now, and moved onto TOON Compute behind a Workload Gateway later
  * (TOON_Network#102's stated follow-up).
  *
  * `base` is absolute and not the console UI's `'./'`: this build routes under

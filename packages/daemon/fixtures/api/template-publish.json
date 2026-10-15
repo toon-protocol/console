@@ -2,17 +2,17 @@
   "outcomes": [
     {
       "what": "image-entry",
-      "address": "30434:1afd032c3043d86f15fb2edad9c83f5270a7fe9445c4fcf9661372b71aec0cc7:ssh-box:latest",
+      "address": "30434:a4fd539647ed84e0dcf00d65b1c25d08e3e13945e19d663102fe5d5d1c96e3c4:ssh-box:latest",
       "eventId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000",
       "cost": "1"
     },
     {
       "what": "template",
-      "address": "30436:1afd032c3043d86f15fb2edad9c83f5270a7fe9445c4fcf9661372b71aec0cc7:ssh-box",
+      "address": "30436:a4fd539647ed84e0dcf00d65b1c25d08e3e13945e19d663102fe5d5d1c96e3c4:ssh-box",
       "eventId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0001",
       "cost": "1"
     }
   ],
   "cost": "2",
-  "templateAddress": "30436:1afd032c3043d86f15fb2edad9c83f5270a7fe9445c4fcf9661372b71aec0cc7:ssh-box"
+  "templateAddress": "30436:a4fd539647ed84e0dcf00d65b1c25d08e3e13945e19d663102fe5d5d1c96e3c4:ssh-box"
 }

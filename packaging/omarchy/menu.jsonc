@@ -17,7 +17,7 @@
 //
 // The ids sit under "toon", so the three appear together in one submenu and
 // `omarchy menu summon toon` opens it.
-"toon": {"icon":"󱘖","label":"TOON Console","description":"Workloads on TOON Network","aliases":["toon-console","workloads"]},
+"toon": {"icon":"󱘖","label":"TOON Console","description":"Workloads on TOON Compute","aliases":["toon-console","workloads"]},
 "toon.workloads": {"icon":"󰒋","label":"Workloads","description":"What is running, its runway, extend and terminate","action":"@BIN@ --view workloads"},
 "toon.new": {"icon":"󰐕","label":"New workload","description":"Start one from a Template","action":"@BIN@ --view new-workload"},
 "toon.funds": {"icon":"󰃬","label":"Funds","description":"Deposits, channels and balances","action":"@BIN@ --view funds"},
