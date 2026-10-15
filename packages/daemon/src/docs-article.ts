@@ -82,7 +82,7 @@ export function articleTemplate(doc: BundledDoc, createdAt: number): EventTempla
       ['summary', doc.summary],
       ['published_at', String(publishedAtSeconds(doc.publishedAt))],
       ...doc.tags.map((topic) => ['t', topic]),
-      ['alt', `TOON Network documentation: ${doc.title}`],
+      ['alt', `TOON Compute documentation: ${doc.title}`],
     ],
   };
 }

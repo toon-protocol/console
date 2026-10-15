@@ -9,7 +9,7 @@ tags: [toon-network, failover, standby]
 
 # Failover
 
-One provider is one machine on one power supply. TOON Network's answer is a **Standby
+One provider is one machine on one power supply. TOON Compute's answer is a **Standby
 Set**: a primary lease and its warm standby leases, serving one workload across several
 providers under one workload id you chose.
 

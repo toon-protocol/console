@@ -118,7 +118,7 @@ export function isConfigured(profile: NetworkProfile): boolean {
 export const DEVNET: NetworkProfile = {
   id: 'devnet',
   label: 'Devnet',
-  description: "TOON Network's public test network.",
+  description: "TOON Compute's public test network.",
   connectorUrl: 'https://proxy.relay.devnet.toonprotocol.dev/ilp',
   relayUrl: 'wss://relay-ws.devnet.toonprotocol.dev',
   gatewayDomain: 'gw.devnet.toonprotocol.dev',

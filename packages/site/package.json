@@ -2,7 +2,7 @@
   "name": "@toon-protocol/console-site",
   "version": "0.1.0",
   "private": true,
-  "description": "The public TOON Network site: the landing page, and the docs rendered from NIP-23 articles with the repository Markdown as an offline fallback",
+  "description": "The public TOON Compute site: the landing page, and the docs rendered from NIP-23 articles with the repository Markdown as an offline fallback",
   "license": "Apache-2.0",
   "type": "module",
   "scripts": {

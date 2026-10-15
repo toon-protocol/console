@@ -339,7 +339,7 @@ describe('funding', () => {
       const gas = status.chains[0]?.gas;
       expect(gas?.verdict).toBe('none');
       expect(gas?.headline).toMatch(/costs ETH/u);
-      expect(gas?.headline).toMatch(/no part of TOON Network can give you/u);
+      expect(gas?.headline).toMatch(/no part of TOON Compute can give you/u);
       expect(gas?.detail).toMatch(/holds no ETH/u);
     });
 

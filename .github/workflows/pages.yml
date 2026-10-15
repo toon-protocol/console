@@ -2,7 +2,7 @@
 #
 # This is a place to READ the landing page and the docs, and to send someone a
 # link. It is not where the site lives in the end: #102 serves it from Caddy on
-# the relay box, and its own follow-up moves it onto TOON Network behind a
+# the relay box, and its own follow-up moves it onto TOON Compute behind a
 # Workload Gateway. Pages costs nothing and needs no box, so it is worth having
 # while those are being arranged.
 #

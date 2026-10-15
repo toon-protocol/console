@@ -9,7 +9,7 @@ tags: [toon-network, funding, payments]
 
 # Funding
 
-Every request you pay for on TOON Network — a spawn, an extension, a relay write — is a
+Every request you pay for on TOON Compute — a spawn, an extension, a relay write — is a
 sealed packet against an open **payment channel**. Opening that channel is the only thing
 that touches a chain. Everything after it is off-chain and takes milliseconds.
 
@@ -64,7 +64,7 @@ active profile has one.
 
 Here is the thing nobody can hand you:
 
-> **No faucet on TOON Network gives you native gas.** Opening a payment channel is an
+> **No faucet on TOON Compute gives you native gas.** Opening a payment channel is an
 > on-chain transaction. On Base Sepolia it costs ETH; on Solana devnet it costs SOL. The
 > devnet faucet mints mock USDC and nothing else. You have to get the native token from a
 > public testnet faucet yourself.

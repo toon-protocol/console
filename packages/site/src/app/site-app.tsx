@@ -145,7 +145,7 @@ export function SiteApp({
       <header className="site-header">
         <div className="wrap">
           <button type="button" className="brand" onClick={openHome}>
-            TOON Network
+            TOON Compute
           </button>
 
           <p className="chip" role="status">
@@ -161,10 +161,10 @@ export function SiteApp({
               href={config.xUrl}
               target="_blank"
               rel="noopener noreferrer"
-              title="TOON Network on X"
+              title="TOON Compute on X"
             >
               <XMark />
-              <span className="visually-hidden">TOON Network on X</span>
+              <span className="visually-hidden">TOON Compute on X</span>
             </a>
             <a
               className="icon"

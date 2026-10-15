@@ -88,7 +88,7 @@ export const ACCOUNT_INDEX = 0;
 export const CUSTODY_WARNING =
   'Whoever holds this account’s Nostr key holds its funds. The Chain Seed is sealed to that ' +
   'key, so anyone who can sign as this account can unseal it, derive these addresses and spend ' +
-  'what they hold. Losing the Nostr key loses the funds with it: nothing in TOON Network, and ' +
+  'what they hold. Losing the Nostr key loses the funds with it: nothing in TOON Compute, and ' +
   'no one running it, can recover them for you.';
 
 /**

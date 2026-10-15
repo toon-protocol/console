@@ -9,7 +9,7 @@ tags: [toon-network, concepts, getting-started]
 
 # Concepts
 
-TOON Network is a compute marketplace with no company in the middle. Nine words carry it.
+TOON Compute is a marketplace for machines, with no company in the middle. Nine words carry it.
 Learn them here and the rest of these docs read as plain sentences.
 
 ## The two parties
@@ -77,7 +77,7 @@ concerned, gone — and that is exactly what a **Warm Standby** watches for.
 
 ## Where the words come from
 
-This vocabulary is normative. It is defined in TOON Network's `CONTEXT.md` and used
+This vocabulary is normative. It is defined in TOON Compute's `CONTEXT.md` and used
 unchanged in the protocol specification, the provider, the gateway and the Console. If a
 word here disagrees with a word there, the specification wins — see
 [The specification](spec).

@@ -60,7 +60,7 @@ what you see in the Console:
 ## These docs
 
 The Markdown for every page here is in `docs/` in the Console repository. Each page is
-published as a **NIP-23 long-form article** (kind 30023) from TOON Network's npub, so you
+published as a **NIP-23 long-form article** (kind 30023) from TOON Compute's npub, so you
 can read it in any Nostr client, not only here. The `d` tag on each article is its
 identity: re-publishing an edited page replaces the article rather than adding a second
 copy.

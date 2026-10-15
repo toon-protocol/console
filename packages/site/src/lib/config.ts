@@ -14,7 +14,7 @@
  */
 
 export interface SiteConfig {
-  /** TOON Network's documentation key. Empty until one is minted. */
+  /** TOON Compute's documentation key. Empty until one is minted. */
   readonly docsNpub: string;
   readonly relays: readonly string[];
   /** Which network this site describes. `devnet` today, and it says so. */

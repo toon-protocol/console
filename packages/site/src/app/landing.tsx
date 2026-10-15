@@ -93,7 +93,7 @@ export function Landing({
           <p>
             Every machine you can rent today comes with a company attached: an account to open,
             an identity to prove, a card on file, terms you accepted, and a switch somebody
-            else can flip. TOON Network takes the company out of the middle. A provider
+            else can flip. TOON Compute takes the company out of the middle. A provider
             publishes what it sells and what it charges. You pay for an hour of it with a
             sealed packet, and you hold the only secret that can ask for that machine again.{' '}
             <strong>

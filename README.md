@@ -1,6 +1,6 @@
 # The TOON Console
 
-The console for [TOON Network][spec]: a **local daemon plus a web UI**, opened as an
+The console for [TOON Compute][spec]: a **local daemon plus a web UI**, opened as an
 Omarchy web app. It is not a website. A `systemd --user` service runs
 [`@toon-protocol/client`][client], serves the UI on `127.0.0.1`, and — in the tickets after
 this one — holds the account's keys and manages its workloads. Nothing about an account
@@ -293,7 +293,7 @@ settlement address — is read from that connector's own `GET /ilp`.
 
 Opening a payment channel is a **transaction on a chain**, so it is paid for in that
 chain's own coin — ETH on Base, SOL on Solana — which is not the token this network is
-priced in and which no part of TOON Network can mint. A fresh Chain Seed has none of it on
+priced in and which no part of TOON Compute can mint. A fresh Chain Seed has none of it on
 either chain, and today nothing can hand it over:
 
 - the devnet faucet gives the settlement token and **reports no ETH of its own to give**
@@ -628,7 +628,7 @@ The pages in `docs/` are the source, and three things read them ([#102][i102]):
 - the **public site** (`packages/site`), served by Caddy at a devnet domain name;
 - the console's **Help tab**, served by the daemon at `/api/docs`;
 - the **published articles**, one [NIP-23][nip23] long-form event (kind 30023) per page,
-  signed by TOON Network's documentation npub, readable in any Nostr client.
+  signed by TOON Compute's documentation npub, readable in any Nostr client.
 
 The site and the console both render the published articles and fall back to the bundled
 Markdown when no relay answers, saying which of the two is on screen. Which npub to read is

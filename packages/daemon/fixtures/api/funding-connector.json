@@ -5,7 +5,7 @@
     "connectorUrl": "https://provider.example/ilp"
   },
   "custody": {
-    "text": "Whoever holds this account’s Nostr key holds its funds. The Chain Seed is sealed to that key, so anyone who can sign as this account can unseal it, derive these addresses and spend what they hold. Losing the Nostr key loses the funds with it: nothing in TOON Network, and no one running it, can recover them for you.",
+    "text": "Whoever holds this account’s Nostr key holds its funds. The Chain Seed is sealed to that key, so anyone who can sign as this account can unseal it, derive these addresses and spend what they hold. Losing the Nostr key loses the funds with it: nothing in TOON Compute, and no one running it, can recover them for you.",
     "acknowledgedAt": "2026-01-01T00:00:00.000Z"
   },
   "supersededSeeds": 0,
@@ -57,7 +57,7 @@
       "gas": {
         "verdict": "present",
         "symbol": "ETH",
-        "headline": "Opening a payment channel is a transaction on evm:31337, so it costs ETH — the chain's own coin, which is not the token this network is priced in and which no part of TOON Network can give you.",
+        "headline": "Opening a payment channel is a transaction on evm:31337, so it costs ETH — the chain's own coin, which is not the token this network is priced in and which no part of TOON Compute can give you.",
         "detail": "This address holds 1000000000000000 ETH in base units. That is what an open will be paid for with; the chain decides whether it is enough, and a refused transaction costs nothing.",
         "faucetGivesGas": false
       },
@@ -95,7 +95,7 @@
       "gas": {
         "verdict": "none",
         "symbol": "SOL",
-        "headline": "Opening a payment channel is a transaction on solana, so it costs SOL — the chain's own coin, which is not the token this network is priced in and which no part of TOON Network can give you.",
+        "headline": "Opening a payment channel is a transaction on solana, so it costs SOL — the chain's own coin, which is not the token this network is priced in and which no part of TOON Compute can give you.",
         "detail": "This address holds no SOL, so an open would be refused by the chain before it cost anything. This network has no faucet. Ask the cluster itself: `solana airdrop 1 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0002 --url http://localhost:8899`. A public devnet caps that per day and answers 429 Too Many Requests once the cap is reached, and there is nothing to do about a 429 but wait or bring SOL from elsewhere. A local validator has no cap.",
         "command": "solana airdrop 1 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0002 --url http://localhost:8899",
         "faucetGivesGas": false

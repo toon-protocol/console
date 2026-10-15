@@ -42,7 +42,7 @@ import { isConfigured, type NetworkProfile } from './profiles.js';
  * **Native gas is the obstacle, and it is not ours to solve.** Opening a
  * channel is an on-chain transaction, so it costs the chain's native coin —
  * ETH, SOL — which is not the token anything here is priced in and which no
- * part of TOON Network can mint. A person with a fresh Chain Seed has none on
+ * part of TOON Compute can mint. A person with a fresh Chain Seed has none on
  * either chain. The devnet faucet drips the settlement token and no gas at all
  * (it says so itself in `/api/info`), the public Solana airdrop is capped per
  * day, and an EVM testnet's faucets are gated behind accounts elsewhere. So
@@ -1075,7 +1075,7 @@ export function gasView(input: {
   const headline =
     `Opening a payment channel is a transaction on ${chain.chain}, so it costs ${coin} — ` +
     `the chain's own coin, which is not the token this network is priced in and which no ` +
-    `part of TOON Network can give you.`;
+    `part of TOON Compute can give you.`;
 
   if (balances.state === 'unknown') {
     return {

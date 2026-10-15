@@ -59,7 +59,7 @@ export const K_LIVENESS = 10433;
 /** Listing, addressable by its `d` tag (spec §4.2). */
 export const K_LISTING = 30432;
 
-/** The label every published TOON Network event carries (spec §4). */
+/** The label every published TOON Compute event carries (spec §4). */
 export const LABEL = 'toon.network';
 
 /** The isolation values §4.4 defines. Anything else is a provider's own word. */

@@ -15,7 +15,7 @@ import { BUNDLED_DOCS, type Doc } from './docs';
  * Two rules it must not bend.
  *
  * **Reading is free; writing is not.** A relay READ is not priced by the spec,
- * so a static page can open a socket and ask. A relay WRITE on TOON Network is
+ * so a static page can open a socket and ask. A relay WRITE on TOON Compute is
  * a paid TOON packet, and nothing in this bundle writes one — publishing is
  * `toon-docs-publish`, a command a human runs with a funded channel.
  *

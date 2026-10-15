@@ -25,7 +25,7 @@ import { queryRelays, type RelayDialer } from './relay-pool.js';
  * 2. failing that, the network profile's relay by itself.
  *
  * NIP-65 first because the account's own relays are where its metadata actually
- * lives — the profile's relay is a TOON Network relay, and there is no reason
+ * lives — the profile's relay is a TOON Compute relay, and there is no reason
  * an account's kind-0 would be on it. The fallback is there because the list
  * has to be read from SOMEWHERE, and reads are free.
  *

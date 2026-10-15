@@ -1,4 +1,4 @@
-# The public TOON Network site (TOON_Network#102).
+# The public TOON Compute site (TOON_Network#102).
 #
 # One static build, served by Caddy on the relay Linode. It is NOT deployed
 # from this repository: the fleet is GitOps and a box refuses a dirty tree, so
@@ -6,7 +6,7 @@
 # configuration in the `infra` repository, through a pull request like any
 # other change. `deploy/README.md` says exactly what to run.
 #
-# Moving the site onto TOON Network itself — as a workload behind a Workload
+# Moving the site onto TOON Compute itself — as a workload behind a Workload
 # Gateway — is #102's stated follow-up and is deliberately not attempted here.
 #
 # Three decisions worth the lines they take.

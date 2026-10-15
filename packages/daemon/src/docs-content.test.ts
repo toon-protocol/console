@@ -152,7 +152,7 @@ describe('the pages this repository actually ships', () => {
 
   it('says plainly that no faucet gives native gas', () => {
     const funding = docs.find((doc) => doc.d === 'funding');
-    expect(funding?.markdown).toMatch(/no faucet on toon network gives you native gas/iu);
+    expect(funding?.markdown).toMatch(/no faucet on toon compute gives you native gas/iu);
   });
 
   it('quotes the devnet listings the provider really sells', () => {
